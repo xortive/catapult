@@ -15,7 +15,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  SKIP_FIRMWARE_CHECK: "1"
 
 jobs:
   # Check formatting
@@ -131,22 +130,3 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: docs
           wranglerVersion: "4.0.0"
-
-  # Build ESP32 firmware (separate toolchain)
-  firmware:
-    name: ESP32 Firmware
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup esp-rs toolchain
-        uses: esp-rs/xtensa-toolchain@v1.5
-        with:
-          default: true
-          buildtargets: esp32s3
-          ldproxy: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: cat-bridge
-      - name: Build firmware
-        working-directory: cat-bridge
-        run: cargo build --release

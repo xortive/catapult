@@ -31,44 +31,62 @@ Any amplifier that accepts CAT control should work. Tested with:
    - **CI-V Address**: (Icom only) The amplifier's CI-V address in hex
 3. Click **Connect**
 
-### USB Connection (ESP32-S3 Bridge)
+### USB Connection (Null Modem Bridge)
 
-Some amplifiers (like the Elecraft KPA1500) use USB for CAT control, expecting the connected device to appear as a USB serial gadget. Since computers cannot natively act as USB devices, Catapult includes firmware for an ESP32-S3 board that acts as a bridge.
+Some amplifiers (like the Elecraft KPA1500) use USB for CAT control, expecting the connected device to appear as a USB serial gadget. Since computers cannot natively act as USB devices, you need a **USB serial null modem**—a device that bridges two USB serial connections.
 
 #### How It Works
 
+A null modem bridge provides two USB serial ports that pass data between them:
+
 ```
-Host Computer <--USB--> ESP32-S3 <--USB--> Amplifier
-  (USB host)           (bridge)           (USB host)
+Host Computer <--USB Serial--> [Null Modem Bridge] <--USB Serial--> Amplifier
+  (USB host)                                                        (USB host)
 ```
+
+You have several options for this bridge:
+
+#### Option 1: Off-the-Shelf USB Serial Null Modem
+
+The easiest solution is to buy a ready-made USB serial null modem cable or adapter. These are available from various electronics suppliers and require no configuration.
+
+#### Option 2: Two FTDI Cables (DIY)
+
+You can build your own null modem from two USB-to-serial (FTDI) cables with a null modem wiring between them:
+
+- Connect **TX** of cable 1 to **RX** of cable 2
+- Connect **RX** of cable 1 to **TX** of cable 2
+- Connect **GND** of cable 1 to **GND** of cable 2
+
+One cable connects to your computer, the other to your amplifier.
+
+#### Option 3: ESP32-S3 with Catapult Firmware
+
+Catapult includes firmware for an **ESP32-S3-DevKitC** board (or similar with dual USB ports) that turns it into a USB serial null modem. These boards are widely available for around $10-15.
 
 The ESP32-S3 has two USB interfaces:
 - **USB-Serial-JTAG** (programming port): Connects to your computer
 - **USB OTG** (gadget port): Connects to the amplifier as a USB serial device
 
-#### Hardware Required
-
-You'll need an **ESP32-S3-DevKitC** board (or similar with dual USB ports). These are widely available for around $10-15.
-
-#### Flashing the Firmware
+**Flashing the Firmware:**
 
 Catapult includes a built-in flashing tool—no external toolchain required.
 
 1. Connect the ESP32-S3's **UART** port to your computer
-2. In Catapult, go to **Settings → ESP32 Bridge**
+2. In Catapult, go to **Settings → USB Bridge**
 3. Select the serial port for your ESP32-S3
 4. Click **Flash Firmware**
 
 The firmware is bundled with Catapult and will be flashed automatically. The device restarts after flashing is complete.
 
-#### Hardware Setup
+**Hardware Setup:**
 
 1. Connect the ESP32-S3's **UART** port (programming port) to your computer
 2. Connect the ESP32-S3's **USB** port (OTG port) to your amplifier
 3. In Catapult, select the serial port that appears for the ESP32-S3
 4. Configure the protocol to match what your amplifier expects
 
-#### LED Indicators
+**LED Indicators:**
 
 - **Slow blink (1Hz)**: Waiting for connections
 - **Fast blink (4Hz)**: Both USB interfaces active, bridging data

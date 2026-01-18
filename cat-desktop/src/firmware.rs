@@ -1,6 +1,9 @@
 //! ESP32-S3 firmware flashing module
 //!
 //! Uses the espflash library to flash cat-bridge firmware to ESP32-S3 devices.
+//!
+//! Requires the `bundle-firmware` feature to be enabled for actual flashing.
+//! Without the feature, flashing will return an error.
 
 use std::sync::mpsc::Sender;
 
@@ -9,8 +12,17 @@ use espflash::flasher::Flasher;
 use espflash::target::{Chip, ProgressCallbacks};
 use serialport::{available_ports, FlowControl, SerialPortType, UsbPortInfo};
 
-/// Bundled cat-bridge firmware binary
+/// Bundled cat-bridge firmware binary (empty placeholder if feature disabled)
+#[cfg(feature = "bundle-firmware")]
 const FIRMWARE_BINARY: &[u8] = include_bytes!("../assets/cat-bridge.bin");
+
+#[cfg(not(feature = "bundle-firmware"))]
+const FIRMWARE_BINARY: &[u8] = &[];
+
+/// Returns true if firmware is bundled (bundle-firmware feature enabled)
+pub fn is_firmware_bundled() -> bool {
+    cfg!(feature = "bundle-firmware")
+}
 
 /// Firmware version (should match cat-bridge version)
 pub const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -125,7 +137,19 @@ pub fn detect_devices() -> Vec<DetectedDevice> {
 ///
 /// This function runs in a background thread and sends progress updates
 /// via the provided sender channel.
+///
+/// Returns immediately with an error if the `bundle-firmware` feature is not enabled.
 pub fn flash_firmware(port: &str, sender: Sender<FlashMessage>) {
+    if !is_firmware_bundled() {
+        let _ = sender.send(FlashMessage::StateChanged(FlashState::Error(
+            "Firmware not bundled. Rebuild with --features bundle-firmware".to_string(),
+        )));
+        let _ = sender.send(FlashMessage::Log(
+            "Error: This build does not include bundled firmware.".to_string(),
+        ));
+        return;
+    }
+
     let port = port.to_string();
 
     std::thread::spawn(move || {

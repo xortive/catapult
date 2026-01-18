@@ -1,8 +1,12 @@
-//! CAT Bridge - ESP32-S3 Dual USB Serial Bridge Firmware
+//! CAT Bridge - ESP32-S3 USB Serial Null Modem Firmware
 //!
-//! This firmware allows a host computer to appear as a USB serial device
-//! to an amplifier. Since Windows/Linux/macOS cannot natively act as USB
-//! gadgets, the ESP32-S3 acts as a proxy.
+//! This firmware turns an ESP32-S3 into a USB serial null modem, allowing
+//! a host computer to communicate with a USB-host amplifier. Since
+//! Windows/Linux/macOS cannot natively act as USB gadgets, the ESP32-S3
+//! bridges two USB serial connections.
+//!
+//! Alternative solutions include off-the-shelf USB serial null modem
+//! cables/adapters, or building your own from two FTDI cables.
 //!
 //! # Architecture
 //!

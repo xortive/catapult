@@ -126,6 +126,7 @@ impl SimulationPanel {
                         Protocol::IcomCIV,
                         Protocol::Yaesu,
                         Protocol::Elecraft,
+                        Protocol::FlexRadio,
                     ] {
                         ui.selectable_value(&mut self.new_radio_protocol, proto, proto.name());
                     }

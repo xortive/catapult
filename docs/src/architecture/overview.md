@@ -11,7 +11,7 @@ catapult/
 ├── cat-detect/       # Hardware detection
 ├── cat-sim/          # Simulation framework
 ├── cat-desktop/      # GUI application
-└── cat-bridge/       # ESP32 firmware (optional)
+└── cat-bridge/       # ESP32 null modem firmware (optional)
 ```
 
 ## Data Flow

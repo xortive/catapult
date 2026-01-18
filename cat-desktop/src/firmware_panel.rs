@@ -1,6 +1,8 @@
 //! Firmware panel UI component
 //!
-//! Provides UI for detecting ESP32-S3 devices and flashing firmware.
+//! Provides UI for detecting ESP32-S3 devices and flashing null modem firmware.
+//! The firmware turns an ESP32-S3 into a USB serial null modem bridge.
+//! Users can also use off-the-shelf USB serial null modems or two FTDI cables.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -114,7 +116,7 @@ impl FirmwarePanel {
         // Process any pending messages
         self.process_messages();
 
-        ui.heading("Firmware Update");
+        ui.heading("USB Bridge Firmware");
         ui.add_space(8.0);
 
         // Firmware version info
@@ -150,7 +152,12 @@ impl FirmwarePanel {
                     .italics(),
             );
             ui.label(
-                RichText::new("Connect the cat-bridge via the USB programming port")
+                RichText::new("Connect an ESP32-S3 via USB to flash null modem firmware.")
+                    .color(Color32::GRAY)
+                    .size(11.0),
+            );
+            ui.label(
+                RichText::new("Alternatively, use an off-the-shelf USB serial null modem or two FTDI cables.")
                     .color(Color32::GRAY)
                     .size(11.0),
             );

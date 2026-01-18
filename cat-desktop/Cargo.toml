@@ -28,5 +28,9 @@ dirs = "6.0"
 serialport.workspace = true
 espflash = { version = "4", default-features = false, features = ["serialport"] }
 
+[features]
+default = []
+bundle-firmware = []
+
 [dev-dependencies]
 proptest.workspace = true
