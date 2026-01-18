@@ -225,23 +225,19 @@ impl EncodeCommand for ElecraftCommand {
                 }
             }
             ElecraftCommand::VfoAInfo(None) => b"VA;".to_vec(),
-            ElecraftCommand::VfoAInfo(Some(info)) => {
-                format!(
-                    "VA{:011}{};",
-                    info.frequency_hz,
-                    elecraft_mode_code(info.mode)
-                )
-                .into_bytes()
-            }
+            ElecraftCommand::VfoAInfo(Some(info)) => format!(
+                "VA{:011}{};",
+                info.frequency_hz,
+                elecraft_mode_code(info.mode)
+            )
+            .into_bytes(),
             ElecraftCommand::VfoBInfo(None) => b"VB;".to_vec(),
-            ElecraftCommand::VfoBInfo(Some(info)) => {
-                format!(
-                    "VB{:011}{};",
-                    info.frequency_hz,
-                    elecraft_mode_code(info.mode)
-                )
-                .into_bytes()
-            }
+            ElecraftCommand::VfoBInfo(Some(info)) => format!(
+                "VB{:011}{};",
+                info.frequency_hz,
+                elecraft_mode_code(info.mode)
+            )
+            .into_bytes(),
         }
     }
 }

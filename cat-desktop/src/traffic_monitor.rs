@@ -10,18 +10,11 @@ use egui::{Color32, RichText, Ui};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrafficSource {
     /// Real radio on a serial port
-    RealRadio {
-        handle: RadioHandle,
-        port: String,
-    },
+    RealRadio { handle: RadioHandle, port: String },
     /// Simulated radio
-    SimulatedRadio {
-        id: String,
-    },
+    SimulatedRadio { id: String },
     /// Real amplifier on a serial port
-    RealAmplifier {
-        port: String,
-    },
+    RealAmplifier { port: String },
     /// Simulated amplifier (no real connection)
     SimulatedAmplifier,
 }
@@ -188,7 +181,10 @@ impl TrafficMonitor {
             ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
             ui.separator();
 
-            if ui.button(if self.paused { "Resume" } else { "Pause" }).clicked() {
+            if ui
+                .button(if self.paused { "Resume" } else { "Pause" })
+                .clicked()
+            {
                 self.paused = !self.paused;
             }
 
@@ -258,20 +254,15 @@ impl TrafficMonitor {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .stick_to_bottom(self.auto_scroll)
-            .show_rows(
-                ui,
-                row_height,
-                filtered_indices.len(),
-                |ui, row_range| {
-                    for i in row_range {
-                        if let Some(&entry_idx) = filtered_indices.get(i) {
-                            if let Some(entry) = self.entries.get(entry_idx) {
-                                self.draw_entry(ui, entry);
-                            }
+            .show_rows(ui, row_height, filtered_indices.len(), |ui, row_range| {
+                for i in row_range {
+                    if let Some(&entry_idx) = filtered_indices.get(i) {
+                        if let Some(entry) = self.entries.get(entry_idx) {
+                            self.draw_entry(ui, entry);
                         }
                     }
-                },
-            );
+                }
+            });
     }
 
     /// Draw a single traffic entry

@@ -12,18 +12,11 @@ use crate::radio::{VirtualRadio, VirtualRadioConfig};
 #[derive(Debug, Clone)]
 pub enum SimulationEvent {
     /// A radio generated output bytes
-    RadioOutput {
-        radio_id: String,
-        data: Vec<u8>,
-    },
+    RadioOutput { radio_id: String, data: Vec<u8> },
     /// A radio was added
-    RadioAdded {
-        radio_id: String,
-    },
+    RadioAdded { radio_id: String },
     /// A radio was removed
-    RadioRemoved {
-        radio_id: String,
-    },
+    RadioRemoved { radio_id: String },
     /// Radio state changed
     RadioStateChanged {
         radio_id: String,
@@ -287,8 +280,12 @@ mod tests {
         assert!(!events.is_empty());
 
         // Should have radio output and state change events
-        let has_output = events.iter().any(|e| matches!(e, SimulationEvent::RadioOutput { .. }));
-        let has_state = events.iter().any(|e| matches!(e, SimulationEvent::RadioStateChanged { .. }));
+        let has_output = events
+            .iter()
+            .any(|e| matches!(e, SimulationEvent::RadioOutput { .. }));
+        let has_state = events
+            .iter()
+            .any(|e| matches!(e, SimulationEvent::RadioStateChanged { .. }));
         assert!(has_output);
         assert!(has_state);
     }

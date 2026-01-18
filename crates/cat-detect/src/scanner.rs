@@ -166,8 +166,7 @@ impl PortScanner {
 
     /// Enumerate all available serial ports
     pub fn enumerate_ports(&self) -> Result<Vec<SerialPortInfo>, DetectError> {
-        let ports = available_ports()
-            .map_err(|e| DetectError::EnumerationFailed(e.to_string()))?;
+        let ports = available_ports().map_err(|e| DetectError::EnumerationFailed(e.to_string()))?;
 
         let result: Vec<_> = ports
             .into_iter()
@@ -215,7 +214,8 @@ impl PortScanner {
                         radio.port,
                         radio.baud_rate
                     );
-                    self.detected_cache.insert(radio.port.clone(), radio.clone());
+                    self.detected_cache
+                        .insert(radio.port.clone(), radio.clone());
                     detected.push(radio);
                 }
                 None => {
@@ -238,11 +238,7 @@ impl PortScanner {
     }
 
     /// Probe at a specific baud rate
-    async fn probe_at_baud(
-        &self,
-        port_info: &SerialPortInfo,
-        baud: u32,
-    ) -> Option<DetectedRadio> {
+    async fn probe_at_baud(&self, port_info: &SerialPortInfo, baud: u32) -> Option<DetectedRadio> {
         debug!("Probing {} at {} baud", port_info.port, baud);
 
         let mut stream = match tokio_serial::new(&port_info.port, baud)

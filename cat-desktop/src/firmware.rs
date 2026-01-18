@@ -149,7 +149,10 @@ fn get_usb_port_info(port_name: &str) -> Option<UsbPortInfo> {
 }
 
 /// Internal flash implementation
-fn do_flash(port_name: &str, sender: &Sender<FlashMessage>) -> Result<(), Box<dyn std::error::Error>> {
+fn do_flash(
+    port_name: &str,
+    sender: &Sender<FlashMessage>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Send connecting state
     sender.send(FlashMessage::StateChanged(FlashState::Connecting))?;
     sender.send(FlashMessage::Log(format!("Connecting to {}...", port_name)))?;
@@ -186,7 +189,7 @@ fn do_flash(port_name: &str, sender: &Sender<FlashMessage>) -> Result<(), Box<dy
         false, // Don't verify
         false, // Don't skip
         Some(Chip::Esp32s3),
-        None,  // No baud rate change
+        None, // No baud rate change
     )?;
 
     sender.send(FlashMessage::Log("Connected to ESP32-S3 bootloader".into()))?;

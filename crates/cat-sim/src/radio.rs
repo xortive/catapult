@@ -7,12 +7,8 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use cat_protocol::{
-    elecraft::ElecraftCommand,
-    flex::FlexCommand,
-    icom::CivCommand,
-    kenwood::KenwoodCommand,
-    yaesu::YaesuCommand,
-    EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand,
+    elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
+    yaesu::YaesuCommand, EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand,
     RadioDatabase, RadioModel,
 };
 use serde::{Deserialize, Serialize};
@@ -98,7 +94,9 @@ impl VirtualRadio {
     /// Create a virtual radio from configuration
     pub fn from_config(config: VirtualRadioConfig) -> Self {
         // Look up model by name, or use default for protocol
-        let model = config.model_name.as_ref()
+        let model = config
+            .model_name
+            .as_ref()
             .and_then(|name| {
                 RadioDatabase::radios_for_protocol(config.protocol)
                     .into_iter()
@@ -279,7 +277,7 @@ impl VirtualRadio {
         } else {
             // Default IDs if no model set
             match self.protocol {
-                Protocol::Kenwood => "023".to_string(),  // TS-590SG
+                Protocol::Kenwood => "023".to_string(),   // TS-590SG
                 Protocol::Elecraft => "K3".to_string(),   // K3
                 Protocol::FlexRadio => "909".to_string(), // FLEX-6600
                 Protocol::IcomCIV => "94".to_string(),    // IC-7300
@@ -311,12 +309,8 @@ impl VirtualRadio {
     /// Encode a RadioCommand to protocol bytes
     fn encode_command(&self, cmd: &RadioCommand) -> Option<Vec<u8>> {
         match self.protocol {
-            Protocol::Kenwood => {
-                KenwoodCommand::from_radio_command(cmd).map(|c| c.encode())
-            }
-            Protocol::Elecraft => {
-                ElecraftCommand::from_radio_command(cmd).map(|c| c.encode())
-            }
+            Protocol::Kenwood => KenwoodCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::Elecraft => ElecraftCommand::from_radio_command(cmd).map(|c| c.encode()),
             Protocol::IcomCIV => {
                 CivCommand::from_radio_command(cmd).map(|c| {
                     // For Icom, set proper addresses
@@ -324,12 +318,8 @@ impl VirtualRadio {
                     CivCommand::new(0xE0, addr, c.command).encode()
                 })
             }
-            Protocol::Yaesu => {
-                YaesuCommand::from_radio_command(cmd).map(|c| c.encode())
-            }
-            Protocol::FlexRadio => {
-                FlexCommand::from_radio_command(cmd).map(|c| c.encode())
-            }
+            Protocol::Yaesu => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::FlexRadio => FlexCommand::from_radio_command(cmd).map(|c| c.encode()),
         }
     }
 

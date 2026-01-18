@@ -86,10 +86,8 @@ impl Multiplexer {
 
     /// Create with custom configuration
     pub fn with_config(config: MultiplexerConfig) -> Self {
-        let translator = ProtocolTranslator::with_config(
-            config.amplifier.protocol,
-            config.translation.clone(),
-        );
+        let translator =
+            ProtocolTranslator::with_config(config.amplifier.protocol, config.translation.clone());
 
         Self {
             config,
@@ -109,10 +107,8 @@ impl Multiplexer {
 
     /// Update the configuration
     pub fn set_config(&mut self, config: MultiplexerConfig) {
-        self.translator = ProtocolTranslator::with_config(
-            config.amplifier.protocol,
-            config.translation.clone(),
-        );
+        self.translator =
+            ProtocolTranslator::with_config(config.amplifier.protocol, config.translation.clone());
         self.config = config;
     }
 
@@ -127,12 +123,7 @@ impl Multiplexer {
     }
 
     /// Add a radio to the multiplexer
-    pub fn add_radio(
-        &mut self,
-        name: String,
-        port: String,
-        protocol: Protocol,
-    ) -> RadioHandle {
+    pub fn add_radio(&mut self, name: String, port: String, protocol: Protocol) -> RadioHandle {
         let handle = RadioHandle(self.next_handle);
         self.next_handle += 1;
 
@@ -159,7 +150,8 @@ impl Multiplexer {
             self.active_radio = self.radios.keys().next().copied();
         }
 
-        self.event_buffer.push(MultiplexerEvent::RadioRemoved(handle));
+        self.event_buffer
+            .push(MultiplexerEvent::RadioRemoved(handle));
         Some(state)
     }
 
@@ -223,10 +215,11 @@ impl Multiplexer {
         self.active_radio = Some(handle);
         self.lockout_until = Some(Instant::now() + Duration::from_millis(self.config.lockout_ms));
 
-        self.event_buffer.push(MultiplexerEvent::ActiveRadioChanged {
-            from: old,
-            to: handle,
-        });
+        self.event_buffer
+            .push(MultiplexerEvent::ActiveRadioChanged {
+                from: old,
+                to: handle,
+            });
 
         if let Some(radio) = self.radios.get(&handle) {
             info!("Switched to radio: {} ({})", radio.name, radio.port);
@@ -366,11 +359,7 @@ impl Multiplexer {
     /// Get remaining lockout time in ms
     pub fn lockout_remaining_ms(&self) -> u64 {
         self.lockout_until
-            .map(|until| {
-                until
-                    .saturating_duration_since(Instant::now())
-                    .as_millis() as u64
-            })
+            .map(|until| until.saturating_duration_since(Instant::now()).as_millis() as u64)
             .unwrap_or(0)
     }
 
@@ -380,10 +369,8 @@ impl Multiplexer {
         self.config.translation.target_civ_address = config.civ_address;
 
         // Recreate translator with updated config
-        self.translator = ProtocolTranslator::with_config(
-            config.protocol,
-            self.config.translation.clone(),
-        );
+        self.translator =
+            ProtocolTranslator::with_config(config.protocol, self.config.translation.clone());
 
         self.config.amplifier = config;
     }

@@ -82,11 +82,7 @@ impl SimulationPanel {
     pub fn draw(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.heading("Simulation");
-            ui.label(
-                RichText::new("DEBUG MODE")
-                    .color(Color32::YELLOW)
-                    .strong(),
-            );
+            ui.label(RichText::new("DEBUG MODE").color(Color32::YELLOW).strong());
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(if self.expanded { "▼" } else { "▶" }).clicked() {
@@ -125,7 +121,12 @@ impl SimulationPanel {
                 .selected_text(self.new_radio_protocol.name())
                 .width(100.0)
                 .show_ui(ui, |ui| {
-                    for proto in [Protocol::Kenwood, Protocol::IcomCIV, Protocol::Yaesu, Protocol::Elecraft] {
+                    for proto in [
+                        Protocol::Kenwood,
+                        Protocol::IcomCIV,
+                        Protocol::Yaesu,
+                        Protocol::Elecraft,
+                    ] {
                         ui.selectable_value(&mut self.new_radio_protocol, proto, proto.name());
                     }
                 });
@@ -157,7 +158,9 @@ impl SimulationPanel {
         }
 
         // Collect radio info to avoid borrow issues
-        let radio_infos: Vec<_> = self.context.radios()
+        let radio_infos: Vec<_> = self
+            .context
+            .radios()
             .map(|(id, radio)| {
                 (
                     id.clone(),
@@ -178,9 +181,15 @@ impl SimulationPanel {
                 // Radio header
                 ui.horizontal(|ui| {
                     // Radio name and model (active state is shown in the sidebar radio list)
-                    let model_name = model.as_ref().map(|m| m.model.as_str()).unwrap_or(protocol.name());
+                    let model_name = model
+                        .as_ref()
+                        .map(|m| m.model.as_str())
+                        .unwrap_or(protocol.name());
                     let header_text = format!("{} ({})", name, model_name);
-                    if ui.selectable_label(is_selected, RichText::new(header_text).strong()).clicked() {
+                    if ui
+                        .selectable_label(is_selected, RichText::new(header_text).strong())
+                        .clicked()
+                    {
                         self.selected_radio = if is_selected { None } else { Some(id.clone()) };
                         // Update frequency input when selecting
                         self.frequency_input = format_frequency(freq_hz);
@@ -188,11 +197,7 @@ impl SimulationPanel {
 
                     // PTT indicator
                     if ptt {
-                        ui.label(
-                            RichText::new("TX")
-                                .color(Color32::RED)
-                                .strong(),
-                        );
+                        ui.label(RichText::new("TX").color(Color32::RED).strong());
                     }
 
                     // Frequency display
@@ -202,10 +207,7 @@ impl SimulationPanel {
                                 .monospace()
                                 .color(Color32::LIGHT_GREEN),
                         );
-                        ui.label(
-                            RichText::new(mode_name(mode))
-                                .color(Color32::LIGHT_BLUE),
-                        );
+                        ui.label(RichText::new(mode_name(mode)).color(Color32::LIGHT_BLUE));
                     });
                 });
 
@@ -227,10 +229,16 @@ impl SimulationPanel {
                             .show_ui(ui, |ui| {
                                 for m in &models {
                                     let display_name = format!("{} {}", m.manufacturer, m.model);
-                                    if ui.selectable_label(
-                                        model.as_ref().map(|curr| curr.model == m.model).unwrap_or(false),
-                                        &display_name
-                                    ).clicked() {
+                                    if ui
+                                        .selectable_label(
+                                            model
+                                                .as_ref()
+                                                .map(|curr| curr.model == m.model)
+                                                .unwrap_or(false),
+                                            &display_name,
+                                        )
+                                        .clicked()
+                                    {
                                         self.context.set_radio_model(&id, Some(m.clone()));
                                     }
                                 }
@@ -285,12 +293,11 @@ impl SimulationPanel {
                     ui.horizontal_wrapped(|ui| {
                         for &m in MODES {
                             let is_current = mode == m;
-                            let button = egui::Button::new(mode_name(m))
-                                .fill(if is_current {
-                                    Color32::from_rgb(60, 80, 60)
-                                } else {
-                                    Color32::from_rgb(40, 40, 40)
-                                });
+                            let button = egui::Button::new(mode_name(m)).fill(if is_current {
+                                Color32::from_rgb(60, 80, 60)
+                            } else {
+                                Color32::from_rgb(40, 40, 40)
+                            });
                             if ui.add(button).clicked() {
                                 self.context.set_radio_mode(&id, m);
                             }
@@ -337,10 +344,7 @@ fn format_frequency(hz: u64) -> String {
 
 /// Parse a frequency string, allowing various formats
 fn parse_frequency(s: &str) -> Option<u64> {
-    let cleaned: String = s
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
+    let cleaned: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
     cleaned.parse().ok()
 }
 

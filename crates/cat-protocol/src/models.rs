@@ -588,8 +588,8 @@ static FLEX_RADIOS: &[(&str, RadioModelStatic)] = &[
                 max_frequency_hz: 77_000_000,
                 frequency_step_hz: 1,
                 has_split: true,
-                vfo_count: 8, // Up to 8 slice receivers
-                has_tuner: false, // Receiver only
+                vfo_count: 8,          // Up to 8 slice receivers
+                has_tuner: false,      // Receiver only
                 max_power_watts: None, // Receiver only
             },
         },
@@ -607,7 +607,7 @@ static FLEX_RADIOS: &[(&str, RadioModelStatic)] = &[
                 max_frequency_hz: 77_000_000,
                 frequency_step_hz: 1,
                 has_split: true,
-                vfo_count: 2, // Up to 2 slice receivers
+                vfo_count: 2,     // Up to 2 slice receivers
                 has_tuner: false, // Optional ATU
                 max_power_watts: Some(100),
             },
@@ -627,7 +627,7 @@ static FLEX_RADIOS: &[(&str, RadioModelStatic)] = &[
                 max_frequency_hz: 77_000_000,
                 frequency_step_hz: 1,
                 has_split: true,
-                vfo_count: 2, // Up to 2 slice receivers
+                vfo_count: 2,     // Up to 2 slice receivers
                 has_tuner: false, // Optional ATU
                 max_power_watts: Some(100),
             },
@@ -646,7 +646,7 @@ static FLEX_RADIOS: &[(&str, RadioModelStatic)] = &[
                 max_frequency_hz: 77_000_000,
                 frequency_step_hz: 1,
                 has_split: true,
-                vfo_count: 4, // Up to 4 slice receivers
+                vfo_count: 4,     // Up to 4 slice receivers
                 has_tuner: false, // Optional ATU
                 max_power_watts: Some(100),
             },

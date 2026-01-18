@@ -103,7 +103,10 @@ impl FirmwarePanel {
 
     /// Check if currently flashing
     fn is_flashing(&self) -> bool {
-        !matches!(self.state, FlashState::Idle | FlashState::Complete | FlashState::Error(_))
+        !matches!(
+            self.state,
+            FlashState::Idle | FlashState::Complete | FlashState::Error(_)
+        )
     }
 
     /// Draw the firmware panel UI
@@ -154,11 +157,7 @@ impl FirmwarePanel {
         } else {
             // Device selector
             egui::ComboBox::from_id_salt("device_select")
-                .selected_text(
-                    self.selected_port
-                        .as_deref()
-                        .unwrap_or("Select device..."),
-                )
+                .selected_text(self.selected_port.as_deref().unwrap_or("Select device..."))
                 .show_ui(ui, |ui| {
                     for device in &self.devices {
                         let label = if let Some(ref sn) = device.serial_number {
@@ -250,7 +249,10 @@ impl FirmwarePanel {
         };
 
         if ui
-            .add_enabled(can_flash, egui::Button::new(button_text).min_size([120.0, 32.0].into()))
+            .add_enabled(
+                can_flash,
+                egui::Button::new(button_text).min_size([120.0, 32.0].into()),
+            )
             .clicked()
         {
             self.start_flash();

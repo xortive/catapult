@@ -87,7 +87,10 @@ impl TryFrom<u8> for YaesuOpcode {
             0x03 => Ok(Self::ReadFreqMode),
             0x0F => Ok(Self::PowerOn),
             0x8F => Ok(Self::PowerOff),
-            _ => Err(ParseError::UnknownCommand(format!("Yaesu opcode 0x{:02X}", value))),
+            _ => Err(ParseError::UnknownCommand(format!(
+                "Yaesu opcode 0x{:02X}",
+                value
+            ))),
         }
     }
 }
@@ -455,13 +458,7 @@ mod tests {
 
     #[test]
     fn test_bcd_frequency_roundtrip() {
-        let freqs = [
-            14_250_000u64,
-            7_074_000,
-            28_500_000,
-            144_200_000,
-            3_573_000,
-        ];
+        let freqs = [14_250_000u64, 7_074_000, 28_500_000, 144_200_000, 3_573_000];
 
         for freq in freqs {
             let bcd = frequency_to_bcd_be(freq);
@@ -470,7 +467,12 @@ mod tests {
             let arr: [u8; 5] = [bcd[0], bcd[1], bcd[2], bcd[3], 0];
             let back = bcd_to_frequency_be(&arr);
             // Should match to 10 Hz resolution
-            assert_eq!(back / 10 * 10, freq / 10 * 10, "Roundtrip failed for {}", freq);
+            assert_eq!(
+                back / 10 * 10,
+                freq / 10 * 10,
+                "Roundtrip failed for {}",
+                freq
+            );
         }
     }
 

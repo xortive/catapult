@@ -112,7 +112,10 @@ impl TryFrom<u8> for CivCommandCode {
             0x1A => Ok(Self::Transceive),
             0xFB => Ok(Self::Ok),
             0xFA => Ok(Self::Ng),
-            _ => Err(ParseError::UnknownCommand(format!("CI-V cmd 0x{:02X}", value))),
+            _ => Err(ParseError::UnknownCommand(format!(
+                "CI-V cmd 0x{:02X}",
+                value
+            ))),
         }
     }
 }
@@ -156,7 +159,11 @@ pub enum CivCommandType {
     /// Error/NG response
     Ng,
     /// Unknown command
-    Unknown { cmd: u8, subcmd: Option<u8>, data: Vec<u8> },
+    Unknown {
+        cmd: u8,
+        subcmd: Option<u8>,
+        data: Vec<u8>,
+    },
 }
 
 /// Streaming CI-V protocol codec
@@ -167,7 +174,9 @@ pub struct CivCodec {
 impl CivCodec {
     /// Create a new CI-V codec
     pub fn new() -> Self {
-        Self { buffer: Vec::with_capacity(64) }
+        Self {
+            buffer: Vec::with_capacity(64),
+        }
     }
 
     /// Find the start of a valid frame (FE FE sequence)
@@ -181,7 +190,9 @@ impl CivCodec {
     fn parse_frame(frame: &[u8]) -> Result<CivCommand, ParseError> {
         // Minimum frame: FE FE to from cmd FD = 6 bytes
         if frame.len() < 6 {
-            return Err(ParseError::Incomplete { needed: 6 - frame.len() });
+            return Err(ParseError::Incomplete {
+                needed: 6 - frame.len(),
+            });
         }
 
         // Verify preamble
@@ -622,7 +633,9 @@ mod tests {
         let mut codec = CivCodec::new();
         // Response: freq 14.250.000 from radio 0x94 to controller
         // BCD: [0x00, 0x00, 0x25, 0x14, 0x00]
-        let frame = [0xFE, 0xFE, 0xE0, 0x94, 0x03, 0x00, 0x00, 0x25, 0x14, 0x00, 0xFD];
+        let frame = [
+            0xFE, 0xFE, 0xE0, 0x94, 0x03, 0x00, 0x00, 0x25, 0x14, 0x00, 0xFD,
+        ];
         codec.push_bytes(&frame);
 
         let cmd = codec.next_command().unwrap();
@@ -659,7 +672,8 @@ mod tests {
 
     #[test]
     fn test_to_radio_command() {
-        let civ_cmd = CivCommand::from_radio(0x94, CivCommandType::FrequencyReport { hz: 7_074_000 });
+        let civ_cmd =
+            CivCommand::from_radio(0x94, CivCommandType::FrequencyReport { hz: 7_074_000 });
         let radio_cmd = civ_cmd.to_radio_command();
         assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
     }

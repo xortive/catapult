@@ -44,7 +44,10 @@ pub enum OperatingMode {
 impl OperatingMode {
     /// Returns whether this is a voice mode
     pub fn is_voice(&self) -> bool {
-        matches!(self, Self::Lsb | Self::Usb | Self::Am | Self::Fm | Self::FmN)
+        matches!(
+            self,
+            Self::Lsb | Self::Usb | Self::Am | Self::Fm | Self::FmN
+        )
     }
 
     /// Returns whether this is a digital/data mode

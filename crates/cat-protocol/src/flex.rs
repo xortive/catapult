@@ -190,9 +190,11 @@ impl FlexMode {
             OperatingMode::Am => Self::Am,
             OperatingMode::Fm => Self::Fm,
             OperatingMode::FmN => Self::Nfm,
-            OperatingMode::Dig | OperatingMode::DigU | OperatingMode::DataU | OperatingMode::Data | OperatingMode::Pkt => {
-                Self::DigU
-            }
+            OperatingMode::Dig
+            | OperatingMode::DigU
+            | OperatingMode::DataU
+            | OperatingMode::Data
+            | OperatingMode::Pkt => Self::DigU,
             OperatingMode::DigL | OperatingMode::DataL => Self::DigL,
             OperatingMode::Rtty => Self::Rtty,
             OperatingMode::RttyR => Self::Rtty,
@@ -345,8 +347,8 @@ impl FlexCodec {
             let mode_num = params
                 .parse::<u8>()
                 .map_err(|_| ParseError::InvalidMode(params.into()))?;
-            let flex_mode =
-                FlexMode::from_code(mode_num).ok_or_else(|| ParseError::InvalidMode(params.into()))?;
+            let flex_mode = FlexMode::from_code(mode_num)
+                .ok_or_else(|| ParseError::InvalidMode(params.into()))?;
             Ok(FlexCommand::Mode(Some(flex_mode)))
         }
     }
@@ -561,10 +563,12 @@ impl ToRadioCommand for FlexCommand {
             },
             FlexCommand::Split(None) => RadioCommand::GetVfo,
             FlexCommand::Power(Some(on)) => RadioCommand::SetPower { on: *on },
-            FlexCommand::Power(None) | FlexCommand::AudioGain(_) | FlexCommand::RfPower(_)
-            | FlexCommand::SMeter(_) | FlexCommand::AgcMode(_) | FlexCommand::NoiseReduction(_) => {
-                RadioCommand::Unknown { data: vec![] }
-            }
+            FlexCommand::Power(None)
+            | FlexCommand::AudioGain(_)
+            | FlexCommand::RfPower(_)
+            | FlexCommand::SMeter(_)
+            | FlexCommand::AgcMode(_)
+            | FlexCommand::NoiseReduction(_) => RadioCommand::Unknown { data: vec![] },
             FlexCommand::Unknown(s) => RadioCommand::Unknown {
                 data: s.as_bytes().to_vec(),
             },
@@ -760,8 +764,14 @@ mod tests {
             codec.next_command(),
             Some(FlexCommand::FrequencyA(Some(14_250_000)))
         );
-        assert_eq!(codec.next_command(), Some(FlexCommand::Mode(Some(FlexMode::Usb))));
-        assert_eq!(codec.next_command(), Some(FlexCommand::Transmit(Some(true))));
+        assert_eq!(
+            codec.next_command(),
+            Some(FlexCommand::Mode(Some(FlexMode::Usb)))
+        );
+        assert_eq!(
+            codec.next_command(),
+            Some(FlexCommand::Transmit(Some(true)))
+        );
         assert!(codec.next_command().is_none());
     }
 

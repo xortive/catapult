@@ -86,7 +86,9 @@ pub struct KenwoodCodec {
 impl KenwoodCodec {
     /// Create a new Kenwood codec
     pub fn new() -> Self {
-        Self { buffer: Vec::with_capacity(64) }
+        Self {
+            buffer: Vec::with_capacity(64),
+        }
     }
 
     /// Parse a complete command string (without terminator)
@@ -211,9 +213,7 @@ impl KenwoodCodec {
             .parse::<u64>()
             .map_err(|_| ParseError::InvalidFrequency(params[0..11].into()))?;
 
-        let rit_offset = params[16..21]
-            .parse::<i16>()
-            .unwrap_or(0);
+        let rit_offset = params[16..21].parse::<i16>().unwrap_or(0);
 
         let rit_on = params.chars().nth(21) == Some('1');
         let xit_on = params.chars().nth(22) == Some('1');

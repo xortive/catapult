@@ -271,7 +271,8 @@ impl CatapultApp {
         ui.heading("Radios");
 
         let has_real_radios = !self.radio_panels.is_empty();
-        let has_sim_radios = self.settings.debug_mode && self.simulation_panel.context().radio_count() > 0;
+        let has_sim_radios =
+            self.settings.debug_mode && self.simulation_panel.context().radio_count() > 0;
 
         if !has_real_radios && !has_sim_radios {
             ui.label("No radios detected. Click 'Scan Ports' to search.");
@@ -298,7 +299,14 @@ impl CatapultApp {
                     let freq_display = state.map(|s| s.frequency_display()).unwrap_or_default();
                     let mode_display = state.map(|s| s.mode_display()).unwrap_or_default();
                     let ptt = state.map(|s| s.ptt).unwrap_or(false);
-                    (panel.handle, panel.name.clone(), panel.port.clone(), freq_display, mode_display, ptt)
+                    (
+                        panel.handle,
+                        panel.name.clone(),
+                        panel.port.clone(),
+                        freq_display,
+                        mode_display,
+                        ptt,
+                    )
                 })
                 .collect();
 
@@ -398,7 +406,10 @@ impl CatapultApp {
             let active_mux = self.multiplexer.active_radio();
 
             // Collect sim radio info with their multiplexer handles
-            let sim_radios: Vec<_> = self.simulation_panel.context().radios()
+            let sim_radios: Vec<_> = self
+                .simulation_panel
+                .context()
+                .radios()
                 .map(|(id, radio)| {
                     let freq = radio.frequency_hz() as f64 / 1_000_000.0;
                     let mux_handle = self.sim_radio_handles.get(id).copied();
@@ -496,26 +507,10 @@ impl CatapultApp {
                 egui::ComboBox::from_id_salt("amp_protocol")
                     .selected_text(self.amp_protocol.name())
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.amp_protocol,
-                            Protocol::Kenwood,
-                            "Kenwood",
-                        );
-                        ui.selectable_value(
-                            &mut self.amp_protocol,
-                            Protocol::IcomCIV,
-                            "Icom CI-V",
-                        );
-                        ui.selectable_value(
-                            &mut self.amp_protocol,
-                            Protocol::Yaesu,
-                            "Yaesu",
-                        );
-                        ui.selectable_value(
-                            &mut self.amp_protocol,
-                            Protocol::Elecraft,
-                            "Elecraft",
-                        );
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::Kenwood, "Kenwood");
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::IcomCIV, "Icom CI-V");
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::Yaesu, "Yaesu");
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::Elecraft, "Elecraft");
                     });
                 ui.end_row();
 
@@ -528,11 +523,7 @@ impl CatapultApp {
                     })
                     .show_ui(ui, |ui| {
                         for port in &self.available_ports {
-                            ui.selectable_value(
-                                &mut self.amp_port,
-                                port.port.clone(),
-                                &port.port,
-                            );
+                            ui.selectable_value(&mut self.amp_port, port.port.clone(), &port.port);
                         }
                     });
                 ui.end_row();
@@ -553,7 +544,8 @@ impl CatapultApp {
                     ui.label("CI-V Address:");
                     let mut addr_str = format!("{:02X}", self.amp_civ_address);
                     if ui.text_edit_singleline(&mut addr_str).changed() {
-                        if let Ok(addr) = u8::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
+                        if let Ok(addr) = u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
+                        {
                             self.amp_civ_address = addr;
                         }
                     }
@@ -565,11 +557,17 @@ impl CatapultApp {
             let is_connected = self.amp_connection.is_some();
             let can_connect = !self.amp_port.is_empty() && !is_connected;
 
-            if ui.add_enabled(can_connect, egui::Button::new("Connect")).clicked() {
+            if ui
+                .add_enabled(can_connect, egui::Button::new("Connect"))
+                .clicked()
+            {
                 self.connect_amplifier();
             }
 
-            if ui.add_enabled(is_connected, egui::Button::new("Disconnect")).clicked() {
+            if ui
+                .add_enabled(is_connected, egui::Button::new("Disconnect"))
+                .clicked()
+            {
                 self.disconnect_amplifier();
             }
 
@@ -579,7 +577,6 @@ impl CatapultApp {
                 ui.label(RichText::new("● Disconnected").color(Color32::GRAY));
             }
         });
-
     }
 
     /// Draw the switching mode panel
@@ -601,10 +598,7 @@ impl CatapultApp {
                             SwitchingMode::Automatic,
                             SwitchingMode::Manual,
                         ] {
-                            if ui
-                                .selectable_value(&mut mode, m, m.name())
-                                .changed()
-                            {
+                            if ui.selectable_value(&mut mode, m, m.name()).changed() {
                                 self.multiplexer.set_switching_mode(mode);
                             }
                         }
@@ -789,11 +783,7 @@ impl eframe::App for CatapultApp {
             ui.horizontal(|ui| {
                 // Debug mode indicator
                 if self.settings.debug_mode {
-                    ui.label(
-                        RichText::new("[DEBUG]")
-                            .color(Color32::YELLOW)
-                            .strong(),
-                    );
+                    ui.label(RichText::new("[DEBUG]").color(Color32::YELLOW).strong());
                     ui.separator();
                 }
 
@@ -808,10 +798,7 @@ impl eframe::App for CatapultApp {
                     if self.amp_connection.is_some() {
                         ui.label(RichText::new("Amp: Connected").color(Color32::GREEN));
                     } else if self.settings.debug_mode && self.show_simulation {
-                        ui.label(
-                            RichText::new("Amp: Simulation")
-                                .color(Color32::LIGHT_BLUE),
-                        );
+                        ui.label(RichText::new("Amp: Simulation").color(Color32::LIGHT_BLUE));
                     }
                 });
             });

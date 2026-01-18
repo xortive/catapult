@@ -107,10 +107,7 @@ impl Settings {
 
                 // Traffic history
                 ui.label("Traffic history:");
-                ui.add(
-                    egui::DragValue::new(&mut self.traffic_history_size)
-                        .range(100..=10000),
-                );
+                ui.add(egui::DragValue::new(&mut self.traffic_history_size).range(100..=10000));
                 ui.end_row();
 
                 // Show hex
@@ -132,9 +129,11 @@ impl Settings {
         if self.debug_mode {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("Debug mode enables simulated radio for testing without hardware")
-                    .color(egui::Color32::YELLOW)
-                    .small(),
+                egui::RichText::new(
+                    "Debug mode enables simulated radio for testing without hardware",
+                )
+                .color(egui::Color32::YELLOW)
+                .small(),
             );
         }
 

@@ -6,7 +6,9 @@
 
 use std::time::Duration;
 
-use cat_protocol::{elecraft, flex, icom, kenwood, models::RadioDatabase, yaesu, Protocol, RadioModel};
+use cat_protocol::{
+    elecraft, flex, icom, kenwood, models::RadioDatabase, yaesu, Protocol, RadioModel,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 use tokio_serial::SerialStream;
@@ -234,8 +236,8 @@ impl RadioProber {
 
                 if icom::is_valid_frame(response) {
                     let source_addr = icom::extract_source_address(response);
-                    let model = source_addr
-                        .and_then(cat_protocol::models::RadioDatabase::by_civ_address);
+                    let model =
+                        source_addr.and_then(cat_protocol::models::RadioDatabase::by_civ_address);
 
                     return Some(ProbeResult {
                         protocol: Protocol::IcomCIV,

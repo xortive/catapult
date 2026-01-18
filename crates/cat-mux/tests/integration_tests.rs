@@ -167,7 +167,11 @@ mod switching_tests {
         // Frequency change from h2 should switch in automatic mode
         mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 14_250_000 });
 
-        assert_eq!(mux.active_radio(), Some(h2), "Should switch on frequency in automatic mode");
+        assert_eq!(
+            mux.active_radio(),
+            Some(h2),
+            "Should switch on frequency in automatic mode"
+        );
     }
 
     #[test]
@@ -354,7 +358,12 @@ mod state_tracking_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(h1, RadioCommand::SetMode { mode: OperatingMode::Usb });
+        mux.process_radio_command(
+            h1,
+            RadioCommand::SetMode {
+                mode: OperatingMode::Usb,
+            },
+        );
 
         let state = mux.get_radio(h1).unwrap();
         assert_eq!(state.mode, Some(OperatingMode::Usb));
@@ -366,7 +375,12 @@ mod state_tracking_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(h1, RadioCommand::ModeReport { mode: OperatingMode::Cw });
+        mux.process_radio_command(
+            h1,
+            RadioCommand::ModeReport {
+                mode: OperatingMode::Cw,
+            },
+        );
 
         let state = mux.get_radio(h1).unwrap();
         assert_eq!(state.mode, Some(OperatingMode::Cw));
@@ -421,8 +435,18 @@ mod state_tracking_tests {
         mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
         mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 7_074_000 });
 
-        mux.process_radio_command(h1, RadioCommand::SetMode { mode: OperatingMode::Usb });
-        mux.process_radio_command(h2, RadioCommand::SetMode { mode: OperatingMode::Lsb });
+        mux.process_radio_command(
+            h1,
+            RadioCommand::SetMode {
+                mode: OperatingMode::Usb,
+            },
+        );
+        mux.process_radio_command(
+            h2,
+            RadioCommand::SetMode {
+                mode: OperatingMode::Lsb,
+            },
+        );
 
         let state1 = mux.get_radio(h1).unwrap();
         let state2 = mux.get_radio(h2).unwrap();
@@ -472,7 +496,11 @@ mod translation_tests {
         let s = String::from_utf8_lossy(&result);
         assert!(s.starts_with("FA"), "Expected FA prefix, got: {}", s);
         assert!(s.ends_with(";"), "Expected ; suffix, got: {}", s);
-        assert!(s.contains("14250000"), "Expected frequency in output: {}", s);
+        assert!(
+            s.contains("14250000"),
+            "Expected frequency in output: {}",
+            s
+        );
     }
 
     #[test]
@@ -521,11 +549,7 @@ mod translation_tests {
         // CI-V format: FE FE <to> <from> <cmd> <data...> FD
         assert_eq!(result[0], 0xFE, "Expected CI-V preamble");
         assert_eq!(result[1], 0xFE, "Expected CI-V preamble");
-        assert_eq!(
-            *result.last().unwrap(),
-            0xFD,
-            "Expected CI-V terminator"
-        );
+        assert_eq!(*result.last().unwrap(), 0xFD, "Expected CI-V terminator");
     }
 
     // Yaesu as target
@@ -569,7 +593,12 @@ mod translation_tests {
         let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::IcomCIV);
 
         let result = mux
-            .process_radio_command(h1, RadioCommand::SetMode { mode: OperatingMode::Usb })
+            .process_radio_command(
+                h1,
+                RadioCommand::SetMode {
+                    mode: OperatingMode::Usb,
+                },
+            )
             .unwrap();
 
         // Kenwood mode command: MD<mode>;

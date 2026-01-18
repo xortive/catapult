@@ -4,9 +4,9 @@
 //! protocol to any target protocol.
 
 use cat_protocol::{
-    elecraft::{ElecraftCommand, ElecraftCodec},
+    elecraft::{ElecraftCodec, ElecraftCommand},
     flex::{FlexCodec, FlexCommand},
-    icom::{CivCommand, CivCodec, CONTROLLER_ADDR},
+    icom::{CivCodec, CivCommand, CONTROLLER_ADDR},
     kenwood::{KenwoodCodec, KenwoodCommand},
     yaesu::{YaesuCodec, YaesuCommand},
     EncodeCommand, FromRadioCommand, Protocol, ProtocolCodec, RadioCommand, ToRadioCommand,
@@ -146,13 +146,13 @@ impl ProtocolTranslator {
     fn normalize_command(&self, cmd: &RadioCommand) -> RadioCommand {
         match cmd {
             RadioCommand::SetFrequency { hz } => {
-                let rounded = (*hz / self.config.frequency_precision_hz)
-                    * self.config.frequency_precision_hz;
+                let rounded =
+                    (*hz / self.config.frequency_precision_hz) * self.config.frequency_precision_hz;
                 RadioCommand::SetFrequency { hz: rounded }
             }
             RadioCommand::FrequencyReport { hz } => {
-                let rounded = (*hz / self.config.frequency_precision_hz)
-                    * self.config.frequency_precision_hz;
+                let rounded =
+                    (*hz / self.config.frequency_precision_hz) * self.config.frequency_precision_hz;
                 RadioCommand::FrequencyReport { hz: rounded }
             }
             _ => cmd.clone(),
@@ -290,8 +290,12 @@ mod tests {
 
     #[test]
     fn test_should_forward() {
-        assert!(should_forward_to_amp(&RadioCommand::SetFrequency { hz: 14_250_000 }));
-        assert!(should_forward_to_amp(&RadioCommand::SetPtt { active: true }));
+        assert!(should_forward_to_amp(&RadioCommand::SetFrequency {
+            hz: 14_250_000
+        }));
+        assert!(should_forward_to_amp(&RadioCommand::SetPtt {
+            active: true
+        }));
         assert!(!should_forward_to_amp(&RadioCommand::GetId));
         assert!(!should_forward_to_amp(&RadioCommand::GetFrequency));
     }
