@@ -30,6 +30,9 @@ pub struct VirtualRadio {
     ptt: bool,
     /// CI-V address (for Icom protocol)
     civ_address: Option<u8>,
+    /// Auto-information mode enabled
+    /// When true, radio sends unsolicited updates on state changes
+    auto_info_enabled: bool,
     /// Pending output bytes (protocol-encoded)
     pending_output: VecDeque<Vec<u8>>,
     /// Last state change timestamp
@@ -37,7 +40,7 @@ pub struct VirtualRadio {
 }
 
 /// Configuration for creating a virtual radio
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VirtualRadioConfig {
     /// Display name/identifier
     pub id: String,
@@ -86,6 +89,7 @@ impl VirtualRadio {
             mode: OperatingMode::Usb,
             ptt: false,
             civ_address,
+            auto_info_enabled: false,
             pending_output: VecDeque::new(),
             last_change: Instant::now(),
         }
@@ -123,6 +127,7 @@ impl VirtualRadio {
             mode: config.initial_mode,
             ptt: false,
             civ_address,
+            auto_info_enabled: false,
             pending_output: VecDeque::new(),
             last_change: Instant::now(),
         }
@@ -188,12 +193,14 @@ impl VirtualRadio {
         self.frequency_hz
     }
 
-    /// Set the frequency and queue a protocol-encoded command
+    /// Set the frequency and queue a protocol-encoded command if auto-info is enabled
     pub fn set_frequency(&mut self, hz: u64) {
         if self.frequency_hz != hz {
             self.frequency_hz = hz;
             self.last_change = Instant::now();
-            self.queue_command(RadioCommand::FrequencyReport { hz });
+            if self.auto_info_enabled {
+                self.queue_command(RadioCommand::FrequencyReport { hz });
+            }
         }
     }
 
@@ -202,12 +209,14 @@ impl VirtualRadio {
         self.mode
     }
 
-    /// Set the operating mode and queue a protocol-encoded command
+    /// Set the operating mode and queue a protocol-encoded command if auto-info is enabled
     pub fn set_mode(&mut self, mode: OperatingMode) {
         if self.mode != mode {
             self.mode = mode;
             self.last_change = Instant::now();
-            self.queue_command(RadioCommand::ModeReport { mode });
+            if self.auto_info_enabled {
+                self.queue_command(RadioCommand::ModeReport { mode });
+            }
         }
     }
 
@@ -216,12 +225,14 @@ impl VirtualRadio {
         self.ptt
     }
 
-    /// Set the PTT state and queue a protocol-encoded command
+    /// Set the PTT state and queue a protocol-encoded command if auto-info is enabled
     pub fn set_ptt(&mut self, active: bool) {
         if self.ptt != active {
             self.ptt = active;
             self.last_change = Instant::now();
-            self.queue_command(RadioCommand::PttReport { active });
+            if self.auto_info_enabled {
+                self.queue_command(RadioCommand::PttReport { active });
+            }
         }
     }
 
@@ -233,6 +244,21 @@ impl VirtualRadio {
     /// Set the CI-V address (Icom only)
     pub fn set_civ_address(&mut self, addr: Option<u8>) {
         self.civ_address = addr;
+    }
+
+    /// Get the auto-information mode state
+    pub fn auto_info_enabled(&self) -> bool {
+        self.auto_info_enabled
+    }
+
+    /// Set the auto-information mode state
+    /// When enabled, the radio will send unsolicited updates on state changes
+    pub fn set_auto_info(&mut self, enabled: bool) {
+        if self.auto_info_enabled != enabled {
+            self.auto_info_enabled = enabled;
+            // Send confirmation response
+            self.queue_command(RadioCommand::AutoInfoReport { enabled });
+        }
     }
 
     /// Get the time of last state change
@@ -345,6 +371,71 @@ impl VirtualRadio {
             if self.ptt { "[TX]" } else { "" }
         )
     }
+
+    /// Handle an incoming RadioCommand and generate appropriate responses
+    /// Returns true if the command was handled
+    pub fn handle_command(&mut self, cmd: &RadioCommand) -> bool {
+        match cmd {
+            RadioCommand::SetFrequency { hz } => {
+                self.frequency_hz = *hz;
+                self.last_change = Instant::now();
+                if self.auto_info_enabled {
+                    self.queue_command(RadioCommand::FrequencyReport { hz: *hz });
+                }
+                true
+            }
+            RadioCommand::GetFrequency => {
+                self.queue_command(RadioCommand::FrequencyReport {
+                    hz: self.frequency_hz,
+                });
+                true
+            }
+            RadioCommand::SetMode { mode } => {
+                self.mode = *mode;
+                self.last_change = Instant::now();
+                if self.auto_info_enabled {
+                    self.queue_command(RadioCommand::ModeReport { mode: *mode });
+                }
+                true
+            }
+            RadioCommand::GetMode => {
+                self.queue_command(RadioCommand::ModeReport { mode: self.mode });
+                true
+            }
+            RadioCommand::SetPtt { active } => {
+                self.ptt = *active;
+                self.last_change = Instant::now();
+                if self.auto_info_enabled {
+                    self.queue_command(RadioCommand::PttReport { active: *active });
+                }
+                true
+            }
+            RadioCommand::GetPtt => {
+                self.queue_command(RadioCommand::PttReport { active: self.ptt });
+                true
+            }
+            RadioCommand::GetId => {
+                self.send_id_response();
+                true
+            }
+            RadioCommand::GetStatus => {
+                self.send_status_report();
+                true
+            }
+            RadioCommand::EnableAutoInfo { enabled } => {
+                self.auto_info_enabled = *enabled;
+                self.queue_command(RadioCommand::AutoInfoReport { enabled: *enabled });
+                true
+            }
+            RadioCommand::GetAutoInfo => {
+                self.queue_command(RadioCommand::AutoInfoReport {
+                    enabled: self.auto_info_enabled,
+                });
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -362,8 +453,21 @@ mod tests {
     }
 
     #[test]
-    fn test_set_frequency_generates_output() {
+    fn test_set_frequency_no_output_without_auto_info() {
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        radio.set_frequency(7_074_000);
+
+        // No output when auto_info is disabled
+        assert!(!radio.has_output());
+        assert_eq!(radio.frequency_hz(), 7_074_000);
+    }
+
+    #[test]
+    fn test_set_frequency_generates_output_with_auto_info() {
+        let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        radio.set_auto_info(true);
+        radio.clear_output(); // Clear the AI response
+
         radio.set_frequency(7_074_000);
 
         assert!(radio.has_output());
@@ -377,8 +481,11 @@ mod tests {
     }
 
     #[test]
-    fn test_set_mode_generates_output() {
+    fn test_set_mode_generates_output_with_auto_info() {
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        radio.set_auto_info(true);
+        radio.clear_output();
+
         radio.set_mode(OperatingMode::Cw);
 
         assert!(radio.has_output());
@@ -391,8 +498,11 @@ mod tests {
     }
 
     #[test]
-    fn test_set_ptt_generates_output() {
+    fn test_set_ptt_generates_output_with_auto_info() {
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        radio.set_auto_info(true);
+        radio.clear_output();
+
         radio.set_ptt(true);
 
         assert!(radio.has_output());
@@ -405,6 +515,8 @@ mod tests {
     #[test]
     fn test_no_output_when_value_unchanged() {
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        radio.set_auto_info(true);
+        radio.clear_output();
 
         // Set to same value as initial
         radio.set_frequency(14_250_000);
@@ -418,9 +530,53 @@ mod tests {
     }
 
     #[test]
-    fn test_icom_encoding() {
+    fn test_auto_info_enable_disable() {
+        let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        assert!(!radio.auto_info_enabled());
+
+        radio.set_auto_info(true);
+        assert!(radio.auto_info_enabled());
+        assert!(radio.has_output()); // Should send AI1;
+
+        let output = radio.take_output().unwrap();
+        let s = String::from_utf8_lossy(&output);
+        assert!(s.contains("AI"));
+        assert!(s.contains("1"));
+
+        radio.set_auto_info(false);
+        assert!(!radio.auto_info_enabled());
+    }
+
+    #[test]
+    fn test_handle_enable_auto_info_command() {
+        let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+
+        let handled = radio.handle_command(&RadioCommand::EnableAutoInfo { enabled: true });
+        assert!(handled);
+        assert!(radio.auto_info_enabled());
+        assert!(radio.has_output());
+    }
+
+    #[test]
+    fn test_handle_get_frequency_command() {
+        let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+
+        let handled = radio.handle_command(&RadioCommand::GetFrequency);
+        assert!(handled);
+        assert!(radio.has_output());
+
+        let output = radio.take_output().unwrap();
+        let s = String::from_utf8_lossy(&output);
+        assert!(s.contains("FA"));
+    }
+
+    #[test]
+    fn test_icom_encoding_with_auto_info() {
         let mut radio = VirtualRadio::new("IC-7300", Protocol::IcomCIV);
         radio.set_civ_address(Some(0x94));
+        radio.set_auto_info(true);
+        radio.clear_output();
+
         // Use different frequency than default (14_250_000) to trigger change
         radio.set_frequency(7_074_000);
 
@@ -434,9 +590,12 @@ mod tests {
     }
 
     #[test]
-    fn test_frequency_command_encoding() {
-        // Test that frequency changes generate proper output
+    fn test_frequency_command_encoding_with_auto_info() {
+        // Test that frequency changes generate proper output when AI enabled
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        radio.set_auto_info(true);
+        radio.clear_output();
+
         radio.set_frequency(21_350_000);
         radio.set_mode(OperatingMode::Cw);
 
@@ -445,8 +604,11 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_outputs_queued() {
+    fn test_multiple_outputs_queued_with_auto_info() {
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
+        radio.set_auto_info(true);
+        radio.clear_output();
+
         radio.set_frequency(7_074_000);
         radio.set_mode(OperatingMode::Dig);
         radio.set_ptt(true);

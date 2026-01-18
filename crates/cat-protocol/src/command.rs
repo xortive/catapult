@@ -132,6 +132,16 @@ pub enum RadioCommand {
     /// Power on/off command
     SetPower { on: bool },
 
+    /// Enable/disable auto-information mode
+    /// When enabled, radio sends unsolicited updates when parameters change
+    EnableAutoInfo { enabled: bool },
+
+    /// Query auto-information state
+    GetAutoInfo,
+
+    /// Auto-information state report
+    AutoInfoReport { enabled: bool },
+
     /// Unknown or unparseable command (preserves raw data)
     Unknown { data: Vec<u8> },
 }
@@ -161,6 +171,7 @@ impl RadioCommand {
                 | Self::GetVfo
                 | Self::GetId
                 | Self::GetStatus
+                | Self::GetAutoInfo
         )
     }
 
@@ -174,6 +185,7 @@ impl RadioCommand {
                 | Self::VfoReport { .. }
                 | Self::IdReport { .. }
                 | Self::StatusReport { .. }
+                | Self::AutoInfoReport { .. }
         )
     }
 
@@ -186,6 +198,7 @@ impl RadioCommand {
                 | Self::SetPtt { .. }
                 | Self::SetVfo { .. }
                 | Self::SetPower { .. }
+                | Self::EnableAutoInfo { .. }
         )
     }
 

@@ -47,6 +47,8 @@ pub enum KenwoodCommand {
     Split(Option<bool>),
     /// Power on/off: PS0; or PS1;
     Power(Option<bool>),
+    /// Auto-information mode: AI0; (off) or AI1; (on) or AI; (query)
+    AutoInfo(Option<bool>),
     /// Unknown/unrecognized command
     Unknown(String),
 }
@@ -179,6 +181,14 @@ impl KenwoodCodec {
                 } else {
                     let on = params != "0";
                     Ok(KenwoodCommand::Power(Some(on)))
+                }
+            }
+            "AI" => {
+                if params.is_empty() {
+                    Ok(KenwoodCommand::AutoInfo(None))
+                } else {
+                    let enabled = params != "0";
+                    Ok(KenwoodCommand::AutoInfo(Some(enabled)))
                 }
             }
             _ => Ok(KenwoodCommand::Unknown(cmd.to_string())),
@@ -319,6 +329,10 @@ impl ToRadioCommand for KenwoodCommand {
             KenwoodCommand::Split(None) => RadioCommand::GetVfo,
             KenwoodCommand::Power(Some(on)) => RadioCommand::SetPower { on: *on },
             KenwoodCommand::Power(None) => RadioCommand::Unknown { data: vec![] },
+            KenwoodCommand::AutoInfo(Some(enabled)) => {
+                RadioCommand::EnableAutoInfo { enabled: *enabled }
+            }
+            KenwoodCommand::AutoInfo(None) => RadioCommand::GetAutoInfo,
             KenwoodCommand::Unknown(s) => RadioCommand::Unknown {
                 data: s.as_bytes().to_vec(),
             },
@@ -354,6 +368,13 @@ impl FromRadioCommand for KenwoodCommand {
             RadioCommand::IdReport { id } => Some(KenwoodCommand::Id(Some(id.clone()))),
             RadioCommand::GetStatus => Some(KenwoodCommand::Info(None)),
             RadioCommand::SetPower { on } => Some(KenwoodCommand::Power(Some(*on))),
+            RadioCommand::EnableAutoInfo { enabled } => {
+                Some(KenwoodCommand::AutoInfo(Some(*enabled)))
+            }
+            RadioCommand::GetAutoInfo => Some(KenwoodCommand::AutoInfo(None)),
+            RadioCommand::AutoInfoReport { enabled } => {
+                Some(KenwoodCommand::AutoInfo(Some(*enabled)))
+            }
             _ => None,
         }
     }
@@ -381,6 +402,10 @@ impl EncodeCommand for KenwoodCommand {
             KenwoodCommand::Split(None) => "FT".to_string(),
             KenwoodCommand::Power(Some(on)) => format!("PS{}", if *on { 1 } else { 0 }),
             KenwoodCommand::Power(None) => "PS".to_string(),
+            KenwoodCommand::AutoInfo(Some(enabled)) => {
+                format!("AI{}", if *enabled { 1 } else { 0 })
+            }
+            KenwoodCommand::AutoInfo(None) => "AI".to_string(),
             KenwoodCommand::Unknown(s) => s.clone(),
         };
         format!("{};", cmd).into_bytes()
@@ -518,5 +543,58 @@ mod tests {
         let radio_cmd = RadioCommand::SetFrequency { hz: 14_250_000 };
         let cmd = KenwoodCommand::from_radio_command(&radio_cmd).unwrap();
         assert_eq!(cmd, KenwoodCommand::FrequencyA(Some(14_250_000)));
+    }
+
+    #[test]
+    fn test_parse_auto_info_query() {
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"AI;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::AutoInfo(None));
+        assert_eq!(cmd.to_radio_command(), RadioCommand::GetAutoInfo);
+    }
+
+    #[test]
+    fn test_parse_auto_info_enable() {
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"AI1;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::AutoInfo(Some(true)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::EnableAutoInfo { enabled: true }
+        );
+    }
+
+    #[test]
+    fn test_parse_auto_info_disable() {
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"AI0;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::AutoInfo(Some(false)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::EnableAutoInfo { enabled: false }
+        );
+    }
+
+    #[test]
+    fn test_encode_auto_info() {
+        assert_eq!(KenwoodCommand::AutoInfo(None).encode(), b"AI;");
+        assert_eq!(KenwoodCommand::AutoInfo(Some(true)).encode(), b"AI1;");
+        assert_eq!(KenwoodCommand::AutoInfo(Some(false)).encode(), b"AI0;");
+    }
+
+    #[test]
+    fn test_from_radio_command_auto_info() {
+        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
+            .unwrap();
+        assert_eq!(cmd, KenwoodCommand::AutoInfo(Some(true)));
+
+        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetAutoInfo).unwrap();
+        assert_eq!(cmd, KenwoodCommand::AutoInfo(None));
     }
 }

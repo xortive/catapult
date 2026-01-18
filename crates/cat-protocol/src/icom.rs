@@ -154,6 +154,9 @@ pub enum CivCommandType {
     PttReport { on: bool },
     /// Split on/off
     Split { on: bool },
+    /// Transceive mode (auto-information): 0x1A 0x05
+    /// When enabled, radio sends unsolicited updates
+    Transceive { enabled: bool },
     /// OK acknowledgment
     Ok,
     /// Error/NG response
@@ -272,6 +275,27 @@ impl CivCodec {
                 let on = data.first().map(|&v| v != 0).unwrap_or(false);
                 Ok(CivCommandType::Split { on })
             }
+            0x1A => {
+                // Transceive mode and other settings
+                // Subcmd 0x05 = Transceive on/off
+                let subcmd = data.first().copied().unwrap_or(0);
+                if subcmd == 0x05 {
+                    let enabled = data.get(1).map(|&v| v != 0).unwrap_or(false);
+                    Ok(CivCommandType::Transceive { enabled })
+                } else {
+                    // Other 0x1A commands
+                    let rest = if data.len() > 1 {
+                        data[1..].to_vec()
+                    } else {
+                        vec![]
+                    };
+                    Ok(CivCommandType::Unknown {
+                        cmd,
+                        subcmd: Some(subcmd),
+                        data: rest,
+                    })
+                }
+            }
             0xFB => Ok(CivCommandType::Ok),
             0xFA => Ok(CivCommandType::Ng),
             _ => {
@@ -364,6 +388,9 @@ impl ToRadioCommand for CivCommand {
             CivCommandType::Split { on } => RadioCommand::SetVfo {
                 vfo: if *on { Vfo::Split } else { Vfo::A },
             },
+            CivCommandType::Transceive { enabled } => {
+                RadioCommand::EnableAutoInfo { enabled: *enabled }
+            }
             CivCommandType::Ok | CivCommandType::Ng => RadioCommand::Unknown { data: vec![] },
             CivCommandType::Unknown { cmd, data, .. } => RadioCommand::Unknown {
                 data: std::iter::once(*cmd).chain(data.iter().copied()).collect(),
@@ -416,6 +443,8 @@ impl FromRadioCommand for CivCommand {
                 Vfo::B => CivCommandType::VfoSelect { vfo: 0x01 },
                 Vfo::Memory => CivCommandType::VfoSelect { vfo: 0x02 },
             },
+            RadioCommand::EnableAutoInfo { enabled } => CivCommandType::Transceive { enabled: *enabled },
+            RadioCommand::AutoInfoReport { enabled } => CivCommandType::Transceive { enabled: *enabled },
             _ => return None,
         };
 
@@ -470,6 +499,11 @@ impl EncodeCommand for CivCommand {
             CivCommandType::Split { on } => {
                 frame.push(0x0F);
                 frame.push(if *on { 0x01 } else { 0x00 });
+            }
+            CivCommandType::Transceive { enabled } => {
+                frame.push(0x1A);
+                frame.push(0x05); // Subcmd for transceive
+                frame.push(if *enabled { 0x01 } else { 0x00 });
             }
             CivCommandType::Ok => {
                 frame.push(0xFB);
@@ -676,5 +710,66 @@ mod tests {
             CivCommand::from_radio(0x94, CivCommandType::FrequencyReport { hz: 7_074_000 });
         let radio_cmd = civ_cmd.to_radio_command();
         assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
+    }
+
+    #[test]
+    fn test_parse_transceive_enable() {
+        let mut codec = CivCodec::new();
+        // Frame: FE FE E0 94 1A 05 01 FD (transceive on from radio 0x94)
+        let frame = [0xFE, 0xFE, 0xE0, 0x94, 0x1A, 0x05, 0x01, 0xFD];
+        codec.push_bytes(&frame);
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd.from_addr, 0x94);
+        assert!(matches!(
+            cmd.command,
+            CivCommandType::Transceive { enabled: true }
+        ));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::EnableAutoInfo { enabled: true }
+        );
+    }
+
+    #[test]
+    fn test_parse_transceive_disable() {
+        let mut codec = CivCodec::new();
+        // Frame: FE FE E0 94 1A 05 00 FD (transceive off)
+        let frame = [0xFE, 0xFE, 0xE0, 0x94, 0x1A, 0x05, 0x00, 0xFD];
+        codec.push_bytes(&frame);
+
+        let cmd = codec.next_command().unwrap();
+        assert!(matches!(
+            cmd.command,
+            CivCommandType::Transceive { enabled: false }
+        ));
+    }
+
+    #[test]
+    fn test_encode_transceive() {
+        let cmd = CivCommand::to_radio(0x94, CivCommandType::Transceive { enabled: true });
+        let encoded = cmd.encode();
+        assert_eq!(
+            encoded,
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x1A, 0x05, 0x01, 0xFD]
+        );
+
+        let cmd = CivCommand::to_radio(0x94, CivCommandType::Transceive { enabled: false });
+        let encoded = cmd.encode();
+        assert_eq!(
+            encoded,
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x1A, 0x05, 0x00, 0xFD]
+        );
+    }
+
+    #[test]
+    fn test_from_radio_command_transceive() {
+        let civ_cmd =
+            CivCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
+                .unwrap();
+        assert!(matches!(
+            civ_cmd.command,
+            CivCommandType::Transceive { enabled: true }
+        ));
     }
 }

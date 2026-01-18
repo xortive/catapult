@@ -76,6 +76,8 @@ pub enum FlexCommand {
     AgcMode(Option<u8>),
     /// Noise reduction: ZZNR0;
     NoiseReduction(Option<bool>),
+    /// Auto-information mode: ZZAI0; (off) or ZZAI1; (on) or ZZAI; (query)
+    AutoInfo(Option<bool>),
     /// Unknown/unrecognized command (preserves original)
     Unknown(String),
 }
@@ -268,6 +270,7 @@ impl FlexCodec {
             "FR" => Self::parse_vfo_select(params),
             "FT" => Self::parse_split(params),
             "PS" => Self::parse_power(params),
+            "AI" => Self::parse_auto_info(params),
             _ => Ok(FlexCommand::Unknown(cmd.to_string())),
         }
     }
@@ -290,6 +293,7 @@ impl FlexCodec {
             "ZZSM" => Self::parse_smeter(params),
             "ZZGT" => Self::parse_agc_mode(params),
             "ZZNR" => Self::parse_noise_reduction(params),
+            "ZZAI" => Self::parse_auto_info(params),
             _ => Ok(FlexCommand::Unknown(cmd.to_string())),
         }
     }
@@ -486,6 +490,15 @@ impl FlexCodec {
             Ok(FlexCommand::NoiseReduction(Some(on)))
         }
     }
+
+    fn parse_auto_info(params: &str) -> Result<FlexCommand, ParseError> {
+        if params.is_empty() {
+            Ok(FlexCommand::AutoInfo(None))
+        } else {
+            let enabled = params != "0";
+            Ok(FlexCommand::AutoInfo(Some(enabled)))
+        }
+    }
 }
 
 impl Default for FlexCodec {
@@ -569,6 +582,10 @@ impl ToRadioCommand for FlexCommand {
             | FlexCommand::SMeter(_)
             | FlexCommand::AgcMode(_)
             | FlexCommand::NoiseReduction(_) => RadioCommand::Unknown { data: vec![] },
+            FlexCommand::AutoInfo(Some(enabled)) => {
+                RadioCommand::EnableAutoInfo { enabled: *enabled }
+            }
+            FlexCommand::AutoInfo(None) => RadioCommand::GetAutoInfo,
             FlexCommand::Unknown(s) => RadioCommand::Unknown {
                 data: s.as_bytes().to_vec(),
             },
@@ -604,6 +621,11 @@ impl FromRadioCommand for FlexCommand {
             RadioCommand::IdReport { id } => Some(FlexCommand::Id(Some(id.clone()))),
             RadioCommand::GetStatus => Some(FlexCommand::Info(None)),
             RadioCommand::SetPower { on } => Some(FlexCommand::Power(Some(*on))),
+            RadioCommand::EnableAutoInfo { enabled } => Some(FlexCommand::AutoInfo(Some(*enabled))),
+            RadioCommand::GetAutoInfo => Some(FlexCommand::AutoInfo(None)),
+            RadioCommand::AutoInfoReport { enabled } => {
+                Some(FlexCommand::AutoInfo(Some(*enabled)))
+            }
             _ => None,
         }
     }
@@ -641,6 +663,10 @@ impl EncodeCommand for FlexCommand {
             FlexCommand::AgcMode(None) => "ZZGT".to_string(),
             FlexCommand::NoiseReduction(Some(on)) => format!("ZZNR{}", if *on { 1 } else { 0 }),
             FlexCommand::NoiseReduction(None) => "ZZNR".to_string(),
+            FlexCommand::AutoInfo(Some(enabled)) => {
+                format!("ZZAI{}", if *enabled { 1 } else { 0 })
+            }
+            FlexCommand::AutoInfo(None) => "ZZAI".to_string(),
             FlexCommand::Unknown(s) => s.clone(),
         };
         format!("{};", cmd).into_bytes()
@@ -805,5 +831,68 @@ mod tests {
         assert!(is_valid_id_response(b"ID913;"));
         assert!(!is_valid_id_response(b"ID019;")); // Kenwood TS-2000
         assert!(!is_valid_id_response(b"ID;"));
+    }
+
+    #[test]
+    fn test_parse_zzai_query() {
+        let mut codec = FlexCodec::new();
+        codec.push_bytes(b"ZZAI;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, FlexCommand::AutoInfo(None));
+        assert_eq!(cmd.to_radio_command(), RadioCommand::GetAutoInfo);
+    }
+
+    #[test]
+    fn test_parse_zzai_enable() {
+        let mut codec = FlexCodec::new();
+        codec.push_bytes(b"ZZAI1;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, FlexCommand::AutoInfo(Some(true)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::EnableAutoInfo { enabled: true }
+        );
+    }
+
+    #[test]
+    fn test_parse_zzai_disable() {
+        let mut codec = FlexCodec::new();
+        codec.push_bytes(b"ZZAI0;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, FlexCommand::AutoInfo(Some(false)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::EnableAutoInfo { enabled: false }
+        );
+    }
+
+    #[test]
+    fn test_parse_ai_kenwood_style() {
+        let mut codec = FlexCodec::new();
+        codec.push_bytes(b"AI1;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, FlexCommand::AutoInfo(Some(true)));
+    }
+
+    #[test]
+    fn test_encode_zzai() {
+        assert_eq!(FlexCommand::AutoInfo(None).encode(), b"ZZAI;");
+        assert_eq!(FlexCommand::AutoInfo(Some(true)).encode(), b"ZZAI1;");
+        assert_eq!(FlexCommand::AutoInfo(Some(false)).encode(), b"ZZAI0;");
+    }
+
+    #[test]
+    fn test_from_radio_command_auto_info() {
+        let cmd =
+            FlexCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
+                .unwrap();
+        assert_eq!(cmd, FlexCommand::AutoInfo(Some(true)));
+
+        let cmd = FlexCommand::from_radio_command(&RadioCommand::GetAutoInfo).unwrap();
+        assert_eq!(cmd, FlexCommand::AutoInfo(None));
     }
 }
