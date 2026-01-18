@@ -79,9 +79,9 @@ jobs:
           export-env: true
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          MACOS_CERTIFICATE_BASE64: op://CI-CD/macOS Signing Certificate/certificate
-          MACOS_CERTIFICATE_PWD: op://CI-CD/macOS Signing Certificate/password
-          MACOS_SIGNING_IDENTITY: op://CI-CD/macOS Signing Certificate/identity
+          MACOS_CERTIFICATE_BASE64: op://Catapult CI/macOS Signing Certificate/certificate
+          MACOS_CERTIFICATE_PWD: op://Catapult CI/macOS Signing Certificate/password
+          MACOS_SIGNING_IDENTITY: op://Catapult CI/macOS Signing Certificate/identity
 
       # macOS codesigning
       - name: Codesign (macOS)
@@ -118,8 +118,8 @@ jobs:
           export-env: true
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          WINDOWS_CERTIFICATE_BASE64: op://CI-CD/Windows Signing Certificate/certificate
-          WINDOWS_CERTIFICATE_PWD: op://CI-CD/Windows Signing Certificate/password
+          WINDOWS_CERTIFICATE_BASE64: op://Catapult CI/Windows Signing Certificate/certificate
+          WINDOWS_CERTIFICATE_PWD: op://Catapult CI/Windows Signing Certificate/password
 
       # Windows codesigning
       - name: Codesign (Windows)
