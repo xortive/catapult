@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use cat_protocol::{
-    elecraft, flex, icom, kenwood, models::RadioDatabase, yaesu, Protocol, RadioModel,
+    elecraft, flex, icom, kenwood, models::RadioDatabase, yaesu, yaesu_ascii, Protocol, RadioModel,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
@@ -92,9 +92,9 @@ impl RadioProber {
         None
     }
 
-    /// Probe for FlexRadio, Kenwood, or Elecraft radios
+    /// Probe for FlexRadio, Kenwood, Elecraft, or Yaesu ASCII radios
     async fn probe_flex_kenwood_elecraft(&self, port: &mut SerialStream) -> Option<ProbeResult> {
-        debug!("Probing for FlexRadio/Kenwood/Elecraft...");
+        debug!("Probing for FlexRadio/Kenwood/Elecraft/YaesuAscii...");
 
         // Try Elecraft K3 first
         if let Some(result) = self.try_elecraft_k3(port).await {
@@ -143,10 +143,10 @@ impl RadioProber {
         None
     }
 
-    /// Try standard ID command (works for both Kenwood and FlexRadio)
+    /// Try standard ID command (works for Kenwood, FlexRadio, and Yaesu ASCII)
     async fn try_kenwood_flex_id(&self, port: &mut SerialStream) -> Option<ProbeResult> {
-        let probe = kenwood::probe_command(); // ID; works for both
-        trace!("Sending Kenwood/FlexRadio ID probe");
+        let probe = kenwood::probe_command(); // ID; works for all ASCII protocols
+        trace!("Sending Kenwood/FlexRadio/YaesuAscii ID probe");
 
         if let Err(e) = port.write_all(&probe).await {
             warn!("Failed to write ID probe: {}", e);
@@ -172,7 +172,20 @@ impl RadioProber {
                     });
                 }
 
-                // Check for standard Kenwood
+                // Check for Yaesu ASCII (ID0570, ID0670, ID0681, etc. - 4-digit IDs)
+                if yaesu_ascii::is_valid_id_response(response) {
+                    let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
+                    let model = RadioDatabase::by_yaesu_ascii_id(&id_str);
+
+                    return Some(ProbeResult {
+                        protocol: Protocol::YaesuAscii,
+                        model,
+                        id_data: response.to_vec(),
+                        address: None,
+                    });
+                }
+
+                // Check for standard Kenwood (ID019, ID021, etc. - 3-digit IDs)
                 if kenwood::is_valid_id_response(response) {
                     let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
                     let model = RadioDatabase::by_kenwood_id(&id_str);

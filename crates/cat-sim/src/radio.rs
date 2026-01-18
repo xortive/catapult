@@ -299,15 +299,17 @@ impl VirtualRadio {
                 cat_protocol::ProtocolId::FlexId(id) => id.clone(),
                 cat_protocol::ProtocolId::CivAddress(addr) => format!("{:02X}", addr),
                 cat_protocol::ProtocolId::YaesuCode(code) => format!("{:02X}", code),
+                cat_protocol::ProtocolId::YaesuAsciiId(id) => id.clone(),
             }
         } else {
             // Default IDs if no model set
             match self.protocol {
-                Protocol::Kenwood => "023".to_string(),   // TS-590SG
-                Protocol::Elecraft => "K3".to_string(),   // K3
-                Protocol::FlexRadio => "909".to_string(), // FLEX-6600
-                Protocol::IcomCIV => "94".to_string(),    // IC-7300
-                Protocol::Yaesu | Protocol::YaesuAscii => "01".to_string(), // FT-991A
+                Protocol::Kenwood => "023".to_string(),     // TS-590SG
+                Protocol::Elecraft => "K3".to_string(),     // K3
+                Protocol::FlexRadio => "909".to_string(),   // FLEX-6600
+                Protocol::IcomCIV => "94".to_string(),      // IC-7300
+                Protocol::Yaesu => "01".to_string(),        // FT-817
+                Protocol::YaesuAscii => "0670".to_string(), // FT-991A
             }
         }
     }

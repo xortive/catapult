@@ -134,8 +134,10 @@ pub enum ProtocolIdStatic {
     CivAddress(u8),
     /// Kenwood ID response code (e.g., "021" for TS-990S)
     KenwoodId(&'static str),
-    /// Yaesu model code
+    /// Yaesu binary protocol model code
     YaesuCode(u8),
+    /// Yaesu ASCII protocol ID (e.g., "0670" for FT-991A)
+    YaesuAsciiId(&'static str),
     /// Elecraft model identifier
     ElecraftId(&'static str),
     /// FlexRadio ID response code (e.g., "905" for FLEX-6500)
@@ -150,8 +152,10 @@ pub enum ProtocolId {
     CivAddress(u8),
     /// Kenwood ID response code (e.g., "021" for TS-990S)
     KenwoodId(String),
-    /// Yaesu model code
+    /// Yaesu binary protocol model code
     YaesuCode(u8),
+    /// Yaesu ASCII protocol ID (e.g., "0670" for FT-991A)
+    YaesuAsciiId(String),
     /// Elecraft model identifier
     ElecraftId(String),
     /// FlexRadio ID response code (e.g., "905" for FLEX-6500)
@@ -164,6 +168,7 @@ impl From<ProtocolIdStatic> for ProtocolId {
             ProtocolIdStatic::CivAddress(a) => Self::CivAddress(a),
             ProtocolIdStatic::KenwoodId(s) => Self::KenwoodId(s.to_string()),
             ProtocolIdStatic::YaesuCode(c) => Self::YaesuCode(c),
+            ProtocolIdStatic::YaesuAsciiId(s) => Self::YaesuAsciiId(s.to_string()),
             ProtocolIdStatic::ElecraftId(s) => Self::ElecraftId(s.to_string()),
             ProtocolIdStatic::FlexId(s) => Self::FlexId(s.to_string()),
         }
@@ -226,9 +231,22 @@ impl RadioDatabase {
         FLEX_RADIOS.iter().map(|(_, model)| model.into())
     }
 
-    /// Get all known Yaesu radios
+    /// Get all known Yaesu binary protocol radios
     pub fn yaesu_radios() -> impl Iterator<Item = RadioModel> {
         YAESU_RADIOS.iter().map(|(_, model)| model.into())
+    }
+
+    /// Look up a radio model by Yaesu ASCII ID
+    pub fn by_yaesu_ascii_id(id: &str) -> Option<RadioModel> {
+        YAESU_ASCII_RADIOS
+            .iter()
+            .find(|(yid, _)| *yid == id)
+            .map(|(_, model)| model.into())
+    }
+
+    /// Get all known Yaesu ASCII protocol radios
+    pub fn yaesu_ascii_radios() -> impl Iterator<Item = RadioModel> {
+        YAESU_ASCII_RADIOS.iter().map(|(_, model)| model.into())
     }
 
     /// Get all radios for a given protocol
@@ -237,7 +255,8 @@ impl RadioDatabase {
             Protocol::IcomCIV => Self::icom_radios().collect(),
             Protocol::Kenwood => Self::kenwood_radios().collect(),
             Protocol::Elecraft => Self::elecraft_radios().collect(),
-            Protocol::Yaesu | Protocol::YaesuAscii => Self::yaesu_radios().collect(),
+            Protocol::Yaesu => Self::yaesu_radios().collect(),
+            Protocol::YaesuAscii => Self::yaesu_ascii_radios().collect(),
             Protocol::FlexRadio => Self::flex_radios().collect(),
         }
     }
@@ -248,8 +267,9 @@ impl RadioDatabase {
             Protocol::IcomCIV => Self::by_civ_address(0x94), // IC-7300
             Protocol::Kenwood => Self::by_kenwood_id("023"), // TS-590SG
             Protocol::Elecraft => Self::by_elecraft_id("K3"), // K3
-            Protocol::Yaesu | Protocol::YaesuAscii => YAESU_RADIOS.first().map(|(_, m)| m.into()),
-            Protocol::FlexRadio => Self::by_flex_id("909"), // FLEX-6600
+            Protocol::Yaesu => YAESU_RADIOS.first().map(|(_, m)| m.into()), // FT-817
+            Protocol::YaesuAscii => Self::by_yaesu_ascii_id("0670"), // FT-991A
+            Protocol::FlexRadio => Self::by_flex_id("909"),  // FLEX-6600
         }
     }
 }
@@ -731,15 +751,97 @@ static FLEX_RADIOS: &[(&str, RadioModelStatic)] = &[
     ),
 ];
 
-// Yaesu radio database (keyed by model code)
+// Yaesu binary protocol radio database (keyed by model code)
+// These older radios use the 5-byte binary CAT protocol
 static YAESU_RADIOS: &[(u8, RadioModelStatic)] = &[
     (
         0x01,
         RadioModelStatic {
             manufacturer: "Yaesu",
-            model: "FT-991A",
+            model: "FT-817",
             protocol: Protocol::Yaesu,
             protocol_id: ProtocolIdStatic::YaesuCode(0x01),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_BASIC,
+                min_frequency_hz: 100_000,
+                max_frequency_hz: 450_000_000,
+                frequency_step_hz: 10,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: false,
+                max_power_watts: Some(5),
+            },
+        },
+    ),
+    (
+        0x02,
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FT-857",
+            protocol: Protocol::Yaesu,
+            protocol_id: ProtocolIdStatic::YaesuCode(0x02),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_BASIC,
+                min_frequency_hz: 100_000,
+                max_frequency_hz: 450_000_000,
+                frequency_step_hz: 10,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: false,
+                max_power_watts: Some(100),
+            },
+        },
+    ),
+    (
+        0x03,
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FT-897",
+            protocol: Protocol::Yaesu,
+            protocol_id: ProtocolIdStatic::YaesuCode(0x03),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_BASIC,
+                min_frequency_hz: 100_000,
+                max_frequency_hz: 450_000_000,
+                frequency_step_hz: 10,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: false,
+                max_power_watts: Some(100),
+            },
+        },
+    ),
+    (
+        0x04,
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FT-450",
+            protocol: Protocol::Yaesu,
+            protocol_id: ProtocolIdStatic::YaesuCode(0x04),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_FULL_HF,
+                min_frequency_hz: 30_000,
+                max_frequency_hz: 54_000_000,
+                frequency_step_hz: 1,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: true,
+                max_power_watts: Some(100),
+            },
+        },
+    ),
+];
+
+// Yaesu ASCII protocol radio database (keyed by ID response)
+// These newer radios use semicolon-terminated ASCII commands similar to Kenwood
+static YAESU_ASCII_RADIOS: &[(&str, RadioModelStatic)] = &[
+    (
+        "0670",
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FT-991A",
+            protocol: Protocol::YaesuAscii,
+            protocol_id: ProtocolIdStatic::YaesuAsciiId("0670"),
             capabilities: RadioCapabilitiesStatic {
                 modes: MODES_FULL_HF,
                 min_frequency_hz: 30_000,
@@ -753,12 +855,31 @@ static YAESU_RADIOS: &[(u8, RadioModelStatic)] = &[
         },
     ),
     (
-        0x02,
+        "0671",
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FT-991",
+            protocol: Protocol::YaesuAscii,
+            protocol_id: ProtocolIdStatic::YaesuAsciiId("0671"),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_FULL_HF,
+                min_frequency_hz: 30_000,
+                max_frequency_hz: 450_000_000,
+                frequency_step_hz: 1,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: true,
+                max_power_watts: Some(100),
+            },
+        },
+    ),
+    (
+        "0681",
         RadioModelStatic {
             manufacturer: "Yaesu",
             model: "FTDX101D",
-            protocol: Protocol::Yaesu,
-            protocol_id: ProtocolIdStatic::YaesuCode(0x02),
+            protocol: Protocol::YaesuAscii,
+            protocol_id: ProtocolIdStatic::YaesuAsciiId("0681"),
             capabilities: RadioCapabilitiesStatic {
                 modes: MODES_FULL_HF,
                 min_frequency_hz: 30_000,
@@ -772,12 +893,31 @@ static YAESU_RADIOS: &[(u8, RadioModelStatic)] = &[
         },
     ),
     (
-        0x03,
+        "0682",
         RadioModelStatic {
             manufacturer: "Yaesu",
-            model: "FT-710",
-            protocol: Protocol::Yaesu,
-            protocol_id: ProtocolIdStatic::YaesuCode(0x03),
+            model: "FTDX101MP",
+            protocol: Protocol::YaesuAscii,
+            protocol_id: ProtocolIdStatic::YaesuAsciiId("0682"),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_FULL_HF,
+                min_frequency_hz: 30_000,
+                max_frequency_hz: 54_000_000,
+                frequency_step_hz: 1,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: true,
+                max_power_watts: Some(200),
+            },
+        },
+    ),
+    (
+        "0690",
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FTDX10",
+            protocol: Protocol::YaesuAscii,
+            protocol_id: ProtocolIdStatic::YaesuAsciiId("0690"),
             capabilities: RadioCapabilitiesStatic {
                 modes: MODES_FULL_HF,
                 min_frequency_hz: 30_000,
@@ -791,12 +931,12 @@ static YAESU_RADIOS: &[(u8, RadioModelStatic)] = &[
         },
     ),
     (
-        0x04,
+        "0700",
         RadioModelStatic {
             manufacturer: "Yaesu",
-            model: "FTDX10",
-            protocol: Protocol::Yaesu,
-            protocol_id: ProtocolIdStatic::YaesuCode(0x04),
+            model: "FT-710",
+            protocol: Protocol::YaesuAscii,
+            protocol_id: ProtocolIdStatic::YaesuAsciiId("0700"),
             capabilities: RadioCapabilitiesStatic {
                 modes: MODES_FULL_HF,
                 min_frequency_hz: 30_000,
