@@ -307,6 +307,11 @@ impl Multiplexer {
 
     /// Check if we should automatically switch radios
     fn check_auto_switch(&mut self, handle: RadioHandle, cmd: &RadioCommand) {
+        // Don't switch to a radio that doesn't exist
+        if !self.radios.contains_key(&handle) {
+            return;
+        }
+
         if self.active_radio == Some(handle) {
             return;
         }
