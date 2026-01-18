@@ -106,6 +106,18 @@ cargo run -p cat-desktop
 - **Frequency-Triggered**: Switch when a radio changes frequency
 - **Automatic**: Combination of PTT and frequency triggers
 
+### Auto-Information Mode
+
+When a radio is connected, Catapult automatically enables **Auto-Information** (also called **Transceive** mode) on the radio. This tells the radio to send unsolicited status updates whenever its state changes - frequency, mode, PTT, etc.
+
+This is essential for the multiplexer to track radio state in real-time without polling:
+- **Kenwood/Elecraft/FlexRadio**: `AI1;` command enables auto-info
+- **Icom CI-V**: Transceive mode (command 0x1A) enables unsolicited updates
+- **Yaesu ASCII**: `AI1;` command (same as Kenwood)
+- **Yaesu Binary**: No auto-info support; state is polled on PTT changes
+
+With auto-info enabled, the multiplexer receives immediate notification when you tune the VFO, change modes, or key the transmitter - enabling responsive automatic switching.
+
 ### Lockout
 
 A configurable lockout time (default 500ms) prevents rapid switching between radios.
