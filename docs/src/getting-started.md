@@ -12,7 +12,22 @@ This guide walks you through setting up Catapult for the first time.
 
 ### Download
 
-Download the latest release for your platform from the releases page.
+Download the latest release for your platform:
+
+| Platform | Download |
+|----------|----------|
+| **Windows** (x86_64) | [catapult-windows-x86_64.zip](https://github.com/xortive/catapult/releases/latest/download/catapult-windows-x86_64.zip) |
+| **macOS** (Apple Silicon) | [catapult-macos-aarch64.tar.gz](https://github.com/xortive/catapult/releases/latest/download/catapult-macos-aarch64.tar.gz) |
+| **Linux** (x86_64) | [catapult-linux-x86_64.tar.gz](https://github.com/xortive/catapult/releases/latest/download/catapult-linux-x86_64.tar.gz) |
+| **Linux** (ARM64) | [catapult-linux-aarch64.tar.gz](https://github.com/xortive/catapult/releases/latest/download/catapult-linux-aarch64.tar.gz) |
+
+Or browse all releases on [GitHub Releases](https://github.com/xortive/catapult/releases).
+
+#### macOS Notes
+After downloading, extract and run. If macOS blocks the app, right-click and select "Open" to bypass Gatekeeper.
+
+#### Windows Notes
+Extract the zip and run `catapult.exe`. Windows SmartScreen may warn about an unrecognized app - click "More info" then "Run anyway".
 
 ### Build from Source
 
@@ -20,7 +35,7 @@ If you prefer to build from source:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/catapult.git
+git clone https://github.com/xortive/catapult.git
 cd catapult
 
 # Build the desktop app

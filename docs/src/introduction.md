@@ -2,7 +2,12 @@
 
 **A CAT Protocol Multiplexer for Amateur Radio**
 
+[![GitHub Release](https://img.shields.io/github/v/release/xortive/catapult?style=flat-square)](https://github.com/xortive/catapult/releases/latest)
+[![License](https://img.shields.io/github/license/xortive/catapult?style=flat-square)](https://github.com/xortive/catapult/blob/main/LICENSE)
+
 Catapult allows you to connect multiple radios to a single amplifier, automatically switching based on which radio is transmitting or changing frequency.
+
+<a href="https://github.com/xortive/catapult/releases/latest" class="md-button md-button--primary">Download Latest Release</a>
 
 ## Features
 
