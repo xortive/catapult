@@ -106,7 +106,12 @@ impl RadioPanel {
     }
 
     /// Create a new radio panel for a virtual radio
-    pub fn new_virtual(handle: RadioHandle, name: String, protocol: Protocol, sim_id: String) -> Self {
+    pub fn new_virtual(
+        handle: RadioHandle,
+        name: String,
+        protocol: Protocol,
+        sim_id: String,
+    ) -> Self {
         Self {
             handle,
             name,

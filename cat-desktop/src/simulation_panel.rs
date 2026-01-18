@@ -2,6 +2,9 @@
 //!
 //! Provides UI controls to manage multiple virtual radios.
 
+// Allow unused code - panel UI is implemented but not yet wired into the main app
+#![allow(dead_code)]
+
 use cat_protocol::{OperatingMode, Protocol, RadioDatabase};
 use cat_sim::{SimulationContext, SimulationEvent};
 use egui::{Color32, RichText, Ui};

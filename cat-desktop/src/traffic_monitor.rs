@@ -5,20 +5,22 @@ use std::ops::Range;
 use std::time::SystemTime;
 
 use cat_mux::RadioHandle;
-use cat_protocol::display::{decode_and_annotate_with_hint, AnnotatedFrame, FrameSegment, SegmentType};
+use cat_protocol::display::{
+    decode_and_annotate_with_hint, AnnotatedFrame, FrameSegment, SegmentType,
+};
 use cat_protocol::Protocol;
 use egui::{Color32, Id, RichText, Ui};
 
 /// Map SegmentType to UI color
 fn segment_color(segment_type: SegmentType) -> Color32 {
     match segment_type {
-        SegmentType::Preamble => Color32::from_rgb(128, 128, 128),   // Gray
-        SegmentType::Address => Color32::from_rgb(100, 180, 255),    // Light blue
-        SegmentType::Command => Color32::from_rgb(255, 180, 100),    // Orange
-        SegmentType::Frequency => Color32::from_rgb(255, 255, 100),  // Yellow
-        SegmentType::Mode => Color32::from_rgb(200, 150, 255),       // Light purple
-        SegmentType::Status => Color32::from_rgb(255, 150, 200),     // Pink
-        SegmentType::Data => Color32::from_rgb(100, 255, 180),       // Light green
+        SegmentType::Preamble => Color32::from_rgb(128, 128, 128), // Gray
+        SegmentType::Address => Color32::from_rgb(100, 180, 255),  // Light blue
+        SegmentType::Command => Color32::from_rgb(255, 180, 100),  // Orange
+        SegmentType::Frequency => Color32::from_rgb(255, 255, 100), // Yellow
+        SegmentType::Mode => Color32::from_rgb(200, 150, 255),     // Light purple
+        SegmentType::Status => Color32::from_rgb(255, 150, 200),   // Pink
+        SegmentType::Data => Color32::from_rgb(100, 255, 180),     // Light green
         SegmentType::Terminator => Color32::from_rgb(128, 128, 128), // Gray
     }
 }
@@ -39,6 +41,7 @@ pub enum TrafficSource {
     /// Simulated amplifier (outgoing to amp)
     SimulatedAmplifier,
     /// Simulated amplifier (incoming from amp)
+    #[allow(dead_code)] // Reserved for future use
     FromSimulatedAmplifier,
 }
 
@@ -158,7 +161,12 @@ impl TrafficMonitor {
     }
 
     /// Add an outgoing traffic entry to real amplifier with port info
-    pub fn add_outgoing_with_port(&mut self, port: String, data: &[u8], protocol: Option<Protocol>) {
+    pub fn add_outgoing_with_port(
+        &mut self,
+        port: String,
+        data: &[u8],
+        protocol: Option<Protocol>,
+    ) {
         if self.paused {
             return;
         }
@@ -218,6 +226,7 @@ impl TrafficMonitor {
     }
 
     /// Add an incoming traffic entry from simulated amplifier
+    #[allow(dead_code)] // Reserved for future use
     pub fn add_from_simulated_amplifier(&mut self, data: &[u8], protocol: Option<Protocol>) {
         if self.paused {
             return;
@@ -337,7 +346,14 @@ impl TrafficMonitor {
     }
 
     /// Draw a single traffic entry
-    fn draw_entry(&self, ui: &mut Ui, entry: &TrafficEntry, entry_idx: usize, show_hex: bool, show_decoded: bool) {
+    fn draw_entry(
+        &self,
+        ui: &mut Ui,
+        entry: &TrafficEntry,
+        entry_idx: usize,
+        show_hex: bool,
+        show_decoded: bool,
+    ) {
         ui.horizontal(|ui| {
             // Create a unique ID for this entry's hover state
             let hover_id = Id::new("traffic_hover").with(entry_idx);
@@ -430,12 +446,12 @@ impl TrafficMonitor {
             // Protocol badge
             if let Some(decoded) = &entry.decoded {
                 let protocol_color = match decoded.protocol {
-                    "CI-V" => Color32::from_rgb(255, 180, 100),      // Orange
-                    "Yaesu" => Color32::from_rgb(100, 200, 255),     // Cyan (binary CAT)
+                    "CI-V" => Color32::from_rgb(255, 180, 100),  // Orange
+                    "Yaesu" => Color32::from_rgb(100, 200, 255), // Cyan (binary CAT)
                     "Yaesu ASCII" => Color32::from_rgb(80, 180, 230), // Slightly different cyan
-                    "Kenwood" => Color32::from_rgb(180, 255, 100),   // Lime
-                    "Elecraft" => Color32::from_rgb(200, 255, 120),  // Light lime
-                    "Flex" => Color32::from_rgb(255, 150, 255),      // Magenta
+                    "Kenwood" => Color32::from_rgb(180, 255, 100), // Lime
+                    "Elecraft" => Color32::from_rgb(200, 255, 120), // Light lime
+                    "Flex" => Color32::from_rgb(255, 150, 255),  // Magenta
                     _ => Color32::GRAY,
                 };
                 ui.label(
@@ -456,9 +472,16 @@ impl TrafficMonitor {
                         let color = segment_color(part.part_type);
 
                         // Check if this part should be highlighted
-                        let is_highlighted = part.range.as_ref().map(|pr| {
-                            hovered_range.as_ref().map(|hr| hr.start == pr.start && hr.end == pr.end).unwrap_or(false)
-                        }).unwrap_or(false);
+                        let is_highlighted = part
+                            .range
+                            .as_ref()
+                            .map(|pr| {
+                                hovered_range
+                                    .as_ref()
+                                    .map(|hr| hr.start == pr.start && hr.end == pr.end)
+                                    .unwrap_or(false)
+                            })
+                            .unwrap_or(false);
 
                         let text = if is_highlighted {
                             RichText::new(&part.text)

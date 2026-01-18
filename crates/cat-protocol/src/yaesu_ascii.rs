@@ -445,7 +445,11 @@ impl FromRadioCommand for YaesuAsciiCommand {
             RadioCommand::SetPtt { active: false } => Some(YaesuAsciiCommand::Transmit(Some(0))),
             RadioCommand::GetPtt => Some(YaesuAsciiCommand::Transmit(None)),
             RadioCommand::PttReport { active } => {
-                Some(YaesuAsciiCommand::Transmit(Some(if *active { 1 } else { 0 })))
+                Some(YaesuAsciiCommand::Transmit(Some(if *active {
+                    1
+                } else {
+                    0
+                })))
             }
             RadioCommand::SetVfo { vfo } => match vfo {
                 Vfo::A => Some(YaesuAsciiCommand::VfoSelect(Some(0))),
@@ -517,21 +521,21 @@ impl EncodeCommand for YaesuAsciiCommand {
 /// Parse Yaesu mode character to numeric value
 fn parse_yaesu_mode_char(c: char) -> Result<u8, ParseError> {
     match c {
-        '1' => Ok(1),  // LSB
-        '2' => Ok(2),  // USB
-        '3' => Ok(3),  // CW-U
-        '4' => Ok(4),  // FM
-        '5' => Ok(5),  // AM
-        '6' => Ok(6),  // RTTY-LSB
-        '7' => Ok(7),  // CW-L
-        '8' => Ok(8),  // DATA-LSB
-        '9' => Ok(9),  // RTTY-USB
+        '1' => Ok(1),        // LSB
+        '2' => Ok(2),        // USB
+        '3' => Ok(3),        // CW-U
+        '4' => Ok(4),        // FM
+        '5' => Ok(5),        // AM
+        '6' => Ok(6),        // RTTY-LSB
+        '7' => Ok(7),        // CW-L
+        '8' => Ok(8),        // DATA-LSB
+        '9' => Ok(9),        // RTTY-USB
         'A' | 'a' => Ok(10), // DATA-FM
         'B' | 'b' => Ok(11), // FM-N
         'C' | 'c' => Ok(12), // DATA-USB
         'D' | 'd' => Ok(13), // AM-N
         'E' | 'e' => Ok(14), // C4FM
-        '0' => Ok(0),  // Sometimes used
+        '0' => Ok(0),        // Sometimes used
         _ => Err(ParseError::InvalidMode(c.to_string())),
     }
 }
@@ -562,18 +566,18 @@ fn yaesu_mode_to_operating_mode(mode: u8) -> OperatingMode {
     match mode {
         1 => OperatingMode::Lsb,
         2 => OperatingMode::Usb,
-        3 => OperatingMode::Cw,      // CW-U
+        3 => OperatingMode::Cw, // CW-U
         4 => OperatingMode::Fm,
         5 => OperatingMode::Am,
-        6 => OperatingMode::Rtty,    // RTTY-LSB
-        7 => OperatingMode::CwR,     // CW-L
-        8 => OperatingMode::DataL,   // DATA-LSB
-        9 => OperatingMode::RttyR,   // RTTY-USB
-        10 => OperatingMode::Data,   // DATA-FM
-        11 => OperatingMode::FmN,    // FM-N
-        12 => OperatingMode::DataU,  // DATA-USB
-        13 => OperatingMode::Am,     // AM-N (narrow)
-        14 => OperatingMode::Fm,     // C4FM (digital FM)
+        6 => OperatingMode::Rtty,   // RTTY-LSB
+        7 => OperatingMode::CwR,    // CW-L
+        8 => OperatingMode::DataL,  // DATA-LSB
+        9 => OperatingMode::RttyR,  // RTTY-USB
+        10 => OperatingMode::Data,  // DATA-FM
+        11 => OperatingMode::FmN,   // FM-N
+        12 => OperatingMode::DataU, // DATA-USB
+        13 => OperatingMode::Am,    // AM-N (narrow)
+        14 => OperatingMode::Fm,    // C4FM (digital FM)
         _ => OperatingMode::Usb,
     }
 }

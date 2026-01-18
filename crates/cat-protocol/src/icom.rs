@@ -443,8 +443,12 @@ impl FromRadioCommand for CivCommand {
                 Vfo::B => CivCommandType::VfoSelect { vfo: 0x01 },
                 Vfo::Memory => CivCommandType::VfoSelect { vfo: 0x02 },
             },
-            RadioCommand::EnableAutoInfo { enabled } => CivCommandType::Transceive { enabled: *enabled },
-            RadioCommand::AutoInfoReport { enabled } => CivCommandType::Transceive { enabled: *enabled },
+            RadioCommand::EnableAutoInfo { enabled } => {
+                CivCommandType::Transceive { enabled: *enabled }
+            }
+            RadioCommand::AutoInfoReport { enabled } => {
+                CivCommandType::Transceive { enabled: *enabled }
+            }
             _ => return None,
         };
 

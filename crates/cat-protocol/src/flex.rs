@@ -381,24 +381,24 @@ impl FlexCodec {
     fn convert_kenwood_command(kw: KenwoodCommand) -> FlexCommand {
         match kw {
             // Mode needs special handling for FlexMode conversion
-            KenwoodCommand::Mode(Some(m)) => FlexCommand::Mode(Some(FlexMode::from_kenwood_mode(m))),
+            KenwoodCommand::Mode(Some(m)) => {
+                FlexCommand::Mode(Some(FlexMode::from_kenwood_mode(m)))
+            }
             KenwoodCommand::Mode(None) => FlexCommand::Mode(None),
             // AutoInfo is handled as Flex-specific for ZZ encoding
             KenwoodCommand::AutoInfo(enabled) => FlexCommand::AutoInfo(enabled),
             // Info uses FlexInfo structure
-            KenwoodCommand::Info(Some(info)) => {
-                FlexCommand::Info(Some(FlexInfo {
-                    frequency_hz: info.frequency_hz,
-                    step_size: 1,
-                    rit_offset: info.rit_offset as i32,
-                    rit_on: info.rit_on,
-                    xit_on: info.xit_on,
-                    tx: info.tx,
-                    mode: FlexMode::from_kenwood_mode(info.mode),
-                    vfo: info.vfo,
-                    split: info.split,
-                }))
-            }
+            KenwoodCommand::Info(Some(info)) => FlexCommand::Info(Some(FlexInfo {
+                frequency_hz: info.frequency_hz,
+                step_size: 1,
+                rit_offset: info.rit_offset as i32,
+                rit_on: info.rit_on,
+                xit_on: info.xit_on,
+                tx: info.tx,
+                mode: FlexMode::from_kenwood_mode(info.mode),
+                vfo: info.vfo,
+                split: info.split,
+            })),
             KenwoodCommand::Info(None) => FlexCommand::Info(None),
             // Unknown commands that might be Flex-specific
             KenwoodCommand::Unknown(s) => FlexCommand::Unknown(s),
@@ -777,9 +777,8 @@ mod tests {
 
     #[test]
     fn test_from_radio_command_auto_info() {
-        let cmd =
-            FlexCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
-                .unwrap();
+        let cmd = FlexCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
+            .unwrap();
         assert_eq!(cmd, FlexCommand::AutoInfo(Some(true)));
 
         let cmd = FlexCommand::from_radio_command(&RadioCommand::GetAutoInfo).unwrap();

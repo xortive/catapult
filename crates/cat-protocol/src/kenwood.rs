@@ -590,8 +590,9 @@ mod tests {
 
     #[test]
     fn test_from_radio_command_auto_info() {
-        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
-            .unwrap();
+        let cmd =
+            KenwoodCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
+                .unwrap();
         assert_eq!(cmd, KenwoodCommand::AutoInfo(Some(true)));
 
         let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetAutoInfo).unwrap();

@@ -165,7 +165,10 @@ impl CatapultApp {
 
         // Restore virtual radios from settings
         for config in app.settings.virtual_radios.clone() {
-            let _sim_id = app.simulation_panel.context_mut().add_radio_from_config(config);
+            let _sim_id = app
+                .simulation_panel
+                .context_mut()
+                .add_radio_from_config(config);
         }
 
         // Restore configured COM radios from settings
@@ -188,7 +191,10 @@ impl CatapultApp {
 
                 // Clear add_radio_port if it's no longer available
                 if !self.add_radio_port.is_empty() {
-                    let port_exists = self.available_ports.iter().any(|p| p.port == self.add_radio_port);
+                    let port_exists = self
+                        .available_ports
+                        .iter()
+                        .any(|p| p.port == self.add_radio_port);
                     if !port_exists {
                         self.add_radio_port.clear();
                     }
@@ -202,7 +208,9 @@ impl CatapultApp {
                         self.amp_port.clear();
                         if self.amp_connection.is_some() {
                             self.amp_connection = None;
-                            self.set_status("Amplifier disconnected: port no longer available".into());
+                            self.set_status(
+                                "Amplifier disconnected: port no longer available".into(),
+                            );
                         }
                         self.save_amplifier_settings();
                     }
@@ -423,12 +431,16 @@ impl CatapultApp {
                 }
                 BackgroundMessage::TrafficOut { data } => {
                     // Outgoing to amplifier - use amplifier protocol
-                    self.traffic_monitor.add_outgoing(&data, Some(self.amp_protocol));
+                    self.traffic_monitor
+                        .add_outgoing(&data, Some(self.amp_protocol));
                 }
                 BackgroundMessage::AmpTrafficIn { data } => {
                     // Incoming from amplifier - use amplifier protocol
-                    self.traffic_monitor
-                        .add_from_amplifier(self.amp_port.clone(), &data, Some(self.amp_protocol));
+                    self.traffic_monitor.add_from_amplifier(
+                        self.amp_port.clone(),
+                        &data,
+                        Some(self.amp_protocol),
+                    );
                 }
             }
         }
@@ -455,7 +467,8 @@ impl CatapultApp {
                             self.set_status(format!("Amplifier write error: {}", e));
                         }
                     } else {
-                        self.traffic_monitor.add_simulated_outgoing(&data, amp_protocol);
+                        self.traffic_monitor
+                            .add_simulated_outgoing(&data, amp_protocol);
                     }
                 }
                 MultiplexerEvent::Error(e) => {
@@ -470,7 +483,11 @@ impl CatapultApp {
     fn draw_toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             // Console toggle button
-            let console_label = if self.show_traffic_monitor { "Console ▼" } else { "Console ▶" };
+            let console_label = if self.show_traffic_monitor {
+                "Console ▼"
+            } else {
+                "Console ▶"
+            };
             if ui.button(console_label).clicked() {
                 self.show_traffic_monitor = !self.show_traffic_monitor;
             }
@@ -509,7 +526,9 @@ impl CatapultApp {
                         }
                     }
                     AmplifierConnectionType::Simulated => {
-                        ui.label(RichText::new("Amp: Simulated").color(Color32::from_rgb(100, 180, 255)));
+                        ui.label(
+                            RichText::new("Amp: Simulated").color(Color32::from_rgb(100, 180, 255)),
+                        );
                     }
                 }
 
@@ -525,10 +544,16 @@ impl CatapultApp {
 
     /// Add a new virtual radio
     fn add_virtual_radio(&mut self, protocol: Protocol) {
-        let name = format!("Virtual {}", self.simulation_panel.context().radio_count() + 1);
+        let name = format!(
+            "Virtual {}",
+            self.simulation_panel.context().radio_count() + 1
+        );
         // The returned ID is not used here since the SimulationEvent::RadioAdded will be
         // processed in process_simulation_events, which creates the RadioPanel
-        let _sim_id = self.simulation_panel.context_mut().add_radio(&name, protocol);
+        let _sim_id = self
+            .simulation_panel
+            .context_mut()
+            .add_radio(&name, protocol);
         self.set_status(format!("Adding virtual radio: {}", name));
     }
 
@@ -602,7 +627,11 @@ impl CatapultApp {
                         .collect();
 
                     if available_ports.is_empty() {
-                        ui.label(RichText::new("No ports available").color(Color32::GRAY).small());
+                        ui.label(
+                            RichText::new("No ports available")
+                                .color(Color32::GRAY)
+                                .small(),
+                        );
                     } else {
                         // Port dropdown
                         let selected_label = if self.add_radio_port.is_empty() {
@@ -624,7 +653,14 @@ impl CatapultApp {
                             .width(160.0)
                             .show_ui(ui, |ui| {
                                 for (port_name, label, vid) in &available_ports {
-                                    if ui.selectable_value(&mut self.add_radio_port, port_name.clone(), label).changed() {
+                                    if ui
+                                        .selectable_value(
+                                            &mut self.add_radio_port,
+                                            port_name.clone(),
+                                            label,
+                                        )
+                                        .changed()
+                                    {
                                         suggest_for_port = Some((*vid, port_name.clone()));
                                     }
                                 }
@@ -652,7 +688,11 @@ impl CatapultApp {
                                         Protocol::Elecraft,
                                         Protocol::FlexRadio,
                                     ] {
-                                        ui.selectable_value(&mut self.add_radio_protocol, proto, proto.name());
+                                        ui.selectable_value(
+                                            &mut self.add_radio_protocol,
+                                            proto,
+                                            proto.name(),
+                                        );
                                     }
                                 });
                         });
@@ -665,7 +705,11 @@ impl CatapultApp {
                                 .width(80.0)
                                 .show_ui(ui, |ui| {
                                     for &baud in &[4800u32, 9600, 19200, 38400, 57600, 115200] {
-                                        ui.selectable_value(&mut self.add_radio_baud, baud, format!("{}", baud));
+                                        ui.selectable_value(
+                                            &mut self.add_radio_baud,
+                                            baud,
+                                            format!("{}", baud),
+                                        );
                                     }
                                 });
                         });
@@ -675,9 +719,13 @@ impl CatapultApp {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("CI-V:").small());
                                 let mut addr_str = format!("{:02X}", self.add_radio_civ_address);
-                                let response = ui.add(egui::TextEdit::singleline(&mut addr_str).desired_width(40.0));
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut addr_str).desired_width(40.0),
+                                );
                                 if response.changed() {
-                                    if let Ok(addr) = u8::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
+                                    if let Ok(addr) =
+                                        u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
+                                    {
                                         self.add_radio_civ_address = addr;
                                     }
                                 }
@@ -686,7 +734,10 @@ impl CatapultApp {
 
                         // Add Radio button
                         let can_add = !self.add_radio_port.is_empty();
-                        if ui.add_enabled(can_add, egui::Button::new("Add Radio")).clicked() {
+                        if ui
+                            .add_enabled(can_add, egui::Button::new("Add Radio"))
+                            .clicked()
+                        {
                             self.add_com_radio();
                             ui.close_menu();
                         }
@@ -727,35 +778,52 @@ impl CatapultApp {
             .iter()
             .enumerate()
             .map(|(idx, panel)| {
-                let (freq_display, mode_display, ptt, freq_hz, mode) = if panel.connection_type == RadioConnectionType::Virtual {
-                    // Get state from simulation context
-                    if let Some(sim_id) = &panel.sim_radio_id {
-                        if let Some(radio) = self.simulation_panel.context().get_radio(sim_id) {
-                            let freq = radio.frequency_hz();
-                            (
-                                format!("{:.3} MHz", freq as f64 / 1_000_000.0),
-                                mode_name(radio.mode()).to_string(),
-                                radio.ptt(),
-                                freq,
-                                radio.mode(),
-                            )
+                let (freq_display, mode_display, ptt, freq_hz, mode) =
+                    if panel.connection_type == RadioConnectionType::Virtual {
+                        // Get state from simulation context
+                        if let Some(sim_id) = &panel.sim_radio_id {
+                            if let Some(radio) = self.simulation_panel.context().get_radio(sim_id) {
+                                let freq = radio.frequency_hz();
+                                (
+                                    format!("{:.3} MHz", freq as f64 / 1_000_000.0),
+                                    mode_name(radio.mode()).to_string(),
+                                    radio.ptt(),
+                                    freq,
+                                    radio.mode(),
+                                )
+                            } else {
+                                (
+                                    "---.--- MHz".to_string(),
+                                    "---".to_string(),
+                                    false,
+                                    0,
+                                    OperatingMode::Usb,
+                                )
+                            }
                         } else {
-                            ("---.--- MHz".to_string(), "---".to_string(), false, 0, OperatingMode::Usb)
+                            (
+                                "---.--- MHz".to_string(),
+                                "---".to_string(),
+                                false,
+                                0,
+                                OperatingMode::Usb,
+                            )
                         }
                     } else {
-                        ("---.--- MHz".to_string(), "---".to_string(), false, 0, OperatingMode::Usb)
-                    }
-                } else {
-                    // Get state from multiplexer
-                    let state = self.multiplexer.get_radio(panel.handle);
-                    (
-                        state.map(|s| s.frequency_display()).unwrap_or_else(|| "---".to_string()),
-                        state.map(|s| s.mode_display()).unwrap_or_else(|| "---".to_string()),
-                        state.map(|s| s.ptt).unwrap_or(false),
-                        state.and_then(|s| s.frequency_hz).unwrap_or(0),
-                        state.and_then(|s| s.mode).unwrap_or(OperatingMode::Usb),
-                    )
-                };
+                        // Get state from multiplexer
+                        let state = self.multiplexer.get_radio(panel.handle);
+                        (
+                            state
+                                .map(|s| s.frequency_display())
+                                .unwrap_or_else(|| "---".to_string()),
+                            state
+                                .map(|s| s.mode_display())
+                                .unwrap_or_else(|| "---".to_string()),
+                            state.map(|s| s.ptt).unwrap_or(false),
+                            state.and_then(|s| s.frequency_hz).unwrap_or(0),
+                            state.and_then(|s| s.mode).unwrap_or(OperatingMode::Usb),
+                        )
+                    };
                 (
                     idx,
                     panel.handle,
@@ -781,7 +849,22 @@ impl CatapultApp {
         let mut mode_change: Option<(String, OperatingMode)> = None;
         let mut ptt_change: Option<(String, bool)> = None;
 
-        for (idx, handle, name, port, conn_type, sim_id, expanded, protocol, freq_display, mode_display, ptt, freq_hz, mode) in &radio_info {
+        for (
+            idx,
+            handle,
+            name,
+            port,
+            conn_type,
+            sim_id,
+            expanded,
+            protocol,
+            freq_display,
+            mode_display,
+            ptt,
+            freq_hz,
+            mode,
+        ) in &radio_info
+        {
             let is_active = active == Some(*handle);
             let is_virtual = *conn_type == RadioConnectionType::Virtual;
 
@@ -834,27 +917,24 @@ impl CatapultApp {
                             );
                         }
 
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if !is_active && ui.button("Select").clicked() {
-                                    selected_handle = Some(*handle);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if !is_active && ui.button("Select").clicked() {
+                                selected_handle = Some(*handle);
+                            }
+                            // For virtual radios, show expand/collapse toggle
+                            if is_virtual {
+                                let expand_label = if *expanded { "▼" } else { "▶" };
+                                if ui.button(expand_label).clicked() {
+                                    toggle_expanded_idx = Some(*idx);
                                 }
-                                // For virtual radios, show expand/collapse toggle
-                                if is_virtual {
-                                    let expand_label = if *expanded { "▼" } else { "▶" };
-                                    if ui.button(expand_label).clicked() {
-                                        toggle_expanded_idx = Some(*idx);
-                                    }
-                                } else {
-                                    // For COM radios, show expand/collapse toggle too
-                                    let expand_label = if *expanded { "▼" } else { "▶" };
-                                    if ui.button(expand_label).clicked() {
-                                        toggle_expanded_idx = Some(*idx);
-                                    }
+                            } else {
+                                // For COM radios, show expand/collapse toggle too
+                                let expand_label = if *expanded { "▼" } else { "▶" };
+                                if ui.button(expand_label).clicked() {
+                                    toggle_expanded_idx = Some(*idx);
                                 }
-                            },
-                        );
+                            }
+                        });
                     });
 
                     // Frequency - large and prominent
@@ -974,7 +1054,10 @@ impl CatapultApp {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         if ui
-                                            .button(RichText::new("Remove").color(Color32::from_rgb(255, 100, 100)))
+                                            .button(
+                                                RichText::new("Remove")
+                                                    .color(Color32::from_rgb(255, 100, 100)),
+                                            )
                                             .clicked()
                                         {
                                             remove_radio_idx = Some(*idx);
@@ -996,7 +1079,10 @@ impl CatapultApp {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     if ui
-                                        .button(RichText::new("Remove").color(Color32::from_rgb(255, 100, 100)))
+                                        .button(
+                                            RichText::new("Remove")
+                                                .color(Color32::from_rgb(255, 100, 100)),
+                                        )
                                         .clicked()
                                     {
                                         remove_radio_idx = Some(*idx);
@@ -1016,13 +1102,19 @@ impl CatapultApp {
             self.radio_panels[idx].expanded = !self.radio_panels[idx].expanded;
         }
         if let Some((sim_id, freq)) = freq_change {
-            self.simulation_panel.context_mut().set_radio_frequency(&sim_id, freq);
+            self.simulation_panel
+                .context_mut()
+                .set_radio_frequency(&sim_id, freq);
         }
         if let Some((sim_id, m)) = mode_change {
-            self.simulation_panel.context_mut().set_radio_mode(&sim_id, m);
+            self.simulation_panel
+                .context_mut()
+                .set_radio_mode(&sim_id, m);
         }
         if let Some((sim_id, active)) = ptt_change {
-            self.simulation_panel.context_mut().set_radio_ptt(&sim_id, active);
+            self.simulation_panel
+                .context_mut()
+                .set_radio_ptt(&sim_id, active);
         }
         if let Some(idx) = remove_radio_idx {
             let panel = &self.radio_panels[idx];
@@ -1064,11 +1156,14 @@ impl CatapultApp {
                         AmplifierConnectionType::Simulated => "Simulated",
                     })
                     .show_ui(ui, |ui| {
-                        if ui.selectable_value(
-                            &mut self.amp_connection_type,
-                            AmplifierConnectionType::ComPort,
-                            "COM Port",
-                        ).changed() {
+                        if ui
+                            .selectable_value(
+                                &mut self.amp_connection_type,
+                                AmplifierConnectionType::ComPort,
+                                "COM Port",
+                            )
+                            .changed()
+                        {
                             // Disconnect when switching to COM port mode
                             self.amp_connection = None;
                         }
@@ -1084,11 +1179,31 @@ impl CatapultApp {
                 egui::ComboBox::from_id_salt("amp_protocol")
                     .selected_text(self.amp_protocol.name())
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::Kenwood, Protocol::Kenwood.name());
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::IcomCIV, Protocol::IcomCIV.name());
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::Yaesu, Protocol::Yaesu.name());
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::YaesuAscii, Protocol::YaesuAscii.name());
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::Elecraft, Protocol::Elecraft.name());
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::Kenwood,
+                            Protocol::Kenwood.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::IcomCIV,
+                            Protocol::IcomCIV.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::Yaesu,
+                            Protocol::Yaesu.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::YaesuAscii,
+                            Protocol::YaesuAscii.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::Elecraft,
+                            Protocol::Elecraft.name(),
+                        );
                     });
                 ui.end_row();
 
@@ -1138,7 +1253,8 @@ impl CatapultApp {
                         ui.label("CI-V Address:");
                         let mut addr_str = format!("{:02X}", self.amp_civ_address);
                         if ui.text_edit_singleline(&mut addr_str).changed() {
-                            if let Ok(addr) = u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
+                            if let Ok(addr) =
+                                u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
                             {
                                 self.amp_civ_address = addr;
                             }
@@ -1178,10 +1294,7 @@ impl CatapultApp {
             }
             AmplifierConnectionType::Simulated => {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("● Simulated")
-                            .color(Color32::from_rgb(100, 180, 255)),
-                    );
+                    ui.label(RichText::new("● Simulated").color(Color32::from_rgb(100, 180, 255)));
                 });
                 ui.label(
                     RichText::new("Commands appear in Traffic Monitor")
@@ -1247,7 +1360,8 @@ impl CatapultApp {
     fn draw_traffic_panel(&mut self, ui: &mut Ui) {
         ui.heading("Traffic Monitor");
 
-        self.traffic_monitor.draw(ui, self.settings.show_hex, self.settings.show_decoded);
+        self.traffic_monitor
+            .draw(ui, self.settings.show_hex, self.settings.show_decoded);
     }
 
     /// Detect new radios (without clearing existing configured radios)
@@ -1344,23 +1458,23 @@ impl CatapultApp {
                 SimulationEvent::RadioOutput { radio_id, data } => {
                     // Add to traffic monitor as simulated incoming (response from radio)
                     let protocol = self.get_protocol_for_sim_radio(&radio_id);
-                    self.traffic_monitor.add_simulated_incoming(radio_id, &data, protocol);
+                    self.traffic_monitor
+                        .add_simulated_incoming(radio_id, &data, protocol);
                 }
                 SimulationEvent::RadioCommandSent { radio_id, data } => {
                     // Add to traffic monitor as outgoing to simulated radio
                     let protocol = self.get_protocol_for_sim_radio(&radio_id);
-                    self.traffic_monitor.add_to_simulated_radio(radio_id, &data, protocol);
+                    self.traffic_monitor
+                        .add_to_simulated_radio(radio_id, &data, protocol);
                 }
                 SimulationEvent::RadioAdded { radio_id } => {
                     // Register the simulated radio with the multiplexer
                     if let Some(radio) = self.simulation_panel.context().get_radio(&radio_id) {
                         let name = radio.id().to_string();
                         let protocol = radio.protocol();
-                        let handle = self.multiplexer.add_radio(
-                            name.clone(),
-                            "VRT".to_string(),
-                            protocol,
-                        );
+                        let handle =
+                            self.multiplexer
+                                .add_radio(name.clone(), "VRT".to_string(), protocol);
                         self.sim_radio_handles.insert(radio_id.clone(), handle);
 
                         // Create a RadioPanel for the unified list
@@ -1388,9 +1502,8 @@ impl CatapultApp {
                         self.multiplexer.remove_radio(handle);
                     }
                     // Remove from radio_panels
-                    self.radio_panels.retain(|p| {
-                        p.sim_radio_id.as_ref() != Some(&radio_id)
-                    });
+                    self.radio_panels
+                        .retain(|p| p.sim_radio_id.as_ref() != Some(&radio_id));
                     self.set_status(format!("Virtual radio removed: {}", radio_id));
                     // Save virtual radios to settings
                     self.save_virtual_radios();
@@ -1497,7 +1610,10 @@ impl eframe::App for CatapultApp {
         });
 
         // Request repaint only when animations are active or virtual radios exist
-        let has_virtual_radios = self.radio_panels.iter().any(|p| p.connection_type == RadioConnectionType::Virtual);
+        let has_virtual_radios = self
+            .radio_panels
+            .iter()
+            .any(|p| p.connection_type == RadioConnectionType::Virtual);
         if self.scanning || has_virtual_radios {
             ctx.request_repaint();
         }

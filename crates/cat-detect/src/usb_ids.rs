@@ -231,7 +231,10 @@ impl PortClassification {
 ///
 /// Returns a suggested protocol if the port is associated with a known manufacturer.
 /// This helps auto-select the protocol when adding a COM radio.
-pub fn suggest_protocol_for_port(vid: Option<u16>, port_name: &str) -> Option<cat_protocol::Protocol> {
+pub fn suggest_protocol_for_port(
+    vid: Option<u16>,
+    port_name: &str,
+) -> Option<cat_protocol::Protocol> {
     use cat_protocol::Protocol;
 
     // Check for known radio USB VIDs
@@ -255,7 +258,11 @@ pub fn suggest_protocol_for_port(vid: Option<u16>, port_name: &str) -> Option<ca
 ///
 /// Returns the classification tier and an optional hint string for display
 /// (e.g., "Icom USB", "SmartSDR", "FTDI")
-pub fn classify_port(vid: Option<u16>, pid: Option<u16>, port_name: &str) -> (PortClassification, Option<&'static str>) {
+pub fn classify_port(
+    vid: Option<u16>,
+    pid: Option<u16>,
+    port_name: &str,
+) -> (PortClassification, Option<&'static str>) {
     // Check for known radio USB first (highest priority)
     if let (Some(v), Some(p)) = (vid, pid) {
         if is_known_radio_usb(v, p).is_some() {

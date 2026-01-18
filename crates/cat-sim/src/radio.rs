@@ -344,7 +344,9 @@ impl VirtualRadio {
                     CivCommand::new(0xE0, addr, c.command).encode()
                 })
             }
-            Protocol::Yaesu | Protocol::YaesuAscii => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::Yaesu | Protocol::YaesuAscii => {
+                YaesuCommand::from_radio_command(cmd).map(|c| c.encode())
+            }
             Protocol::FlexRadio => FlexCommand::from_radio_command(cmd).map(|c| c.encode()),
         }
     }
