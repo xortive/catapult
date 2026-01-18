@@ -147,6 +147,10 @@ A configurable lockout time (default 500ms) prevents rapid switching between rad
   - **USB OTG port**: Connect to amplifier's USB host port
 - The amplifier must have a USB host port that accepts USB serial devices
 
+## Authorship
+
+This project was entirely authored by Claude (Anthropic's AI assistant) through Claude Code.
+
 ## License
 
 MIT License - see LICENSE file for details.
