@@ -74,6 +74,7 @@ jobs:
       # Load secrets from 1Password (macOS)
       - name: Load 1Password Secrets (macOS)
         if: matrix.os == 'macos-latest'
+        continue-on-error: true
         uses: 1password/load-secrets-action@v2
         with:
           export-env: true
@@ -113,6 +114,7 @@ jobs:
       # Load secrets from 1Password (Windows)
       - name: Load 1Password Secrets (Windows)
         if: matrix.os == 'windows-latest'
+        continue-on-error: true
         uses: 1password/load-secrets-action@v2
         with:
           export-env: true
