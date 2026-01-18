@@ -71,10 +71,14 @@ jobs:
         if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }} -p cat-desktop
 
+      # Install 1Password CLI (macOS)
+      - name: Install 1Password CLI (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: 1password/install-cli-action@v1
+
       # Load secrets from 1Password (macOS)
       - name: Load 1Password Secrets (macOS)
         if: matrix.os == 'macos-latest'
-        continue-on-error: true
         uses: 1password/load-secrets-action@v2
         with:
           export-env: true
@@ -111,10 +115,14 @@ jobs:
           rm certificate.p12
           security delete-keychain build.keychain
 
+      # Install 1Password CLI (Windows)
+      - name: Install 1Password CLI (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: 1password/install-cli-action@v1
+
       # Load secrets from 1Password (Windows)
       - name: Load 1Password Secrets (Windows)
         if: matrix.os == 'windows-latest'
-        continue-on-error: true
         uses: 1password/load-secrets-action@v2
         with:
           export-env: true
