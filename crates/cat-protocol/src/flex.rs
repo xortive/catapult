@@ -64,7 +64,7 @@ pub enum FlexCommand {
     AgcMode(Option<u8>),
     /// Noise reduction: ZZNR0;
     NoiseReduction(Option<bool>),
-    /// Auto-information mode: ZZAI0; (off) or ZZAI1; (on) or ZZAI; (query)
+    /// Auto-information mode: AI0; (off) or AI1; (on) or AI; (query)
     AutoInfo(Option<bool>),
     /// Unknown/unrecognized command (preserves original)
     Unknown(String),
@@ -528,10 +528,11 @@ impl EncodeCommand for FlexCommand {
             FlexCommand::AgcMode(None) => "ZZGT".to_string(),
             FlexCommand::NoiseReduction(Some(on)) => format!("ZZNR{}", if *on { 1 } else { 0 }),
             FlexCommand::NoiseReduction(None) => "ZZNR".to_string(),
+            // FlexRadio uses standard Kenwood AI command, not ZZAI
             FlexCommand::AutoInfo(Some(enabled)) => {
-                format!("ZZAI{}", if *enabled { 1 } else { 0 })
+                format!("AI{}", if *enabled { 1 } else { 0 })
             }
-            FlexCommand::AutoInfo(None) => "ZZAI".to_string(),
+            FlexCommand::AutoInfo(None) => "AI".to_string(),
             FlexCommand::Unknown(s) => s.clone(),
         };
         format!("{};", cmd).into_bytes()
@@ -769,10 +770,11 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_zzai() {
-        assert_eq!(FlexCommand::AutoInfo(None).encode(), b"ZZAI;");
-        assert_eq!(FlexCommand::AutoInfo(Some(true)).encode(), b"ZZAI1;");
-        assert_eq!(FlexCommand::AutoInfo(Some(false)).encode(), b"ZZAI0;");
+    fn test_encode_ai() {
+        // FlexRadio uses standard Kenwood AI command
+        assert_eq!(FlexCommand::AutoInfo(None).encode(), b"AI;");
+        assert_eq!(FlexCommand::AutoInfo(Some(true)).encode(), b"AI1;");
+        assert_eq!(FlexCommand::AutoInfo(Some(false)).encode(), b"AI0;");
     }
 
     #[test]
