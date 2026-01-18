@@ -19,15 +19,19 @@ mod helpers {
 
     /// Create a multiplexer with lockout disabled for deterministic testing
     pub fn mux_no_lockout() -> Multiplexer {
-        let mut config = MultiplexerConfig::default();
-        config.lockout_ms = 0;
+        let config = MultiplexerConfig {
+            lockout_ms: 0,
+            ..Default::default()
+        };
         Multiplexer::with_config(config)
     }
 
     /// Create a multiplexer with a specific amplifier protocol
     pub fn mux_with_amp_protocol(protocol: Protocol) -> Multiplexer {
-        let mut config = MultiplexerConfig::default();
-        config.lockout_ms = 0;
+        let mut config = MultiplexerConfig {
+            lockout_ms: 0,
+            ..Default::default()
+        };
         config.amplifier.protocol = protocol;
         Multiplexer::with_config(config)
     }
@@ -246,8 +250,10 @@ mod lockout_tests {
 
     #[test]
     fn lockout_blocks_rapid_manual_switch() {
-        let mut config = MultiplexerConfig::default();
-        config.lockout_ms = 1000; // 1 second lockout
+        let config = MultiplexerConfig {
+            lockout_ms: 1000, // 1 second lockout
+            ..Default::default()
+        };
         let mut mux = Multiplexer::with_config(config);
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
@@ -266,8 +272,10 @@ mod lockout_tests {
 
     #[test]
     fn lockout_emits_blocked_event() {
-        let mut config = MultiplexerConfig::default();
-        config.lockout_ms = 1000;
+        let config = MultiplexerConfig {
+            lockout_ms: 1000,
+            ..Default::default()
+        };
         let mut mux = Multiplexer::with_config(config);
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
@@ -286,9 +294,11 @@ mod lockout_tests {
 
     #[test]
     fn lockout_blocks_auto_switch() {
-        let mut config = MultiplexerConfig::default();
-        config.lockout_ms = 1000;
-        config.switching_mode = SwitchingMode::Automatic;
+        let config = MultiplexerConfig {
+            lockout_ms: 1000,
+            switching_mode: SwitchingMode::Automatic,
+            ..Default::default()
+        };
         let mut mux = Multiplexer::with_config(config);
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
@@ -306,8 +316,10 @@ mod lockout_tests {
 
     #[test]
     fn is_locked_returns_correct_state() {
-        let mut config = MultiplexerConfig::default();
-        config.lockout_ms = 1000;
+        let config = MultiplexerConfig {
+            lockout_ms: 1000,
+            ..Default::default()
+        };
         let mut mux = Multiplexer::with_config(config);
 
         let _h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
