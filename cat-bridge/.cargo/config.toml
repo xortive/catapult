@@ -10,3 +10,4 @@ build-std = ["core", "alloc"]
 
 [env]
 ESP_LOG = "info"
+EMBASSY_EXECUTOR_TASK_ARENA_SIZE = "65536"

@@ -32,39 +32,21 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
-
-use core::mem::MaybeUninit;
-
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
-use embassy_usb::{Builder, Config};
+use embassy_usb::Builder;
 use esp_backtrace as _;
-use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{Level, Output};
+use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::otg_fs::asynch::{Config, Driver};
+use esp_hal::otg_fs::Usb;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::usb::Usb;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
-use esp_hal::{init, main};
 use log::{info, warn};
 use static_cell::StaticCell;
-
-// Allocator for buffers
-#[global_allocator]
-static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
-
-fn init_heap() {
-    const HEAP_SIZE: usize = 32 * 1024;
-    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
-
-    unsafe {
-        ALLOCATOR.init(HEAP.as_mut_ptr() as *mut u8, HEAP_SIZE);
-    }
-}
 
 /// Buffer size for data transfer
 const BUFFER_SIZE: usize = 64;
@@ -96,16 +78,12 @@ impl DataPacket {
 
 /// USB Device Descriptor configuration for the amplifier-facing port
 const USB_VID: u16 = 0x1209; // pid.codes VID for open source projects
-const USB_PID: u16 = 0xCAT1; // Unique PID for catapult
+const USB_PID: u16 = 0xCA71; // Unique PID for catapult (valid hex)
 
-#[main]
+#[esp_rtos::main]
 async fn main(spawner: Spawner) {
-    // Initialize heap
-    init_heap();
-
     // Initialize ESP-HAL
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let peripherals = init(config);
+    let peripherals = esp_hal::init(esp_hal::Config::default());
 
     // Initialize logging
     esp_println::logger::init_logger_from_env();
@@ -115,34 +93,40 @@ async fn main(spawner: Spawner) {
 
     // Initialize timer for embassy
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    esp_hal_embassy::init(timg0.timer0);
+    esp_rtos::start(timg0.timer0);
 
     // Configure status LED (GPIO48 on ESP32-S3-DevKitC)
-    let led = Output::new(peripherals.GPIO48, Level::High);
+    let led = Output::new(peripherals.GPIO48, Level::High, OutputConfig::default());
 
     // =========================================================================
     // USB-Serial-JTAG: Connection to host computer
     // =========================================================================
-    // This is the built-in USB serial that appears when you connect the
-    // "programming" USB port to your computer.
-    let usb_serial_jtag = UsbSerialJtag::new_async(peripherals.USB_DEVICE);
+    let usb_serial_jtag = UsbSerialJtag::new(peripherals.USB_DEVICE).into_async();
     let (jtag_rx, jtag_tx) = usb_serial_jtag.split();
 
     // =========================================================================
     // USB OTG: CDC device that plugs into the amplifier
     // =========================================================================
-    // This appears as a USB serial device to the amplifier.
-    static USB_BUS: StaticCell<esp_hal::usb::UsbBus> = StaticCell::new();
     let usb = Usb::new(peripherals.USB0, peripherals.GPIO20, peripherals.GPIO19);
-    let usb_bus = USB_BUS.init(usb.into());
+
+    // Create the driver from the HAL
+    static EP_OUT_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
+    let ep_out_buffer = EP_OUT_BUFFER.init([0u8; 1024]);
+    let config = Config::default();
+    let driver = Driver::new(usb, ep_out_buffer, config);
 
     // USB device configuration - this is what the amplifier sees
-    let mut usb_config = Config::new(USB_VID, USB_PID);
+    let mut usb_config = embassy_usb::Config::new(USB_VID, USB_PID);
     usb_config.manufacturer = Some("Catapult");
     usb_config.product = Some("CAT Bridge");
     usb_config.serial_number = Some("001");
     usb_config.max_power = 100;
     usb_config.max_packet_size_0 = 64;
+    // Required for Windows compatibility
+    usb_config.device_class = 0xEF;
+    usb_config.device_sub_class = 0x02;
+    usb_config.device_protocol = 0x01;
+    usb_config.composite_with_iads = true;
 
     // Create USB device
     static STATE: StaticCell<State> = StaticCell::new();
@@ -153,7 +137,7 @@ async fn main(spawner: Spawner) {
     static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
 
     let mut builder = Builder::new(
-        usb_bus,
+        driver,
         usb_config,
         CONFIG_DESCRIPTOR.init([0; 256]),
         BOS_DESCRIPTOR.init([0; 256]),
@@ -166,32 +150,23 @@ async fn main(spawner: Spawner) {
     let (cdc_sender, cdc_receiver) = cdc_class.split();
 
     // Build USB device
-    let usb_device = builder.build();
+    let mut usb_device = builder.build();
 
     // =========================================================================
     // Spawn tasks
     // =========================================================================
-    spawner.spawn(usb_device_task(usb_device)).unwrap();
     spawner.spawn(host_rx_task(jtag_rx)).unwrap();
     spawner.spawn(host_tx_task(jtag_tx)).unwrap();
+    spawner.spawn(led_task(led)).unwrap();
     spawner.spawn(amp_rx_task(cdc_receiver)).unwrap();
     spawner.spawn(amp_tx_task(cdc_sender)).unwrap();
-    spawner.spawn(led_task(led)).unwrap();
 
     info!("CAT Bridge ready!");
     info!("Connect 'UART' USB port to host computer");
     info!("Connect 'USB' OTG port to amplifier");
 
-    // Main task just keeps running
-    loop {
-        Timer::after(Duration::from_secs(60)).await;
-    }
-}
-
-/// USB OTG device task - handles USB enumeration and events
-#[embassy_executor::task]
-async fn usb_device_task(mut usb: embassy_usb::UsbDevice<'static, esp_hal::usb::UsbBus<'static>>) {
-    usb.run().await;
+    // Run USB device
+    usb_device.run().await;
 }
 
 /// Host RX task - receives data from host computer via USB-Serial-JTAG
@@ -233,7 +208,7 @@ async fn host_tx_task(mut tx: esp_hal::usb_serial_jtag::UsbSerialJtagTx<'static,
 /// Amplifier RX task - receives data from amplifier via USB OTG CDC
 #[embassy_executor::task]
 async fn amp_rx_task(
-    mut receiver: embassy_usb::class::cdc_acm::Receiver<'static, esp_hal::usb::UsbBus<'static>>,
+    mut receiver: embassy_usb::class::cdc_acm::Receiver<'static, Driver<'static>>,
 ) {
     info!("Amplifier RX task started");
     let mut buf = [0u8; BUFFER_SIZE];
@@ -264,7 +239,7 @@ async fn amp_rx_task(
 /// Amplifier TX task - sends data to amplifier via USB OTG CDC
 #[embassy_executor::task]
 async fn amp_tx_task(
-    mut sender: embassy_usb::class::cdc_acm::Sender<'static, esp_hal::usb::UsbBus<'static>>,
+    mut sender: embassy_usb::class::cdc_acm::Sender<'static, Driver<'static>>,
 ) {
     info!("Amplifier TX task started");
 
@@ -292,8 +267,6 @@ async fn amp_tx_task(
 #[embassy_executor::task]
 async fn led_task(mut led: Output<'static>) {
     loop {
-        // Blink pattern indicates status
-        // For now, just blink at 1Hz to show we're alive
         led.toggle();
         Timer::after(Duration::from_millis(500)).await;
     }

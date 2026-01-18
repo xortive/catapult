@@ -9,22 +9,21 @@ license = "MIT"
 description = "ESP32-S3 dual USB serial bridge firmware - allows host computer to appear as USB serial device to amplifier"
 
 [dependencies]
-# ESP-HAL for ESP32-S3
-esp-hal = { version = "1.0", features = ["esp32s3"] }
+# ESP-HAL for ESP32-S3 (1.0.0 ecosystem)
+esp-hal = { version = "1.0", features = ["esp32s3", "unstable"] }
+esp-rtos = { version = "0.2", features = ["esp32s3", "embassy"] }
 esp-backtrace = { version = "0.18", features = ["esp32s3", "panic-handler", "println"] }
-esp-println = { version = "0.16", features = ["esp32s3", "log"] }
+esp-println = { version = "0.16", features = ["esp32s3", "log-04"] }
 esp-alloc = "0.9"
 
-# USB support
-esp-hal-embassy = { version = "0.9", features = ["esp32s3"] }
-embassy-executor = { version = "0.9", features = ["task-arena-size-65536"] }
+# Embassy async runtime
+embassy-executor = "0.9"
 embassy-time = "0.5"
 embassy-sync = "0.7"
 embassy-usb = "0.5"
-usbd-serial = "0.2"
 
-# Embedded I/O traits for USB-Serial-JTAG
-embedded-io-async = "0.7"
+# Embedded I/O traits
+embedded-io-async = "0.6"
 
 # Logging
 log = "0.4"
