@@ -42,7 +42,7 @@ pub mod yaesu;
 
 pub use command::{OperatingMode, RadioCommand};
 pub use error::{ParseError, ProtocolError};
-pub use models::{RadioCapabilities, RadioModel};
+pub use models::{ProtocolId, RadioCapabilities, RadioDatabase, RadioModel};
 
 /// Identifies which CAT protocol variant a radio uses
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

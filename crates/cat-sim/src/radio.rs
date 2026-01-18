@@ -13,6 +13,7 @@ use cat_protocol::{
     kenwood::KenwoodCommand,
     yaesu::YaesuCommand,
     EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand,
+    RadioDatabase, RadioModel,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +24,8 @@ pub struct VirtualRadio {
     id: String,
     /// Protocol used for encoding commands
     protocol: Protocol,
+    /// Radio model (for ID responses)
+    model: Option<RadioModel>,
     /// Current frequency in Hz
     frequency_hz: u64,
     /// Current operating mode
@@ -44,6 +47,9 @@ pub struct VirtualRadioConfig {
     pub id: String,
     /// Protocol to use for output encoding
     pub protocol: Protocol,
+    /// Radio model name (for ID responses)
+    #[serde(default)]
+    pub model_name: Option<String>,
     /// Initial frequency in Hz
     pub initial_frequency_hz: u64,
     /// Initial operating mode
@@ -57,6 +63,7 @@ impl Default for VirtualRadioConfig {
         Self {
             id: "Virtual Radio".to_string(),
             protocol: Protocol::Kenwood,
+            model_name: None,
             initial_frequency_hz: 14_250_000, // 20m
             initial_mode: OperatingMode::Usb,
             civ_address: None,
@@ -67,13 +74,22 @@ impl Default for VirtualRadioConfig {
 impl VirtualRadio {
     /// Create a new virtual radio with default settings
     pub fn new(id: impl Into<String>, protocol: Protocol) -> Self {
+        let model = RadioDatabase::default_for_protocol(protocol);
+        let civ_address = model.as_ref().and_then(|m| {
+            if let cat_protocol::ProtocolId::CivAddress(addr) = &m.protocol_id {
+                Some(*addr)
+            } else {
+                None
+            }
+        });
         Self {
             id: id.into(),
             protocol,
+            model,
             frequency_hz: 14_250_000,
             mode: OperatingMode::Usb,
             ptt: false,
-            civ_address: None,
+            civ_address,
             pending_output: VecDeque::new(),
             last_change: Instant::now(),
         }
@@ -81,13 +97,34 @@ impl VirtualRadio {
 
     /// Create a virtual radio from configuration
     pub fn from_config(config: VirtualRadioConfig) -> Self {
+        // Look up model by name, or use default for protocol
+        let model = config.model_name.as_ref()
+            .and_then(|name| {
+                RadioDatabase::radios_for_protocol(config.protocol)
+                    .into_iter()
+                    .find(|m| m.model == *name)
+            })
+            .or_else(|| RadioDatabase::default_for_protocol(config.protocol));
+
+        // Get CI-V address from model if not explicitly set
+        let civ_address = config.civ_address.or_else(|| {
+            model.as_ref().and_then(|m| {
+                if let cat_protocol::ProtocolId::CivAddress(addr) = &m.protocol_id {
+                    Some(*addr)
+                } else {
+                    None
+                }
+            })
+        });
+
         Self {
             id: config.id,
             protocol: config.protocol,
+            model,
             frequency_hz: config.initial_frequency_hz,
             mode: config.initial_mode,
             ptt: false,
-            civ_address: config.civ_address,
+            civ_address,
             pending_output: VecDeque::new(),
             last_change: Instant::now(),
         }
@@ -105,7 +142,47 @@ impl VirtualRadio {
 
     /// Set the protocol (re-encodes future commands)
     pub fn set_protocol(&mut self, protocol: Protocol) {
-        self.protocol = protocol;
+        if self.protocol != protocol {
+            self.protocol = protocol;
+            // Update model to default for new protocol
+            self.model = RadioDatabase::default_for_protocol(protocol);
+            // Update CI-V address from model
+            self.civ_address = self.model.as_ref().and_then(|m| {
+                if let cat_protocol::ProtocolId::CivAddress(addr) = &m.protocol_id {
+                    Some(*addr)
+                } else {
+                    None
+                }
+            });
+        }
+    }
+
+    /// Get the radio model
+    pub fn model(&self) -> Option<&RadioModel> {
+        self.model.as_ref()
+    }
+
+    /// Get the model name for display
+    pub fn model_name(&self) -> &str {
+        self.model
+            .as_ref()
+            .map(|m| m.model.as_str())
+            .unwrap_or("Unknown")
+    }
+
+    /// Set the radio model by name
+    pub fn set_model(&mut self, model: Option<RadioModel>) {
+        self.model = model;
+        // Update CI-V address from model if using Icom protocol
+        if self.protocol == Protocol::IcomCIV {
+            self.civ_address = self.model.as_ref().and_then(|m| {
+                if let cat_protocol::ProtocolId::CivAddress(addr) = &m.protocol_id {
+                    Some(*addr)
+                } else {
+                    None
+                }
+            });
+        }
     }
 
     /// Get the current frequency in Hz
@@ -181,6 +258,34 @@ impl VirtualRadio {
             vfo: None,
         };
         self.queue_command(cmd);
+    }
+
+    /// Send an ID response based on the current model
+    pub fn send_id_response(&mut self) {
+        let id = self.get_id_string();
+        self.queue_command(RadioCommand::IdReport { id });
+    }
+
+    /// Get the ID string based on the current model and protocol
+    pub fn get_id_string(&self) -> String {
+        if let Some(model) = &self.model {
+            match &model.protocol_id {
+                cat_protocol::ProtocolId::KenwoodId(id) => id.clone(),
+                cat_protocol::ProtocolId::ElecraftId(id) => id.clone(),
+                cat_protocol::ProtocolId::FlexId(id) => id.clone(),
+                cat_protocol::ProtocolId::CivAddress(addr) => format!("{:02X}", addr),
+                cat_protocol::ProtocolId::YaesuCode(code) => format!("{:02X}", code),
+            }
+        } else {
+            // Default IDs if no model set
+            match self.protocol {
+                Protocol::Kenwood => "023".to_string(),  // TS-590SG
+                Protocol::Elecraft => "K3".to_string(),   // K3
+                Protocol::FlexRadio => "909".to_string(), // FLEX-6600
+                Protocol::IcomCIV => "94".to_string(),    // IC-7300
+                Protocol::Yaesu => "01".to_string(),      // FT-991A
+            }
+        }
     }
 
     /// Take the next pending output bytes
@@ -370,6 +475,7 @@ mod tests {
         let config = VirtualRadioConfig {
             id: "My Radio".to_string(),
             protocol: Protocol::Elecraft,
+            model_name: Some("K3".to_string()),
             initial_frequency_hz: 10_125_000,
             initial_mode: OperatingMode::Cw,
             civ_address: None,
@@ -380,5 +486,6 @@ mod tests {
         assert_eq!(radio.protocol(), Protocol::Elecraft);
         assert_eq!(radio.frequency_hz(), 10_125_000);
         assert_eq!(radio.mode(), OperatingMode::Cw);
+        assert_eq!(radio.model_name(), "K3");
     }
 }

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use cat_protocol::{OperatingMode, Protocol};
+use cat_protocol::{OperatingMode, Protocol, RadioModel};
 
 use crate::radio::{VirtualRadio, VirtualRadioConfig};
 
@@ -170,6 +170,16 @@ impl SimulationContext {
             if old_ptt != active {
                 self.generate_radio_events(id);
             }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set a radio's model
+    pub fn set_radio_model(&mut self, id: &str, model: Option<RadioModel>) -> bool {
+        if let Some(radio) = self.radios.get_mut(id) {
+            radio.set_model(model);
             true
         } else {
             false

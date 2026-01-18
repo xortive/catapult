@@ -2,7 +2,7 @@
 //!
 //! Provides UI controls to manage multiple virtual radios.
 
-use cat_protocol::{OperatingMode, Protocol};
+use cat_protocol::{OperatingMode, Protocol, RadioDatabase};
 use cat_sim::{SimulationContext, SimulationEvent};
 use egui::{Color32, RichText, Ui};
 
@@ -163,6 +163,7 @@ impl SimulationPanel {
                     id.clone(),
                     radio.id().to_string(),
                     radio.protocol(),
+                    radio.model().cloned(),
                     radio.frequency_hz(),
                     radio.mode(),
                     radio.ptt(),
@@ -170,14 +171,15 @@ impl SimulationPanel {
             })
             .collect();
 
-        for (id, name, protocol, freq_hz, mode, ptt) in radio_infos {
+        for (id, name, protocol, model, freq_hz, mode, ptt) in radio_infos {
             let is_selected = self.selected_radio.as_deref() == Some(&id);
 
             ui.group(|ui| {
                 // Radio header
                 ui.horizontal(|ui| {
-                    // Radio name and protocol (active state is shown in the sidebar radio list)
-                    let header_text = format!("{} ({})", name, protocol.name());
+                    // Radio name and model (active state is shown in the sidebar radio list)
+                    let model_name = model.as_ref().map(|m| m.model.as_str()).unwrap_or(protocol.name());
+                    let header_text = format!("{} ({})", name, model_name);
                     if ui.selectable_label(is_selected, RichText::new(header_text).strong()).clicked() {
                         self.selected_radio = if is_selected { None } else { Some(id.clone()) };
                         // Update frequency input when selecting
@@ -210,6 +212,30 @@ impl SimulationPanel {
                 // Expanded controls when selected
                 if is_selected {
                     ui.add_space(4.0);
+
+                    // Model selector
+                    ui.horizontal(|ui| {
+                        ui.label("Model:");
+                        let models = RadioDatabase::radios_for_protocol(protocol);
+                        let current_model_name = model
+                            .as_ref()
+                            .map(|m| m.model.as_str())
+                            .unwrap_or("Unknown");
+                        egui::ComboBox::from_id_salt(format!("model_{}", id))
+                            .selected_text(current_model_name)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                for m in &models {
+                                    let display_name = format!("{} {}", m.manufacturer, m.model);
+                                    if ui.selectable_label(
+                                        model.as_ref().map(|curr| curr.model == m.model).unwrap_or(false),
+                                        &display_name
+                                    ).clicked() {
+                                        self.context.set_radio_model(&id, Some(m.clone()));
+                                    }
+                                }
+                            });
+                    });
 
                     // Band presets
                     ui.horizontal_wrapped(|ui| {

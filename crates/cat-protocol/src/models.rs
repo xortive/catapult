@@ -730,3 +730,83 @@ static FLEX_RADIOS: &[(&str, RadioModelStatic)] = &[
         },
     ),
 ];
+
+// Yaesu radio database (keyed by model code)
+static YAESU_RADIOS: &[(u8, RadioModelStatic)] = &[
+    (
+        0x01,
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FT-991A",
+            protocol: Protocol::Yaesu,
+            protocol_id: ProtocolIdStatic::YaesuCode(0x01),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_FULL_HF,
+                min_frequency_hz: 30_000,
+                max_frequency_hz: 450_000_000,
+                frequency_step_hz: 1,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: true,
+                max_power_watts: Some(100),
+            },
+        },
+    ),
+    (
+        0x02,
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FTDX101D",
+            protocol: Protocol::Yaesu,
+            protocol_id: ProtocolIdStatic::YaesuCode(0x02),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_FULL_HF,
+                min_frequency_hz: 30_000,
+                max_frequency_hz: 54_000_000,
+                frequency_step_hz: 1,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: true,
+                max_power_watts: Some(200),
+            },
+        },
+    ),
+    (
+        0x03,
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FT-710",
+            protocol: Protocol::Yaesu,
+            protocol_id: ProtocolIdStatic::YaesuCode(0x03),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_FULL_HF,
+                min_frequency_hz: 30_000,
+                max_frequency_hz: 54_000_000,
+                frequency_step_hz: 1,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: true,
+                max_power_watts: Some(100),
+            },
+        },
+    ),
+    (
+        0x04,
+        RadioModelStatic {
+            manufacturer: "Yaesu",
+            model: "FTDX10",
+            protocol: Protocol::Yaesu,
+            protocol_id: ProtocolIdStatic::YaesuCode(0x04),
+            capabilities: RadioCapabilitiesStatic {
+                modes: MODES_FULL_HF,
+                min_frequency_hz: 30_000,
+                max_frequency_hz: 54_000_000,
+                frequency_step_hz: 1,
+                has_split: true,
+                vfo_count: 2,
+                has_tuner: true,
+                max_power_watts: Some(100),
+            },
+        },
+    ),
+];
