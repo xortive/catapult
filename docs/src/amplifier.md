@@ -21,6 +21,8 @@ Any amplifier that accepts CAT control should work. Tested with:
 
 ## Connecting Your Amplifier
 
+### Serial Connection (Most Common)
+
 1. Connect the amplifier's CAT input to a serial port
 2. In the Amplifier panel, select:
    - **Protocol**: Match your amplifier's expected protocol
@@ -28,6 +30,49 @@ Any amplifier that accepts CAT control should work. Tested with:
    - **Baud Rate**: Common rates are 4800, 9600, 19200, 38400, 115200
    - **CI-V Address**: (Icom only) The amplifier's CI-V address in hex
 3. Click **Connect**
+
+### USB Connection (ESP32-S3 Bridge)
+
+Some amplifiers (like the Elecraft KPA1500) use USB for CAT control, expecting the connected device to appear as a USB serial gadget. Since computers cannot natively act as USB devices, Catapult includes firmware for an ESP32-S3 board that acts as a bridge.
+
+#### How It Works
+
+```
+Host Computer <--USB--> ESP32-S3 <--USB--> Amplifier
+  (USB host)           (bridge)           (USB host)
+```
+
+The ESP32-S3 has two USB interfaces:
+- **USB-Serial-JTAG** (programming port): Connects to your computer
+- **USB OTG** (gadget port): Connects to the amplifier as a USB serial device
+
+#### Hardware Required
+
+You'll need an **ESP32-S3-DevKitC** board (or similar with dual USB ports). These are widely available for around $10-15.
+
+#### Flashing the Firmware
+
+Catapult includes a built-in flashing tool—no external toolchain required.
+
+1. Connect the ESP32-S3's **UART** port to your computer
+2. In Catapult, go to **Settings → ESP32 Bridge**
+3. Select the serial port for your ESP32-S3
+4. Click **Flash Firmware**
+
+The firmware is bundled with Catapult and will be flashed automatically. The device restarts after flashing is complete.
+
+#### Hardware Setup
+
+1. Connect the ESP32-S3's **UART** port (programming port) to your computer
+2. Connect the ESP32-S3's **USB** port (OTG port) to your amplifier
+3. In Catapult, select the serial port that appears for the ESP32-S3
+4. Configure the protocol to match what your amplifier expects
+
+#### LED Indicators
+
+- **Slow blink (1Hz)**: Waiting for connections
+- **Fast blink (4Hz)**: Both USB interfaces active, bridging data
+- **Solid**: Data transfer in progress
 
 ### Common Baud Rates by Amplifier
 
