@@ -171,7 +171,8 @@ jobs:
         run: mdbook build
 
       - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v4
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: docs
+          wranglerVersion: "4.0.0"
