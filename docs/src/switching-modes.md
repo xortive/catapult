@@ -46,6 +46,29 @@ In Manual mode, the active radio only changes when you explicitly click **Select
 ### Use Case
 You want to lock the amplifier to a specific radio regardless of what the other radios are doing.
 
+## Auto-Information Mode
+
+For automatic switching to work, Catapult needs to know when your radios change state. Rather than constantly polling each radio, Catapult enables **Auto-Information** (also called **Transceive** mode) on each connected radio at startup.
+
+With auto-info enabled, your radio automatically sends status updates whenever:
+- You tune the VFO
+- You change modes
+- You key the transmitter
+- Other state changes occur
+
+### Protocol Support
+
+| Protocol | Command | Notes |
+|----------|---------|-------|
+| Kenwood | `AI1;` | Standard auto-info |
+| Elecraft | `AI1;` | Kenwood-compatible |
+| FlexRadio | `AI1;` | Kenwood-compatible |
+| Yaesu ASCII | `AI1;` | Same as Kenwood |
+| Icom CI-V | Transceive (0x1A) | Unsolicited updates |
+| Yaesu Binary | N/A | No auto-info; polled on PTT |
+
+This happens automatically when you connect a radio - no configuration needed.
+
 ## Switching Lockout
 
 To prevent rapid switching (which could stress amplifier relays), Catapult implements a brief lockout period after each switch. During lockout:
