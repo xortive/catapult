@@ -4,6 +4,11 @@ A desktop-primary CAT (Computer Aided Transceiver) Protocol Multiplexer for amat
 
 Connect unlimited transceivers to a single amplifier via CAT protocol translation.
 
+## Authorship
+
+This project was entirely authored by Claude (Anthropic's AI assistant) through Claude Code. It has
+not been tested with real hardware yet.
+
 ## Features
 
 - **Multi-Protocol Support**: Yaesu CAT, Icom CI-V, Kenwood, and Elecraft protocols
@@ -146,10 +151,6 @@ A configurable lockout time (default 500ms) prevents rapid switching between rad
   - **USB-UART/JTAG port**: Connect to host computer
   - **USB OTG port**: Connect to amplifier's USB host port
 - The amplifier must have a USB host port that accepts USB serial devices
-
-## Authorship
-
-This project was entirely authored by Claude (Anthropic's AI assistant) through Claude Code.
 
 ## License
 
