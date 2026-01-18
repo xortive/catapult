@@ -70,6 +70,10 @@ pub struct CatapultApp {
     amp_port: String,
     /// Selected amplifier protocol
     amp_protocol: Protocol,
+    /// Selected amplifier baud rate
+    amp_baud: u32,
+    /// CI-V address for Icom amplifiers (0x00-0xFF)
+    amp_civ_address: u8,
     /// Amplifier connection (when connected)
     amp_connection: Option<AmplifierConnection>,
     /// Maps simulation radio IDs to multiplexer handles
@@ -106,6 +110,8 @@ impl CatapultApp {
             bg_tx,
             amp_port: String::new(),
             amp_protocol: Protocol::Kenwood,
+            amp_baud: 9600,
+            amp_civ_address: 0x00,
             amp_connection: None,
             sim_radio_handles: HashMap::new(),
         };
@@ -530,6 +536,29 @@ impl CatapultApp {
                         }
                     });
                 ui.end_row();
+
+                ui.label("Baud Rate:");
+                egui::ComboBox::from_id_salt("amp_baud")
+                    .selected_text(format!("{}", self.amp_baud))
+                    .show_ui(ui, |ui| {
+                        // Common amplifier baud rates
+                        for &baud in &[4800u32, 9600, 19200, 38400, 57600, 115200, 230400] {
+                            ui.selectable_value(&mut self.amp_baud, baud, format!("{}", baud));
+                        }
+                    });
+                ui.end_row();
+
+                // Show CI-V address for Icom protocol
+                if self.amp_protocol == Protocol::IcomCIV {
+                    ui.label("CI-V Address:");
+                    let mut addr_str = format!("{:02X}", self.amp_civ_address);
+                    if ui.text_edit_singleline(&mut addr_str).changed() {
+                        if let Ok(addr) = u8::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
+                            self.amp_civ_address = addr;
+                        }
+                    }
+                    ui.end_row();
+                }
             });
 
         ui.horizontal(|ui| {
@@ -649,13 +678,26 @@ impl CatapultApp {
             return;
         }
 
-        // Default baud rate for most amplifiers
-        const BAUD_RATE: u32 = 9600;
+        // Update multiplexer config with amplifier settings
+        let amp_config = cat_mux::state::AmplifierConfig {
+            port: self.amp_port.clone(),
+            protocol: self.amp_protocol,
+            baud_rate: self.amp_baud,
+            civ_address: if self.amp_protocol == Protocol::IcomCIV {
+                Some(self.amp_civ_address)
+            } else {
+                None
+            },
+        };
+        self.multiplexer.set_amplifier_config(amp_config);
 
-        match AmplifierConnection::new(&self.amp_port, BAUD_RATE, self.bg_tx.clone()) {
+        match AmplifierConnection::new(&self.amp_port, self.amp_baud, self.bg_tx.clone()) {
             Ok(conn) => {
                 self.amp_connection = Some(conn);
-                self.set_status(format!("Connected to amplifier on {}", self.amp_port));
+                self.set_status(format!(
+                    "Connected to amplifier on {} @ {} baud",
+                    self.amp_port, self.amp_baud
+                ));
             }
             Err(e) => {
                 self.set_status(format!("Failed to connect: {}", e));

@@ -376,7 +376,15 @@ impl Multiplexer {
 
     /// Set amplifier configuration
     pub fn set_amplifier_config(&mut self, config: AmplifierConfig) {
-        self.translator.set_target_protocol(config.protocol);
+        // Update translation config with CI-V address from amplifier config
+        self.config.translation.target_civ_address = config.civ_address;
+
+        // Recreate translator with updated config
+        self.translator = ProtocolTranslator::with_config(
+            config.protocol,
+            self.config.translation.clone(),
+        );
+
         self.config.amplifier = config;
     }
 
