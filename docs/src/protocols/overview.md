@@ -8,7 +8,8 @@ Catapult supports multiple CAT (Computer Aided Transceiver) protocols used by di
 |----------|--------------|--------|----------------|
 | [Kenwood](./kenwood.md) | Kenwood, Elecraft | ASCII | TS-590, TS-890, K3 |
 | [Icom CI-V](./icom.md) | Icom | Binary | IC-7300, IC-7610, IC-705 |
-| [Yaesu](./yaesu.md) | Yaesu | Binary | FT-991, FT-DX10 |
+| [Yaesu Binary](./yaesu.md) | Yaesu | Binary | FT-450, FT-950, FTDX-3000 |
+| [Yaesu ASCII](./yaesu-ascii.md) | Yaesu | ASCII | FT-991, FTDX-101D, FTDX-10, FT-710 |
 | [Elecraft](./elecraft.md) | Elecraft | Extended ASCII | K3, K4, KX2 |
 | [FlexRadio](./flexradio.md) | FlexRadio | TCP/Text | FLEX-6400, FLEX-6600 |
 
@@ -56,7 +57,8 @@ Each protocol may have a default baud rate. Ensure your radio and Catapult agree
 |----------|-------------------|
 | Kenwood | 9600, 19200, 38400 |
 | Icom CI-V | 9600, 19200 |
-| Yaesu | 4800, 9600, 38400 |
+| Yaesu Binary | 4800, 9600, 38400 |
+| Yaesu ASCII | 4800, 9600, 38400 |
 
 ### CI-V Address Conflicts
 Icom radios use addresses on the CI-V bus. Ensure each radio has a unique address if multiple are on the same bus.

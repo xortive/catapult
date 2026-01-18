@@ -54,6 +54,14 @@ Mode values:
 | `TX` | Transmit | `TX;` |
 | `RX` | Receive | `RX;` |
 
+### Auto-Information (AI)
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `AI` | Query/set auto-info | `AI;` (query), `AI0;` (off), `AI1;` (on) |
+
+When enabled, the radio automatically sends frequency and mode updates without polling. Catapult enables AI on connection for real-time state tracking.
+
 ## Catapult Usage
 
 ### As Radio Protocol

@@ -4,16 +4,26 @@ Common issues and solutions for Catapult.
 
 ## Connection Issues
 
-### Radio not detected
+### Port not appearing in dropdown
 
-**Symptoms:** Radio doesn't appear after clicking Scan Ports
+**Symptoms:** Expected serial port not listed in the port dropdown
+
+**Solutions:**
+1. Unplug and replug the USB cable
+2. Check if another application is using the port (close logging software, etc.)
+3. On Linux, verify permissions: `sudo usermod -a -G dialout $USER` (logout/login after)
+4. On macOS, check System Preferences > Security for blocked drivers
+5. Try a different USB port or cable
+
+### Radio not connecting
+
+**Symptoms:** Port appears but radio doesn't connect or respond
 
 **Solutions:**
 1. Check USB cable is connected
 2. Verify radio is powered on
-3. Check if another application is using the port (close logging software, etc.)
-4. On Linux, check permissions: `sudo usermod -a -G dialout $USER` (logout/login after)
-5. Try a different USB port
+3. Ensure correct protocol is selected (Catapult auto-suggests for known radios)
+4. Verify baud rate matches radio's CAT settings
 
 ### Wrong protocol detected
 
@@ -90,7 +100,18 @@ sudo usermod -a -G dialout $USER
 
 **Solutions:**
 1. This is usually a BCD encoding issue
-2. Verify you're using the correct Yaesu protocol variant
+2. Verify you're using the correct Yaesu protocol variant (Binary for older radios, ASCII for FT-991/FTDX series)
+
+### Radio not updating in real-time
+
+**Symptoms:** Frequency/mode changes on radio don't appear in Catapult without manual refresh
+
+**Solutions:**
+1. Verify radio supports Auto-Information (AI) or Transceive mode
+2. Check radio's CAT menu for AI/Transceive setting (should be enabled)
+3. Some older radios don't support automatic updates
+4. Enable Traffic Monitor to verify AI commands are being sent on connection
+5. Try disconnecting and reconnecting the radio
 
 ## GUI Issues
 

@@ -69,6 +69,17 @@ FE FE 94 E0 1C 00 <state> FD
 
 State: `0x00` = RX, `0x01` = TX
 
+### Transceive / Auto-Information (Command 0x1A 0x05)
+
+Enable automatic updates from the radio:
+
+```
+FE FE 94 E0 1A 05 01 FD  (Enable transceive)
+FE FE 94 E0 1A 05 00 FD  (Disable transceive)
+```
+
+When enabled, the radio sends frequency/mode changes automatically without polling. Catapult enables this on connection for real-time state tracking.
+
 ## Catapult Usage
 
 ### As Radio Protocol

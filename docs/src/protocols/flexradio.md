@@ -50,6 +50,7 @@ FlexRadio's CAT emulation supports both standard Kenwood commands and extended Z
 | `ZZMD` | Mode (2-digit code) | `ZZMD01;` |
 | `ZZTX` | Transmit control | `ZZTX1;` / `ZZTX0;` |
 | `ZZIF` | Extended status | `ZZIF...;` |
+| `ZZAI` | Auto-information mode | `ZZAI1;` (on) / `ZZAI0;` (off) |
 
 ## Mode Values
 

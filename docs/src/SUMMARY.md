@@ -19,7 +19,8 @@
 - [Protocol Overview](./protocols/overview.md)
 - [Kenwood](./protocols/kenwood.md)
 - [Icom CI-V](./protocols/icom.md)
-- [Yaesu](./protocols/yaesu.md)
+- [Yaesu Binary](./protocols/yaesu.md)
+- [Yaesu ASCII](./protocols/yaesu-ascii.md)
 - [Elecraft](./protocols/elecraft.md)
 - [FlexRadio](./protocols/flexradio.md)
 

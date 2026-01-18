@@ -1,6 +1,6 @@
-# Yaesu Protocol
+# Yaesu Binary Protocol
 
-Yaesu uses a binary CAT protocol with fixed 5-byte commands.
+Yaesu's legacy binary CAT protocol uses fixed 5-byte commands. This protocol is used by older Yaesu radios. For modern radios (FT-991, FTDX-101D, FTDX-10, FT-710), see [Yaesu ASCII](./yaesu-ascii.md).
 
 ## Overview
 
@@ -87,14 +87,15 @@ For 14.250000 MHz:
 
 ## Compatible Radios
 
-- FT-991 / FT-991A
-- FT-DX10 / FT-DX101
-- FT-710
 - FT-450, FT-950
 - FTDX-3000, FTDX-5000
+- FT-817, FT-818, FT-857, FT-897
+- Older Yaesu transceivers
+
+**Note:** FT-991, FTDX-101D, FTDX-10, and FT-710 use the [Yaesu ASCII](./yaesu-ascii.md) protocol.
 
 ## Notes
 
-- Some newer Yaesu radios also support Kenwood protocol
 - Check your radio's CAT settings for protocol selection
 - Baud rate is configurable (commonly 4800 or 38400)
+- Some radios may support both binary and ASCII protocols

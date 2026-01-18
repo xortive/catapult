@@ -40,10 +40,12 @@ cargo build --release -p cat-desktop
 ## Connecting Your First Radio
 
 1. Connect your radio via USB
-2. Click **Scan Ports** to detect available serial ports
-3. Select the port for your radio
-4. Choose the correct protocol (Kenwood, Icom CI-V, etc.)
-5. Click **Connect**
+2. In the **Add Radio** section, select the serial port from the dropdown
+3. Catapult will auto-suggest the protocol for known radios (Icom, Kenwood, FlexRadio, Yaesu)
+4. Adjust the protocol and baud rate if needed
+5. Click **Add Radio**
+
+Your radio configuration is saved automatically and will restore on next launch.
 
 The radio should appear in the Radios panel with its current frequency and mode.
 

@@ -13,25 +13,32 @@ Older radios may require a traditional RS-232 serial connection. You may need a 
 ### CI-V Level Converters
 Icom radios using CI-V may need a level converter. Many USB-CI-V cables include this.
 
-## Auto-Detection
+## Adding a Radio
 
-Click **Scan Ports** to enumerate available serial ports. Catapult will attempt to identify:
-- Port name and path
-- USB vendor/product ID (if USB)
-- Suggested protocol based on known radio IDs
-
-## Manual Configuration
-
-If auto-detection doesn't identify your radio:
-
+In the **Add Radio** section:
 1. Select the serial port from the dropdown
-2. Choose the correct protocol:
-   - **Kenwood** - Kenwood, some Elecraft models
-   - **Icom CI-V** - All Icom radios
-   - **Yaesu** - Yaesu radios (older CAT protocol)
-   - **Elecraft** - K3, K4, KX series
+2. Catapult auto-suggests the protocol for known USB radio IDs (Icom, Kenwood, FlexRadio, Yaesu)
+3. Adjust protocol and baud rate if the suggestion is incorrect
+4. Click **Add Radio**
 
-3. For Icom radios, you may need to set the CI-V address (default: 0x94)
+## Protocol Selection
+
+Choose the correct protocol for your radio:
+- **Kenwood** - Kenwood, some Elecraft models
+- **Icom CI-V** - All Icom radios
+- **Yaesu Binary** - Older Yaesu radios (FT-450, FT-950, FTDX-3000)
+- **Yaesu ASCII** - Modern Yaesu radios (FT-991, FTDX-101D, FTDX-10, FT-710)
+- **Elecraft** - K3, K4, KX series
+- **FlexRadio** - FlexRadio SDRs via SmartSDR CAT
+
+For Icom radios, you may need to set the CI-V address (default: 0x94).
+
+## Persistent Configuration
+
+Catapult automatically saves your radio configurations. When you restart:
+- All configured radios are restored
+- The application attempts to reconnect to each radio
+- If a port is unavailable, the radio shows as disconnected
 
 ## Multiple Radios
 
