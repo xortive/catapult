@@ -104,6 +104,26 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  # Deploy documentation site to Cloudflare Workers
+  deploy-docs:
+    name: Deploy Docs
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup mdbook
+        uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: 'latest'
+      - name: Build documentation
+        working-directory: docs
+        run: mdbook build
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: docs
+
   # Build ESP32 firmware (separate toolchain)
   firmware:
     name: ESP32 Firmware

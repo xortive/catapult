@@ -1,0 +1,34 @@
+{
+  // Cloudflare Workers configuration for Catapult docs
+  //
+  // Option 1: Use Cloudflare Pages (recommended for static sites)
+  //   - Connect your GitHub repo in Cloudflare Dashboard
+  //   - Build command: cd docs && mdbook build
+  //   - Build output directory: docs/dist
+  //
+  // Option 2: Use Workers with static assets
+  //   - Install wrangler: npm install -g wrangler
+  //   - Build the site: cd docs && mdbook build
+  //   - Deploy: cd docs && wrangler deploy
+
+  "name": "catapult-docs",
+  "main": "worker.js",
+  "compatibility_date": "2025-01-01",
+  "account_id": "0db0d6d4ca27689994a7cce312061023",
+
+  // Static assets configuration
+  "assets": {
+    "directory": "./dist"
+  },
+
+  // Custom domain
+  "routes": [
+    { "pattern": "catapult.alon.so", "custom_domain": true }
+  ],
+
+  // Development settings
+  "dev": {
+    "port": 8787,
+    "local_protocol": "http"
+  }
+}
