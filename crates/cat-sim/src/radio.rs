@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use cat_protocol::{
     elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
-    yaesu::YaesuCommand, EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand,
-    RadioDatabase, RadioModel,
+    yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand,
+    OperatingMode, Protocol, RadioCommand, RadioDatabase, RadioModel,
 };
 use serde::{Deserialize, Serialize};
 
@@ -346,9 +346,8 @@ impl VirtualRadio {
                     CivCommand::new(0xE0, addr, c.command).encode()
                 })
             }
-            Protocol::Yaesu | Protocol::YaesuAscii => {
-                YaesuCommand::from_radio_command(cmd).map(|c| c.encode())
-            }
+            Protocol::Yaesu => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::YaesuAscii => YaesuAsciiCommand::from_radio_command(cmd).map(|c| c.encode()),
             Protocol::FlexRadio => FlexCommand::from_radio_command(cmd).map(|c| c.encode()),
         }
     }

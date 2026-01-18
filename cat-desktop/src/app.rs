@@ -1135,7 +1135,6 @@ impl CatapultApp {
 
     /// Draw the amplifier configuration panel
     fn draw_amplifier_panel(&mut self, ui: &mut Ui) {
-        ui.heading("Amplifier");
 
         // Capture previous state for change detection
         let prev_connection_type = self.amp_connection_type;
@@ -1317,7 +1316,6 @@ impl CatapultApp {
 
     /// Draw the switching mode panel
     fn draw_switching_panel(&mut self, ui: &mut Ui) {
-        ui.heading("Switching");
 
         let mut mode = self.multiplexer.switching_mode();
 
@@ -1568,45 +1566,45 @@ impl eframe::App for CatapultApp {
             egui::SidePanel::right("settings")
                 .default_width(300.0)
                 .show(ctx, |ui| {
-                    ui.heading("Settings");
-                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading("Amplifier");
+                        ui.separator();
+                        self.draw_amplifier_panel(ui);
 
-                    self.settings.draw(ui);
+                        ui.add_space(16.0);
+                        ui.heading("Switching");
+                        ui.separator();
+                        self.draw_switching_panel(ui);
 
-                    ui.separator();
-                    if ui.button("Close").clicked() {
-                        self.show_settings = false;
-                    }
+                        ui.add_space(16.0);
+                        ui.heading("Settings");
+                        ui.separator();
+                        self.settings.draw(ui);
+
+                        ui.add_space(16.0);
+                        ui.separator();
+                        if ui.button("Close").clicked() {
+                            self.show_settings = false;
+                        }
+                    });
                 });
         }
 
-        // Left panel - radio list
-        egui::SidePanel::left("radios")
-            .default_width(280.0)
-            .min_width(200.0)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.draw_radio_panel(ui);
-
-                    ui.add_space(16.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    self.draw_amplifier_panel(ui);
-
-                    ui.add_space(16.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    self.draw_switching_panel(ui);
+        // Console panel - pops out from right when shown
+        if self.show_traffic_monitor {
+            egui::SidePanel::right("console")
+                .default_width(400.0)
+                .min_width(300.0)
+                .show(ctx, |ui| {
+                    self.draw_traffic_panel(ui);
                 });
-            });
+        }
 
-        // Central panel - traffic monitor (conditionally shown)
+        // Central panel - radio list (takes full space when console is closed)
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.show_traffic_monitor {
-                self.draw_traffic_panel(ui);
-            }
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                self.draw_radio_panel(ui);
+            });
         });
 
         // Request repaint only when animations are active or virtual radios exist
