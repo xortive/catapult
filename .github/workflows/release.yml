@@ -15,6 +15,7 @@ jobs:
   # Build binaries for all platforms
   build:
     name: Build (${{ matrix.target }})
+    needs: firmware
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -43,6 +44,16 @@ jobs:
             asset_name: catapult-windows-x86_64.exe
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download firmware binary
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-binary
+          path: cat-desktop/assets
+
+      - name: Rename firmware binary
+        run: mv cat-desktop/assets/cat-bridge cat-desktop/assets/cat-bridge.bin
+        shell: bash
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -124,11 +135,17 @@ jobs:
           cp cat-bridge/target/xtensa-esp32s3-none-elf/release/cat-bridge firmware/
           tar -czvf catapult-esp32s3-firmware.tar.gz -C firmware .
 
-      - name: Upload artifact
+      - name: Upload firmware tarball
         uses: actions/upload-artifact@v4
         with:
           name: catapult-esp32s3-firmware
           path: catapult-esp32s3-firmware.tar.gz
+
+      - name: Upload firmware binary for embedding
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binary
+          path: cat-bridge/target/xtensa-esp32s3-none-elf/release/cat-bridge
 
   # Create GitHub Release
   release:

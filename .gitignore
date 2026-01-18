@@ -19,6 +19,9 @@ Thumbs.db
 *.so
 *.dylib
 
+# Bundled firmware (built separately)
+cat-desktop/assets/cat-bridge.bin
+
 # Logs
 *.log
 
