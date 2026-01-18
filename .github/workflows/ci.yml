@@ -119,11 +119,10 @@ jobs:
         working-directory: docs
         run: mdbook build
       - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: docs
-          wranglerVersion: "4"
 
   # Build ESP32 firmware (separate toolchain)
   firmware:
