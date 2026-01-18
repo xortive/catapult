@@ -1,0 +1,28 @@
+[book]
+title = "Catapult Documentation"
+authors = ["Catapult Contributors"]
+description = "Documentation for Catapult - A CAT Protocol Multiplexer for Amateur Radio"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "dist"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/xortive/catapult"
+edit-url-template = "https://github.com/xortive/catapult/edit/main/docs/{path}"
+site-url = "/"
+cname = ""
+input-404 = "404.md"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20
+boost-title = 2
+boost-hierarchy = 1

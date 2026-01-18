@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["M Alonso"]
 license = "MIT"
-repository = "https://github.com/malonso/catapult"
+repository = "https://github.com/xortive/catapult"
 
 [workspace.dependencies]
 # Internal crates

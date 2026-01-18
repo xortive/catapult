@@ -225,6 +225,33 @@ impl RadioDatabase {
     pub fn flex_radios() -> impl Iterator<Item = RadioModel> {
         FLEX_RADIOS.iter().map(|(_, model)| model.into())
     }
+
+    /// Get all known Yaesu radios
+    pub fn yaesu_radios() -> impl Iterator<Item = RadioModel> {
+        YAESU_RADIOS.iter().map(|(_, model)| model.into())
+    }
+
+    /// Get all radios for a given protocol
+    pub fn radios_for_protocol(protocol: Protocol) -> Vec<RadioModel> {
+        match protocol {
+            Protocol::IcomCIV => Self::icom_radios().collect(),
+            Protocol::Kenwood => Self::kenwood_radios().collect(),
+            Protocol::Elecraft => Self::elecraft_radios().collect(),
+            Protocol::Yaesu => Self::yaesu_radios().collect(),
+            Protocol::FlexRadio => Self::flex_radios().collect(),
+        }
+    }
+
+    /// Get the default (most popular) radio model for a protocol
+    pub fn default_for_protocol(protocol: Protocol) -> Option<RadioModel> {
+        match protocol {
+            Protocol::IcomCIV => Self::by_civ_address(0x94), // IC-7300
+            Protocol::Kenwood => Self::by_kenwood_id("023"), // TS-590SG
+            Protocol::Elecraft => Self::by_elecraft_id("K3"), // K3
+            Protocol::Yaesu => YAESU_RADIOS.first().map(|(_, m)| m.into()),
+            Protocol::FlexRadio => Self::by_flex_id("909"), // FLEX-6600
+        }
+    }
 }
 
 // Standard mode sets

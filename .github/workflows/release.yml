@@ -1,0 +1,177 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  # Build binaries for all platforms
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: catapult
+            asset_name: catapult-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: catapult
+            asset_name: catapult-linux-aarch64
+            cross: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: catapult
+            asset_name: catapult-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: catapult
+            asset_name: catapult-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: catapult.exe
+            asset_name: catapult-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Linux x86_64 dependencies
+      - name: Install dependencies (Linux x86_64)
+        if: matrix.os == 'ubuntu-latest' && !matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+
+      # Cross-compilation setup for Linux ARM64
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@cross
+
+      # Build with cross for ARM64 Linux
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }} -p cat-desktop
+
+      # Build natively for other targets
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }} -p cat-desktop
+
+      # Package the binary
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.asset_name }}.zip ${{ matrix.artifact_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.zip
+
+  # Build ESP32 firmware
+  firmware:
+    name: ESP32 Firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup esp-rs toolchain
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          buildtargets: esp32s3
+          ldproxy: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cat-bridge
+
+      - name: Build firmware
+        working-directory: cat-bridge
+        run: cargo build --release
+
+      - name: Package firmware
+        run: |
+          mkdir -p firmware
+          cp cat-bridge/target/xtensa-esp32s3-none-elf/release/cat-bridge firmware/
+          tar -czvf catapult-esp32s3-firmware.tar.gz -C firmware .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: catapult-esp32s3-firmware
+          path: catapult-esp32s3-firmware.tar.gz
+
+  # Create GitHub Release
+  release:
+    name: Create Release
+    needs: [build, firmware]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+
+  # Deploy documentation to Cloudflare Workers
+  docs:
+    name: Deploy Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup mdbook
+        uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: 'latest'
+
+      - name: Build documentation
+        working-directory: docs
+        run: mdbook build
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: docs
