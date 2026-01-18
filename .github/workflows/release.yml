@@ -71,6 +71,58 @@ jobs:
         if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }} -p cat-desktop
 
+      # macOS codesigning
+      - name: Codesign (macOS)
+        if: matrix.os == 'macos-latest' && env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          # Decode certificate
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+
+          # Create temporary keychain
+          security create-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PWD" build.keychain
+
+          # Sign the binary
+          /usr/bin/codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" \
+            --timestamp target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+          # Verify signature
+          codesign --verify --verbose target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+          # Cleanup
+          rm certificate.p12
+
+      # Windows codesigning
+      - name: Codesign (Windows)
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PWD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
+        run: |
+          # Decode certificate
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          [IO.File]::WriteAllBytes("certificate.pfx", $certBytes)
+
+          # Sign the binary
+          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" sign `
+            /f certificate.pfx `
+            /p $env:WINDOWS_CERTIFICATE_PWD `
+            /tr http://timestamp.digicert.com `
+            /td sha256 `
+            /fd sha256 `
+            "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+
+          # Cleanup
+          Remove-Item certificate.pfx
+
       # Package the binary
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
