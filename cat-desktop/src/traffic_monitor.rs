@@ -334,7 +334,6 @@ impl TrafficMonitor {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .stick_to_bottom(self.auto_scroll)
-            .animated(false) // Disable animation to prevent jitter when new entries arrive
             .show_rows(ui, row_height, filtered_indices.len(), |ui, row_range| {
                 for i in row_range {
                     if let Some(&entry_idx) = filtered_indices.get(i) {
@@ -343,6 +342,8 @@ impl TrafficMonitor {
                         }
                     }
                 }
+                // Bottom padding to prevent scroll jitter at boundary
+                ui.add_space(4.0);
             });
     }
 
