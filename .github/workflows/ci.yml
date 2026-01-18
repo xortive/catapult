@@ -123,6 +123,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: docs
+          wranglerVersion: "4"
 
   # Build ESP32 firmware (separate toolchain)
   firmware:
