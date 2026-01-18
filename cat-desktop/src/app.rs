@@ -54,10 +54,12 @@ pub enum BackgroundMessage {
     ScanComplete(Vec<DetectedRadio>),
     /// Error occurred
     Error(String),
-    /// Traffic received
+    /// Traffic received from radio
     TrafficIn { radio: RadioHandle, data: Vec<u8> },
-    /// Traffic sent
+    /// Traffic sent to amplifier
     TrafficOut { data: Vec<u8> },
+    /// Traffic received from amplifier
+    AmpTrafficIn { data: Vec<u8> },
 }
 
 /// Main application state
@@ -312,6 +314,22 @@ impl CatapultApp {
         self.status_message = Some((msg, Instant::now()));
     }
 
+    /// Get the protocol for a radio by its handle
+    fn get_protocol_for_radio(&self, handle: RadioHandle) -> Option<Protocol> {
+        self.radio_panels
+            .iter()
+            .find(|p| p.handle == handle)
+            .map(|p| p.protocol)
+    }
+
+    /// Get the protocol for a virtual radio by its simulation ID
+    fn get_protocol_for_sim_radio(&self, radio_id: &str) -> Option<Protocol> {
+        self.simulation_panel
+            .context()
+            .get_radio(radio_id)
+            .map(|r| r.protocol())
+    }
+
     /// Get set of ports currently used by radios
     fn radio_ports_in_use(&self) -> HashSet<String> {
         self.radio_panels
@@ -400,10 +418,17 @@ impl CatapultApp {
                     self.set_status(format!("Error: {}", e));
                 }
                 BackgroundMessage::TrafficIn { radio, data } => {
-                    self.traffic_monitor.add_incoming(radio, &data);
+                    let protocol = self.get_protocol_for_radio(radio);
+                    self.traffic_monitor.add_incoming(radio, &data, protocol);
                 }
                 BackgroundMessage::TrafficOut { data } => {
-                    self.traffic_monitor.add_outgoing(&data);
+                    // Outgoing to amplifier - use amplifier protocol
+                    self.traffic_monitor.add_outgoing(&data, Some(self.amp_protocol));
+                }
+                BackgroundMessage::AmpTrafficIn { data } => {
+                    // Incoming from amplifier - use amplifier protocol
+                    self.traffic_monitor
+                        .add_from_amplifier(self.amp_port.clone(), &data, Some(self.amp_protocol));
                 }
             }
         }
@@ -423,13 +448,14 @@ impl CatapultApp {
                 }
                 MultiplexerEvent::AmplifierCommand(data) => {
                     // Send to amplifier if connected, otherwise log as simulated
+                    let amp_protocol = Some(self.amp_protocol);
                     if let Some(ref mut conn) = self.amp_connection {
-                        self.traffic_monitor.add_outgoing(&data);
+                        self.traffic_monitor.add_outgoing(&data, amp_protocol);
                         if let Err(e) = conn.write(&data) {
                             self.set_status(format!("Amplifier write error: {}", e));
                         }
                     } else {
-                        self.traffic_monitor.add_simulated_outgoing(&data);
+                        self.traffic_monitor.add_simulated_outgoing(&data, amp_protocol);
                     }
                 }
                 MultiplexerEvent::Error(e) => {
@@ -622,6 +648,7 @@ impl CatapultApp {
                                         Protocol::Kenwood,
                                         Protocol::IcomCIV,
                                         Protocol::Yaesu,
+                                        Protocol::YaesuAscii,
                                         Protocol::Elecraft,
                                         Protocol::FlexRadio,
                                     ] {
@@ -672,6 +699,7 @@ impl CatapultApp {
                         Protocol::Kenwood,
                         Protocol::IcomCIV,
                         Protocol::Yaesu,
+                        Protocol::YaesuAscii,
                         Protocol::Elecraft,
                         Protocol::FlexRadio,
                     ] {
@@ -1056,10 +1084,11 @@ impl CatapultApp {
                 egui::ComboBox::from_id_salt("amp_protocol")
                     .selected_text(self.amp_protocol.name())
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::Kenwood, "Kenwood");
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::IcomCIV, "Icom CI-V");
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::Yaesu, "Yaesu");
-                        ui.selectable_value(&mut self.amp_protocol, Protocol::Elecraft, "Elecraft");
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::Kenwood, Protocol::Kenwood.name());
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::IcomCIV, Protocol::IcomCIV.name());
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::Yaesu, Protocol::Yaesu.name());
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::YaesuAscii, Protocol::YaesuAscii.name());
+                        ui.selectable_value(&mut self.amp_protocol, Protocol::Elecraft, Protocol::Elecraft.name());
                     });
                 ui.end_row();
 
@@ -1313,8 +1342,14 @@ impl CatapultApp {
         for event in self.simulation_panel.drain_events() {
             match event {
                 SimulationEvent::RadioOutput { radio_id, data } => {
-                    // Add to traffic monitor as simulated incoming
-                    self.traffic_monitor.add_simulated_incoming(radio_id, &data);
+                    // Add to traffic monitor as simulated incoming (response from radio)
+                    let protocol = self.get_protocol_for_sim_radio(&radio_id);
+                    self.traffic_monitor.add_simulated_incoming(radio_id, &data, protocol);
+                }
+                SimulationEvent::RadioCommandSent { radio_id, data } => {
+                    // Add to traffic monitor as outgoing to simulated radio
+                    let protocol = self.get_protocol_for_sim_radio(&radio_id);
+                    self.traffic_monitor.add_to_simulated_radio(radio_id, &data, protocol);
                 }
                 SimulationEvent::RadioAdded { radio_id } => {
                     // Register the simulated radio with the multiplexer
@@ -1335,6 +1370,13 @@ impl CatapultApp {
                             protocol,
                             radio_id.clone(),
                         ));
+
+                        // Enable auto-info mode on the radio so it sends unsolicited updates
+                        // This is done via send_command which generates traffic monitor events
+                        self.simulation_panel.context_mut().send_command(
+                            &radio_id,
+                            &RadioCommand::EnableAutoInfo { enabled: true },
+                        );
                     }
                     self.set_status(format!("Virtual radio added: {}", radio_id));
                     // Save virtual radios to settings
@@ -1390,6 +1432,11 @@ impl eframe::App for CatapultApp {
         self.process_messages();
         self.process_simulation_events();
         self.process_mux_events();
+
+        // Poll amplifier for incoming data
+        if let Some(ref mut conn) = self.amp_connection {
+            conn.poll();
+        }
 
         // Clear old status messages
         if let Some((_, when)) = &self.status_message {

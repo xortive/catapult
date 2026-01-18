@@ -130,6 +130,7 @@ impl SimulationPanel {
                         Protocol::Kenwood,
                         Protocol::IcomCIV,
                         Protocol::Yaesu,
+                        Protocol::YaesuAscii,
                         Protocol::Elecraft,
                         Protocol::FlexRadio,
                     ] {

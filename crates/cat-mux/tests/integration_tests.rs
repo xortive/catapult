@@ -919,7 +919,7 @@ mod proptest_tests {
 
             // Verify protocol-specific markers
             match target {
-                Protocol::Kenwood | Protocol::Elecraft | Protocol::FlexRadio => {
+                Protocol::Kenwood | Protocol::Elecraft | Protocol::FlexRadio | Protocol::YaesuAscii => {
                     prop_assert!(bytes.ends_with(b";"));
                 }
                 Protocol::IcomCIV => {

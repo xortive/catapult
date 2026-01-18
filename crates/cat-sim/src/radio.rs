@@ -333,7 +333,7 @@ impl VirtualRadio {
     }
 
     /// Encode a RadioCommand to protocol bytes
-    fn encode_command(&self, cmd: &RadioCommand) -> Option<Vec<u8>> {
+    pub fn encode_command(&self, cmd: &RadioCommand) -> Option<Vec<u8>> {
         match self.protocol {
             Protocol::Kenwood => KenwoodCommand::from_radio_command(cmd).map(|c| c.encode()),
             Protocol::Elecraft => ElecraftCommand::from_radio_command(cmd).map(|c| c.encode()),

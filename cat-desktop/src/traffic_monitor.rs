@@ -26,20 +26,32 @@ fn segment_color(segment_type: SegmentType) -> Color32 {
 /// Source of traffic data
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrafficSource {
-    /// Real radio on a serial port
+    /// Real radio on a serial port (incoming)
     RealRadio { handle: RadioHandle, port: String },
-    /// Simulated radio
+    /// Simulated radio (incoming)
     SimulatedRadio { id: String },
-    /// Real amplifier on a serial port
+    /// Command sent to simulated radio (outgoing to radio)
+    ToSimulatedRadio { id: String },
+    /// Real amplifier on a serial port (outgoing to amp)
     RealAmplifier { port: String },
-    /// Simulated amplifier (no real connection)
+    /// Real amplifier on a serial port (incoming from amp)
+    FromRealAmplifier { port: String },
+    /// Simulated amplifier (outgoing to amp)
     SimulatedAmplifier,
+    /// Simulated amplifier (incoming from amp)
+    FromSimulatedAmplifier,
 }
 
 impl TrafficSource {
     /// Check if this is a simulated source
     pub fn is_simulated(&self) -> bool {
-        matches!(self, Self::SimulatedRadio { .. } | Self::SimulatedAmplifier)
+        matches!(
+            self,
+            Self::SimulatedRadio { .. }
+                | Self::ToSimulatedRadio { .. }
+                | Self::SimulatedAmplifier
+                | Self::FromSimulatedAmplifier
+        )
     }
 }
 
@@ -97,12 +109,18 @@ impl TrafficMonitor {
     }
 
     /// Add an incoming traffic entry from a real radio
-    pub fn add_incoming(&mut self, radio: RadioHandle, data: &[u8]) {
-        self.add_incoming_with_port(radio, String::new(), data);
+    pub fn add_incoming(&mut self, radio: RadioHandle, data: &[u8], protocol: Option<Protocol>) {
+        self.add_incoming_with_port(radio, String::new(), data, protocol);
     }
 
     /// Add an incoming traffic entry from a real radio with port info
-    pub fn add_incoming_with_port(&mut self, radio: RadioHandle, port: String, data: &[u8]) {
+    pub fn add_incoming_with_port(
+        &mut self,
+        radio: RadioHandle,
+        port: String,
+        data: &[u8],
+        protocol: Option<Protocol>,
+    ) {
         if self.paused {
             return;
         }
@@ -115,12 +133,12 @@ impl TrafficMonitor {
                 port,
             },
             data: data.to_vec(),
-            decoded: decode_and_annotate(data),
+            decoded: decode_and_annotate_with_hint(data, protocol),
         });
     }
 
     /// Add an incoming traffic entry from a simulated radio
-    pub fn add_simulated_incoming(&mut self, id: String, data: &[u8]) {
+    pub fn add_simulated_incoming(&mut self, id: String, data: &[u8], protocol: Option<Protocol>) {
         if self.paused {
             return;
         }
@@ -130,17 +148,17 @@ impl TrafficMonitor {
             direction: TrafficDirection::Incoming,
             source: TrafficSource::SimulatedRadio { id },
             data: data.to_vec(),
-            decoded: decode_and_annotate(data),
+            decoded: decode_and_annotate_with_hint(data, protocol),
         });
     }
 
     /// Add an outgoing traffic entry to real amplifier
-    pub fn add_outgoing(&mut self, data: &[u8]) {
-        self.add_outgoing_with_port(String::new(), data);
+    pub fn add_outgoing(&mut self, data: &[u8], protocol: Option<Protocol>) {
+        self.add_outgoing_with_port(String::new(), data, protocol);
     }
 
     /// Add an outgoing traffic entry to real amplifier with port info
-    pub fn add_outgoing_with_port(&mut self, port: String, data: &[u8]) {
+    pub fn add_outgoing_with_port(&mut self, port: String, data: &[u8], protocol: Option<Protocol>) {
         if self.paused {
             return;
         }
@@ -150,12 +168,12 @@ impl TrafficMonitor {
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::RealAmplifier { port },
             data: data.to_vec(),
-            decoded: decode_and_annotate(data),
+            decoded: decode_and_annotate_with_hint(data, protocol),
         });
     }
 
     /// Add an outgoing traffic entry to simulated amplifier
-    pub fn add_simulated_outgoing(&mut self, data: &[u8]) {
+    pub fn add_simulated_outgoing(&mut self, data: &[u8], protocol: Option<Protocol>) {
         if self.paused {
             return;
         }
@@ -165,7 +183,52 @@ impl TrafficMonitor {
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::SimulatedAmplifier,
             data: data.to_vec(),
-            decoded: decode_and_annotate(data),
+            decoded: decode_and_annotate_with_hint(data, protocol),
+        });
+    }
+
+    /// Add an outgoing traffic entry to simulated radio (command sent to radio)
+    pub fn add_to_simulated_radio(&mut self, id: String, data: &[u8], protocol: Option<Protocol>) {
+        if self.paused {
+            return;
+        }
+
+        self.add_entry(TrafficEntry {
+            timestamp: SystemTime::now(),
+            direction: TrafficDirection::Outgoing,
+            source: TrafficSource::ToSimulatedRadio { id },
+            data: data.to_vec(),
+            decoded: decode_and_annotate_with_hint(data, protocol),
+        });
+    }
+
+    /// Add an incoming traffic entry from real amplifier
+    pub fn add_from_amplifier(&mut self, port: String, data: &[u8], protocol: Option<Protocol>) {
+        if self.paused {
+            return;
+        }
+
+        self.add_entry(TrafficEntry {
+            timestamp: SystemTime::now(),
+            direction: TrafficDirection::Incoming,
+            source: TrafficSource::FromRealAmplifier { port },
+            data: data.to_vec(),
+            decoded: decode_and_annotate_with_hint(data, protocol),
+        });
+    }
+
+    /// Add an incoming traffic entry from simulated amplifier
+    pub fn add_from_simulated_amplifier(&mut self, data: &[u8], protocol: Option<Protocol>) {
+        if self.paused {
+            return;
+        }
+
+        self.add_entry(TrafficEntry {
+            timestamp: SystemTime::now(),
+            direction: TrafficDirection::Incoming,
+            source: TrafficSource::FromSimulatedAmplifier,
+            data: data.to_vec(),
+            decoded: decode_and_annotate_with_hint(data, protocol),
         });
     }
 
@@ -327,9 +390,23 @@ impl TrafficMonitor {
                             .monospace(),
                     );
                 }
+                TrafficSource::ToSimulatedRadio { id } => {
+                    ui.label(
+                        RichText::new(format!("[→{}]", id))
+                            .color(Color32::from_rgb(180, 100, 255)) // Purple for outgoing to radio
+                            .monospace(),
+                    );
+                }
                 TrafficSource::RealAmplifier { .. } => {
                     ui.label(
                         RichText::new("[→Amp]")
+                            .color(Color32::LIGHT_GREEN)
+                            .monospace(),
+                    );
+                }
+                TrafficSource::FromRealAmplifier { .. } => {
+                    ui.label(
+                        RichText::new("[Amp→]")
                             .color(Color32::LIGHT_GREEN)
                             .monospace(),
                     );
@@ -341,15 +418,24 @@ impl TrafficMonitor {
                             .monospace(),
                     );
                 }
+                TrafficSource::FromSimulatedAmplifier => {
+                    ui.label(
+                        RichText::new("[Amp→]")
+                            .color(Color32::from_rgb(100, 180, 100))
+                            .monospace(),
+                    );
+                }
             }
 
             // Protocol badge
             if let Some(decoded) = &entry.decoded {
                 let protocol_color = match decoded.protocol {
-                    "CI-V" => Color32::from_rgb(255, 180, 100),  // Orange
-                    "Yaesu" => Color32::from_rgb(100, 200, 255), // Cyan
-                    "Kenwood" => Color32::from_rgb(180, 255, 100), // Lime
-                    "Flex" => Color32::from_rgb(255, 150, 255),  // Magenta
+                    "CI-V" => Color32::from_rgb(255, 180, 100),      // Orange
+                    "Yaesu" => Color32::from_rgb(100, 200, 255),     // Cyan (binary CAT)
+                    "Yaesu ASCII" => Color32::from_rgb(80, 180, 230), // Slightly different cyan
+                    "Kenwood" => Color32::from_rgb(180, 255, 100),   // Lime
+                    "Elecraft" => Color32::from_rgb(200, 255, 120),  // Light lime
+                    "Flex" => Color32::from_rgb(255, 150, 255),      // Magenta
                     _ => Color32::GRAY,
                 };
                 ui.label(

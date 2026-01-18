@@ -5,6 +5,11 @@
 //! - Standard Kenwood 2-letter commands (FA, FB, MD, TX, RX, ID, IF)
 //! - FlexRadio extended 4-letter ZZ commands (ZZFA, ZZFB, ZZMD, ZZTX, ZZIF)
 //!
+//! # Architecture
+//! This implementation uses composition with `KenwoodCodec` to avoid duplicating
+//! parsing logic. Standard Kenwood commands are delegated to the inner codec,
+//! while FlexRadio-specific ZZ commands are handled here.
+//!
 //! # Protocol Differences by Generation
 //!
 //! All FlexRadio generations use the same CAT protocol via SmartSDR CAT.
@@ -37,35 +42,18 @@
 //! - 913 = FLEX-8600
 
 use crate::command::{OperatingMode, RadioCommand, Vfo};
-use crate::error::ParseError;
+use crate::kenwood::{KenwoodCodec, KenwoodCommand};
 use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
-
-/// Maximum command length (reasonable limit to prevent buffer overflow)
-const MAX_COMMAND_LEN: usize = 128;
 
 /// FlexRadio protocol command
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlexCommand {
-    /// Set/get VFO A frequency: ZZFA00014250000; or FA00014250000;
-    FrequencyA(Option<u64>),
-    /// Set/get VFO B frequency: ZZFB00007074000; or FB00007074000;
-    FrequencyB(Option<u64>),
-    /// Set/get mode: ZZMD01; (2-digit) or MD1; (Kenwood 1-digit)
+    /// Base Kenwood command (for compatible commands like FA, FB, TX, RX, ID, FR, FT, PS)
+    Kenwood(KenwoodCommand),
+    /// Mode with FlexRadio's extended mode set: ZZMD01; or MD1;
     Mode(Option<FlexMode>),
-    /// Transmit: ZZTX1; or TX1;
-    Transmit(Option<bool>),
-    /// Receive: RX;
-    Receive,
-    /// Radio identification query: ID;
-    Id(Option<String>),
-    /// Information/status query: ZZIF...; or IF...;
+    /// FlexRadio extended status: ZZIF...;
     Info(Option<FlexInfo>),
-    /// VFO select: FR0; or ZZFR;
-    VfoSelect(Option<u8>),
-    /// Split mode toggle: ZZSW0; or FT0;
-    Split(Option<bool>),
-    /// Power control: PS0; or PS1;
-    Power(Option<bool>),
     /// Audio gain: ZZAG000; (0-100)
     AudioGain(Option<u8>),
     /// RF power level: ZZPC000; (0-100)
@@ -143,6 +131,21 @@ impl FlexMode {
         }
     }
 
+    /// Convert from Kenwood mode number (1-10)
+    pub fn from_kenwood_mode(mode: u8) -> Self {
+        match mode {
+            1 => Self::Lsb,
+            2 => Self::Usb,
+            3 => Self::CwU,
+            4 => Self::Fm,
+            5 => Self::Am,
+            6 => Self::Rtty,
+            7 => Self::CwL,
+            9 => Self::Rtty,
+            _ => Self::Usb,
+        }
+    }
+
     /// Convert to ZZMD parameter value
     pub fn to_code(self) -> u8 {
         match self {
@@ -204,7 +207,7 @@ impl FlexMode {
     }
 }
 
-/// Parsed ZZIF/IF response data
+/// Parsed ZZIF response data
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlexInfo {
     /// Current frequency in Hz
@@ -228,275 +231,179 @@ pub struct FlexInfo {
 }
 
 /// Streaming FlexRadio protocol codec
+///
+/// Uses composition with `KenwoodCodec` to handle standard Kenwood commands,
+/// while parsing FlexRadio-specific ZZ commands locally.
 pub struct FlexCodec {
-    buffer: Vec<u8>,
+    inner: KenwoodCodec,
 }
 
 impl FlexCodec {
     /// Create a new FlexRadio codec
     pub fn new() -> Self {
         Self {
-            buffer: Vec::with_capacity(128),
+            inner: KenwoodCodec::new(),
         }
     }
 
-    /// Parse a complete command string (without terminator)
-    fn parse_command(cmd: &str) -> Result<FlexCommand, ParseError> {
-        if cmd.is_empty() {
-            return Err(ParseError::InvalidFrame("empty command".into()));
+    /// Parse FlexRadio ZZ-prefixed commands
+    fn parse_zz_command(cmd_str: &str) -> Option<FlexCommand> {
+        if cmd_str.len() < 4 || !cmd_str.starts_with("ZZ") {
+            return None;
         }
 
-        // Check for ZZ-prefixed commands first (4-letter)
-        if cmd.starts_with("ZZ") && cmd.len() >= 4 {
-            return Self::parse_zz_command(cmd);
-        }
-
-        // Standard Kenwood-style commands (2-letter)
-        if cmd.len() < 2 {
-            return Err(ParseError::InvalidFrame("command too short".into()));
-        }
-
-        let prefix = &cmd[..2];
-        let params = &cmd[2..];
+        let prefix = &cmd_str[..4];
+        let params = &cmd_str[4..];
 
         match prefix {
-            "FA" => Self::parse_frequency_a(params),
-            "FB" => Self::parse_frequency_b(params),
-            "MD" => Self::parse_mode_kenwood(params),
-            "TX" => Self::parse_transmit(params),
-            "RX" => Ok(FlexCommand::Receive),
-            "ID" => Self::parse_id(params),
-            "IF" => Self::parse_info(params),
-            "FR" => Self::parse_vfo_select(params),
-            "FT" => Self::parse_split(params),
-            "PS" => Self::parse_power(params),
-            "AI" => Self::parse_auto_info(params),
-            _ => Ok(FlexCommand::Unknown(cmd.to_string())),
+            "ZZFA" => Some(Self::parse_frequency_a(params)),
+            "ZZFB" => Some(Self::parse_frequency_b(params)),
+            "ZZMD" | "ZZME" => Some(Self::parse_mode_flex(params)),
+            "ZZTX" => Some(Self::parse_transmit(params)),
+            "ZZIF" => Some(Self::parse_info(params)),
+            "ZZFR" => Some(Self::parse_vfo_select(params)),
+            "ZZSW" => Some(Self::parse_split(params)),
+            "ZZAG" => Some(FlexCommand::AudioGain(params.parse().ok())),
+            "ZZPC" => Some(FlexCommand::RfPower(params.parse().ok())),
+            "ZZSM" => Some(FlexCommand::SMeter(params.parse().ok())),
+            "ZZGT" => Some(FlexCommand::AgcMode(params.parse().ok())),
+            "ZZNR" => Some(FlexCommand::NoiseReduction(if params.is_empty() {
+                None
+            } else {
+                Some(params != "0")
+            })),
+            "ZZAI" => Some(FlexCommand::AutoInfo(if params.is_empty() {
+                None
+            } else {
+                Some(params != "0")
+            })),
+            _ => None,
         }
     }
 
-    /// Parse ZZ-prefixed FlexRadio commands
-    fn parse_zz_command(cmd: &str) -> Result<FlexCommand, ParseError> {
-        let prefix = &cmd[..4];
-        let params = &cmd[4..];
-
-        match prefix {
-            "ZZFA" => Self::parse_frequency_a(params),
-            "ZZFB" => Self::parse_frequency_b(params),
-            "ZZMD" | "ZZME" => Self::parse_mode_flex(params),
-            "ZZTX" => Self::parse_transmit(params),
-            "ZZIF" => Self::parse_info(params),
-            "ZZFR" => Self::parse_vfo_select(params),
-            "ZZSW" => Self::parse_split(params),
-            "ZZAG" => Self::parse_audio_gain(params),
-            "ZZPC" => Self::parse_rf_power(params),
-            "ZZSM" => Self::parse_smeter(params),
-            "ZZGT" => Self::parse_agc_mode(params),
-            "ZZNR" => Self::parse_noise_reduction(params),
-            "ZZAI" => Self::parse_auto_info(params),
-            _ => Ok(FlexCommand::Unknown(cmd.to_string())),
-        }
-    }
-
-    fn parse_frequency_a(params: &str) -> Result<FlexCommand, ParseError> {
+    /// Parse ZZ frequency commands - returns FlexCommand wrapping Kenwood
+    fn parse_frequency_a(params: &str) -> FlexCommand {
         if params.is_empty() {
-            Ok(FlexCommand::FrequencyA(None))
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyA(None))
         } else {
-            let freq = params
-                .parse::<u64>()
-                .map_err(|_| ParseError::InvalidFrequency(params.into()))?;
-            Ok(FlexCommand::FrequencyA(Some(freq)))
+            let freq = params.parse::<u64>().ok();
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyA(freq))
         }
     }
 
-    fn parse_frequency_b(params: &str) -> Result<FlexCommand, ParseError> {
+    fn parse_frequency_b(params: &str) -> FlexCommand {
         if params.is_empty() {
-            Ok(FlexCommand::FrequencyB(None))
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyB(None))
         } else {
-            let freq = params
-                .parse::<u64>()
-                .map_err(|_| ParseError::InvalidFrequency(params.into()))?;
-            Ok(FlexCommand::FrequencyB(Some(freq)))
+            let freq = params.parse::<u64>().ok();
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyB(freq))
         }
     }
 
-    fn parse_mode_kenwood(params: &str) -> Result<FlexCommand, ParseError> {
+    fn parse_mode_flex(params: &str) -> FlexCommand {
         if params.is_empty() {
-            Ok(FlexCommand::Mode(None))
+            FlexCommand::Mode(None)
+        } else if let Ok(code) = params.parse::<u8>() {
+            FlexCommand::Mode(FlexMode::from_code(code))
         } else {
-            // Kenwood uses single digit, map to FlexMode
-            let mode_num = params
-                .parse::<u8>()
-                .map_err(|_| ParseError::InvalidMode(params.into()))?;
-            // Map Kenwood mode numbers to FlexMode
-            let flex_mode = match mode_num {
-                1 => FlexMode::Lsb,
-                2 => FlexMode::Usb,
-                3 => FlexMode::CwU,
-                4 => FlexMode::Fm,
-                5 => FlexMode::Am,
-                6 => FlexMode::Rtty,
-                7 => FlexMode::CwL,
-                9 => FlexMode::Rtty,
-                _ => FlexMode::Usb,
-            };
-            Ok(FlexCommand::Mode(Some(flex_mode)))
+            FlexCommand::Mode(None)
         }
     }
 
-    fn parse_mode_flex(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::Mode(None))
+    fn parse_transmit(params: &str) -> FlexCommand {
+        let tx = if params.is_empty() {
+            Some(true)
         } else {
-            let mode_num = params
-                .parse::<u8>()
-                .map_err(|_| ParseError::InvalidMode(params.into()))?;
-            let flex_mode = FlexMode::from_code(mode_num)
-                .ok_or_else(|| ParseError::InvalidMode(params.into()))?;
-            Ok(FlexCommand::Mode(Some(flex_mode)))
+            Some(params != "0")
+        };
+        FlexCommand::Kenwood(KenwoodCommand::Transmit(tx))
+    }
+
+    fn parse_info(params: &str) -> FlexCommand {
+        if params.is_empty() {
+            FlexCommand::Info(None)
+        } else if let Some(info) = Self::try_parse_flex_info(params) {
+            FlexCommand::Info(Some(info))
+        } else {
+            FlexCommand::Info(None)
         }
     }
 
-    fn parse_transmit(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::Transmit(Some(true)))
-        } else {
-            let tx = params != "0";
-            Ok(FlexCommand::Transmit(Some(tx)))
+    fn try_parse_flex_info(params: &str) -> Option<FlexInfo> {
+        // ZZIF format: 11-digit freq, 4-digit step, 6-digit RIT, RIT on, XIT on, TX, mode, VFO, split
+        if params.len() < 28 {
+            return None;
         }
+
+        let frequency_hz = params[0..11].parse::<u64>().ok()?;
+        let step_size = params[11..15].parse::<u32>().unwrap_or(1);
+        let rit_offset = params[15..21].parse::<i32>().unwrap_or(0);
+        let rit_on = params.chars().nth(21) == Some('1');
+        let xit_on = params.chars().nth(22) == Some('1');
+        let tx = params.chars().nth(23) != Some('0');
+        let mode_code = params[24..26].parse::<u8>().unwrap_or(1);
+        let mode = FlexMode::from_code(mode_code).unwrap_or(FlexMode::Usb);
+        let vfo = params[26..27].parse::<u8>().unwrap_or(0);
+        let split = params.chars().nth(27) == Some('1');
+
+        Some(FlexInfo {
+            frequency_hz,
+            step_size,
+            rit_offset,
+            rit_on,
+            xit_on,
+            tx,
+            mode,
+            vfo,
+            split,
+        })
     }
 
-    fn parse_id(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::Id(None))
+    fn parse_vfo_select(params: &str) -> FlexCommand {
+        let vfo = if params.is_empty() {
+            None
         } else {
-            Ok(FlexCommand::Id(Some(params.to_string())))
-        }
+            params.parse().ok()
+        };
+        FlexCommand::Kenwood(KenwoodCommand::VfoSelect(vfo))
     }
 
-    fn parse_info(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::Info(None))
+    fn parse_split(params: &str) -> FlexCommand {
+        let split = if params.is_empty() {
+            None
         } else {
-            // ZZIF format: 11-digit freq, 4-digit step, 6-digit RIT, RIT on, XIT on, TX, mode, VFO, split
-            if params.len() < 28 {
-                return Err(ParseError::InvalidFrame(format!(
-                    "IF response too short: {} chars",
-                    params.len()
-                )));
+            Some(params != "0")
+        };
+        FlexCommand::Kenwood(KenwoodCommand::Split(split))
+    }
+
+    /// Convert a Kenwood command to FlexCommand, handling Mode specially
+    fn convert_kenwood_command(kw: KenwoodCommand) -> FlexCommand {
+        match kw {
+            // Mode needs special handling for FlexMode conversion
+            KenwoodCommand::Mode(Some(m)) => FlexCommand::Mode(Some(FlexMode::from_kenwood_mode(m))),
+            KenwoodCommand::Mode(None) => FlexCommand::Mode(None),
+            // AutoInfo is handled as Flex-specific for ZZ encoding
+            KenwoodCommand::AutoInfo(enabled) => FlexCommand::AutoInfo(enabled),
+            // Info uses FlexInfo structure
+            KenwoodCommand::Info(Some(info)) => {
+                FlexCommand::Info(Some(FlexInfo {
+                    frequency_hz: info.frequency_hz,
+                    step_size: 1,
+                    rit_offset: info.rit_offset as i32,
+                    rit_on: info.rit_on,
+                    xit_on: info.xit_on,
+                    tx: info.tx,
+                    mode: FlexMode::from_kenwood_mode(info.mode),
+                    vfo: info.vfo,
+                    split: info.split,
+                }))
             }
-
-            let frequency_hz = params[0..11]
-                .parse::<u64>()
-                .map_err(|_| ParseError::InvalidFrequency(params[0..11].into()))?;
-
-            let step_size = params[11..15].parse::<u32>().unwrap_or(1);
-
-            let rit_offset = params[15..21].parse::<i32>().unwrap_or(0);
-            let rit_on = params.chars().nth(21) == Some('1');
-            let xit_on = params.chars().nth(22) == Some('1');
-            let tx = params.chars().nth(23) != Some('0');
-
-            let mode_code = params[24..26].parse::<u8>().unwrap_or(1);
-            let mode = FlexMode::from_code(mode_code).unwrap_or(FlexMode::Usb);
-
-            let vfo = params[26..27].parse::<u8>().unwrap_or(0);
-            let split = params.chars().nth(27) == Some('1');
-
-            Ok(FlexCommand::Info(Some(FlexInfo {
-                frequency_hz,
-                step_size,
-                rit_offset,
-                rit_on,
-                xit_on,
-                tx,
-                mode,
-                vfo,
-                split,
-            })))
-        }
-    }
-
-    fn parse_vfo_select(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::VfoSelect(None))
-        } else {
-            let vfo = params
-                .parse::<u8>()
-                .map_err(|_| ParseError::InvalidFrame("invalid VFO".into()))?;
-            Ok(FlexCommand::VfoSelect(Some(vfo)))
-        }
-    }
-
-    fn parse_split(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::Split(None))
-        } else {
-            let split = params != "0";
-            Ok(FlexCommand::Split(Some(split)))
-        }
-    }
-
-    fn parse_power(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::Power(None))
-        } else {
-            let on = params != "0";
-            Ok(FlexCommand::Power(Some(on)))
-        }
-    }
-
-    fn parse_audio_gain(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::AudioGain(None))
-        } else {
-            let gain = params.parse::<u8>().unwrap_or(50);
-            Ok(FlexCommand::AudioGain(Some(gain)))
-        }
-    }
-
-    fn parse_rf_power(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::RfPower(None))
-        } else {
-            let power = params.parse::<u8>().unwrap_or(100);
-            Ok(FlexCommand::RfPower(Some(power)))
-        }
-    }
-
-    fn parse_smeter(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::SMeter(None))
-        } else {
-            let value = params.parse::<i16>().unwrap_or(0);
-            Ok(FlexCommand::SMeter(Some(value)))
-        }
-    }
-
-    fn parse_agc_mode(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::AgcMode(None))
-        } else {
-            let mode = params.parse::<u8>().unwrap_or(0);
-            Ok(FlexCommand::AgcMode(Some(mode)))
-        }
-    }
-
-    fn parse_noise_reduction(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::NoiseReduction(None))
-        } else {
-            let on = params != "0";
-            Ok(FlexCommand::NoiseReduction(Some(on)))
-        }
-    }
-
-    fn parse_auto_info(params: &str) -> Result<FlexCommand, ParseError> {
-        if params.is_empty() {
-            Ok(FlexCommand::AutoInfo(None))
-        } else {
-            let enabled = params != "0";
-            Ok(FlexCommand::AutoInfo(Some(enabled)))
+            KenwoodCommand::Info(None) => FlexCommand::Info(None),
+            // Unknown commands that might be Flex-specific
+            KenwoodCommand::Unknown(s) => FlexCommand::Unknown(s),
+            // All other Kenwood commands wrap directly
+            other => FlexCommand::Kenwood(other),
         }
     }
 }
@@ -511,55 +418,37 @@ impl ProtocolCodec for FlexCodec {
     type Command = FlexCommand;
 
     fn push_bytes(&mut self, data: &[u8]) {
-        self.buffer.extend_from_slice(data);
-
-        // Prevent buffer overflow
-        if self.buffer.len() > MAX_COMMAND_LEN * 4 {
-            let start = self.buffer.len() - MAX_COMMAND_LEN;
-            self.buffer = self.buffer[start..].to_vec();
-        }
+        self.inner.push_bytes(data);
     }
 
     fn next_command(&mut self) -> Option<Self::Command> {
-        // Find terminator
-        let term_pos = self.buffer.iter().position(|&b| b == b';')?;
+        // Get the next Kenwood command
+        let kenwood_cmd = self.inner.next_command()?;
 
-        // Extract command bytes
-        let cmd_bytes: Vec<u8> = self.buffer.drain(..=term_pos).collect();
-
-        // Parse as ASCII (strip terminator)
-        let cmd_str = String::from_utf8_lossy(&cmd_bytes[..cmd_bytes.len() - 1]);
-
-        match Self::parse_command(&cmd_str) {
-            Ok(cmd) => Some(cmd),
-            Err(e) => {
-                tracing::warn!("Failed to parse FlexRadio command: {}", e);
-                Some(FlexCommand::Unknown(cmd_str.into_owned()))
+        // Check if it's an unknown command that might be FlexRadio-specific (ZZ prefix)
+        if let KenwoodCommand::Unknown(ref s) = kenwood_cmd {
+            if let Some(flex_cmd) = Self::parse_zz_command(s) {
+                return Some(flex_cmd);
             }
         }
+
+        // Convert Kenwood command to FlexCommand
+        Some(Self::convert_kenwood_command(kenwood_cmd))
     }
 
     fn clear(&mut self) {
-        self.buffer.clear();
+        self.inner.clear();
     }
 }
 
 impl ToRadioCommand for FlexCommand {
     fn to_radio_command(&self) -> RadioCommand {
         match self {
-            FlexCommand::FrequencyA(Some(hz)) => RadioCommand::SetFrequency { hz: *hz },
-            FlexCommand::FrequencyA(None) => RadioCommand::GetFrequency,
-            FlexCommand::FrequencyB(Some(hz)) => RadioCommand::SetFrequency { hz: *hz },
-            FlexCommand::FrequencyB(None) => RadioCommand::GetFrequency,
+            FlexCommand::Kenwood(kw) => kw.to_radio_command(),
             FlexCommand::Mode(Some(m)) => RadioCommand::SetMode {
                 mode: m.to_operating_mode(),
             },
             FlexCommand::Mode(None) => RadioCommand::GetMode,
-            FlexCommand::Transmit(Some(tx)) => RadioCommand::SetPtt { active: *tx },
-            FlexCommand::Transmit(None) => RadioCommand::GetPtt,
-            FlexCommand::Receive => RadioCommand::SetPtt { active: false },
-            FlexCommand::Id(Some(id)) => RadioCommand::IdReport { id: id.clone() },
-            FlexCommand::Id(None) => RadioCommand::GetId,
             FlexCommand::Info(Some(info)) => RadioCommand::StatusReport {
                 frequency_hz: Some(info.frequency_hz),
                 mode: Some(info.mode.to_operating_mode()),
@@ -567,17 +456,7 @@ impl ToRadioCommand for FlexCommand {
                 vfo: Some(if info.vfo == 0 { Vfo::A } else { Vfo::B }),
             },
             FlexCommand::Info(None) => RadioCommand::GetStatus,
-            FlexCommand::VfoSelect(Some(v)) => RadioCommand::SetVfo {
-                vfo: if *v == 0 { Vfo::A } else { Vfo::B },
-            },
-            FlexCommand::VfoSelect(None) => RadioCommand::GetVfo,
-            FlexCommand::Split(Some(s)) => RadioCommand::SetVfo {
-                vfo: if *s { Vfo::Split } else { Vfo::A },
-            },
-            FlexCommand::Split(None) => RadioCommand::GetVfo,
-            FlexCommand::Power(Some(on)) => RadioCommand::SetPower { on: *on },
-            FlexCommand::Power(None)
-            | FlexCommand::AudioGain(_)
+            FlexCommand::AudioGain(_)
             | FlexCommand::RfPower(_)
             | FlexCommand::SMeter(_)
             | FlexCommand::AgcMode(_)
@@ -596,9 +475,7 @@ impl ToRadioCommand for FlexCommand {
 impl FromRadioCommand for FlexCommand {
     fn from_radio_command(cmd: &RadioCommand) -> Option<Self> {
         match cmd {
-            RadioCommand::SetFrequency { hz } => Some(FlexCommand::FrequencyA(Some(*hz))),
-            RadioCommand::GetFrequency => Some(FlexCommand::FrequencyA(None)),
-            RadioCommand::FrequencyReport { hz } => Some(FlexCommand::FrequencyA(Some(*hz))),
+            // Mode uses FlexMode
             RadioCommand::SetMode { mode } => Some(FlexCommand::Mode(Some(
                 FlexMode::from_operating_mode(*mode),
             ))),
@@ -606,27 +483,14 @@ impl FromRadioCommand for FlexCommand {
             RadioCommand::ModeReport { mode } => Some(FlexCommand::Mode(Some(
                 FlexMode::from_operating_mode(*mode),
             ))),
-            RadioCommand::SetPtt { active: true } => Some(FlexCommand::Transmit(Some(true))),
-            RadioCommand::SetPtt { active: false } => Some(FlexCommand::Receive),
-            RadioCommand::GetPtt => Some(FlexCommand::Transmit(None)),
-            RadioCommand::PttReport { active } => Some(FlexCommand::Transmit(Some(*active))),
-            RadioCommand::SetVfo { vfo } => match vfo {
-                Vfo::A => Some(FlexCommand::VfoSelect(Some(0))),
-                Vfo::B => Some(FlexCommand::VfoSelect(Some(1))),
-                Vfo::Split => Some(FlexCommand::Split(Some(true))),
-                Vfo::Memory => Some(FlexCommand::VfoSelect(Some(2))),
-            },
-            RadioCommand::GetVfo => Some(FlexCommand::VfoSelect(None)),
-            RadioCommand::GetId => Some(FlexCommand::Id(None)),
-            RadioCommand::IdReport { id } => Some(FlexCommand::Id(Some(id.clone()))),
-            RadioCommand::GetStatus => Some(FlexCommand::Info(None)),
-            RadioCommand::SetPower { on } => Some(FlexCommand::Power(Some(*on))),
+            // AutoInfo uses Flex-specific encoding
             RadioCommand::EnableAutoInfo { enabled } => Some(FlexCommand::AutoInfo(Some(*enabled))),
             RadioCommand::GetAutoInfo => Some(FlexCommand::AutoInfo(None)),
-            RadioCommand::AutoInfoReport { enabled } => {
-                Some(FlexCommand::AutoInfo(Some(*enabled)))
-            }
-            _ => None,
+            RadioCommand::AutoInfoReport { enabled } => Some(FlexCommand::AutoInfo(Some(*enabled))),
+            // Status uses FlexInfo
+            RadioCommand::GetStatus => Some(FlexCommand::Info(None)),
+            // Everything else delegates to Kenwood
+            _ => KenwoodCommand::from_radio_command(cmd).map(FlexCommand::Kenwood),
         }
     }
 }
@@ -634,26 +498,27 @@ impl FromRadioCommand for FlexCommand {
 impl EncodeCommand for FlexCommand {
     fn encode(&self) -> Vec<u8> {
         let cmd = match self {
-            // Use ZZ commands for better precision
-            FlexCommand::FrequencyA(Some(hz)) => format!("ZZFA{:011}", hz),
-            FlexCommand::FrequencyA(None) => "ZZFA".to_string(),
-            FlexCommand::FrequencyB(Some(hz)) => format!("ZZFB{:011}", hz),
-            FlexCommand::FrequencyB(None) => "ZZFB".to_string(),
+            FlexCommand::Kenwood(kw) => {
+                // For Flex output, use ZZ commands where available for better precision
+                match kw {
+                    KenwoodCommand::FrequencyA(Some(hz)) => format!("ZZFA{:011}", hz),
+                    KenwoodCommand::FrequencyA(None) => "ZZFA".to_string(),
+                    KenwoodCommand::FrequencyB(Some(hz)) => format!("ZZFB{:011}", hz),
+                    KenwoodCommand::FrequencyB(None) => "ZZFB".to_string(),
+                    KenwoodCommand::Transmit(Some(true)) => "ZZTX1".to_string(),
+                    KenwoodCommand::Transmit(Some(false)) => "ZZTX0".to_string(),
+                    KenwoodCommand::Transmit(None) => "ZZTX".to_string(),
+                    KenwoodCommand::VfoSelect(Some(v)) => format!("ZZFR{}", v),
+                    KenwoodCommand::VfoSelect(None) => "ZZFR".to_string(),
+                    KenwoodCommand::Split(Some(s)) => format!("ZZSW{}", if *s { 1 } else { 0 }),
+                    KenwoodCommand::Split(None) => "ZZSW".to_string(),
+                    // Use standard Kenwood encoding for others
+                    _ => return kw.encode(),
+                }
+            }
             FlexCommand::Mode(Some(m)) => format!("ZZMD{:02}", m.to_code()),
             FlexCommand::Mode(None) => "ZZMD".to_string(),
-            FlexCommand::Transmit(Some(true)) => "ZZTX1".to_string(),
-            FlexCommand::Transmit(Some(false)) => "ZZTX0".to_string(),
-            FlexCommand::Transmit(None) => "ZZTX".to_string(),
-            FlexCommand::Receive => "RX".to_string(),
-            FlexCommand::Id(Some(id)) => format!("ID{}", id),
-            FlexCommand::Id(None) => "ID".to_string(),
             FlexCommand::Info(_) => "ZZIF".to_string(),
-            FlexCommand::VfoSelect(Some(v)) => format!("ZZFR{}", v),
-            FlexCommand::VfoSelect(None) => "ZZFR".to_string(),
-            FlexCommand::Split(Some(s)) => format!("ZZSW{}", if *s { 1 } else { 0 }),
-            FlexCommand::Split(None) => "ZZSW".to_string(),
-            FlexCommand::Power(Some(on)) => format!("PS{}", if *on { 1 } else { 0 }),
-            FlexCommand::Power(None) => "PS".to_string(),
             FlexCommand::AudioGain(Some(g)) => format!("ZZAG{:03}", g),
             FlexCommand::AudioGain(None) => "ZZAG".to_string(),
             FlexCommand::RfPower(Some(p)) => format!("ZZPC{:03}", p),
@@ -714,7 +579,10 @@ mod tests {
         codec.push_bytes(b"ZZFA00014250000;");
 
         let cmd = codec.next_command().unwrap();
-        assert_eq!(cmd, FlexCommand::FrequencyA(Some(14_250_000)));
+        match cmd {
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000))) => {}
+            other => panic!("Expected FrequencyA(14250000), got {:?}", other),
+        }
     }
 
     #[test]
@@ -723,7 +591,10 @@ mod tests {
         codec.push_bytes(b"FA00014250000;");
 
         let cmd = codec.next_command().unwrap();
-        assert_eq!(cmd, FlexCommand::FrequencyA(Some(14_250_000)));
+        match cmd {
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000))) => {}
+            other => panic!("Expected FrequencyA(14250000), got {:?}", other),
+        }
     }
 
     #[test]
@@ -745,17 +616,30 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_kenwood_mode() {
+        let mut codec = FlexCodec::new();
+        codec.push_bytes(b"MD2;");
+
+        let cmd = codec.next_command().unwrap();
+        // Kenwood mode 2 = USB, converted to FlexMode::Usb
+        assert_eq!(cmd, FlexCommand::Mode(Some(FlexMode::Usb)));
+    }
+
+    #[test]
     fn test_parse_id() {
         let mut codec = FlexCodec::new();
         codec.push_bytes(b"ID905;");
 
         let cmd = codec.next_command().unwrap();
-        assert_eq!(cmd, FlexCommand::Id(Some("905".to_string())));
+        match cmd {
+            FlexCommand::Kenwood(KenwoodCommand::Id(Some(ref id))) if id == "905" => {}
+            other => panic!("Expected Id(905), got {:?}", other),
+        }
     }
 
     #[test]
     fn test_encode_zzfa() {
-        let cmd = FlexCommand::FrequencyA(Some(14_250_000));
+        let cmd = FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000)));
         let encoded = cmd.encode();
         assert_eq!(encoded, b"ZZFA00014250000;");
     }
@@ -778,7 +662,10 @@ mod tests {
         // Push rest
         codec.push_bytes(b"50000;");
         let cmd = codec.next_command().unwrap();
-        assert_eq!(cmd, FlexCommand::FrequencyA(Some(14_250_000)));
+        match cmd {
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000))) => {}
+            other => panic!("Expected FrequencyA(14250000), got {:?}", other),
+        }
     }
 
     #[test]
@@ -786,24 +673,24 @@ mod tests {
         let mut codec = FlexCodec::new();
         codec.push_bytes(b"ZZFA00014250000;ZZMD01;ZZTX1;");
 
-        assert_eq!(
-            codec.next_command(),
-            Some(FlexCommand::FrequencyA(Some(14_250_000)))
-        );
+        match codec.next_command() {
+            Some(FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000)))) => {}
+            other => panic!("Expected FrequencyA, got {:?}", other),
+        }
         assert_eq!(
             codec.next_command(),
             Some(FlexCommand::Mode(Some(FlexMode::Usb)))
         );
-        assert_eq!(
-            codec.next_command(),
-            Some(FlexCommand::Transmit(Some(true)))
-        );
+        match codec.next_command() {
+            Some(FlexCommand::Kenwood(KenwoodCommand::Transmit(Some(true)))) => {}
+            other => panic!("Expected Transmit(true), got {:?}", other),
+        }
         assert!(codec.next_command().is_none());
     }
 
     #[test]
     fn test_to_radio_command() {
-        let cmd = FlexCommand::FrequencyA(Some(7_074_000));
+        let cmd = FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(7_074_000)));
         let radio_cmd = cmd.to_radio_command();
         assert_eq!(radio_cmd, RadioCommand::SetFrequency { hz: 7_074_000 });
     }
@@ -812,7 +699,10 @@ mod tests {
     fn test_from_radio_command() {
         let radio_cmd = RadioCommand::SetFrequency { hz: 14_250_000 };
         let cmd = FlexCommand::from_radio_command(&radio_cmd).unwrap();
-        assert_eq!(cmd, FlexCommand::FrequencyA(Some(14_250_000)));
+        match cmd {
+            FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000))) => {}
+            other => panic!("Expected FrequencyA(14250000), got {:?}", other),
+        }
     }
 
     #[test]

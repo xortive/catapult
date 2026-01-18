@@ -201,9 +201,17 @@ impl AmplifierConnection {
         Ok(())
     }
 
-    /// Read response from amplifier (if any)
-    #[allow(dead_code)]
-    pub fn read(&mut self, buffer: &mut [u8]) -> Result<usize, std::io::Error> {
-        self.port.read(buffer)
+    /// Poll for incoming data from the amplifier
+    /// Returns true if data was received
+    pub fn poll(&mut self) -> bool {
+        let mut buffer = [0u8; 256];
+        match self.port.read(&mut buffer) {
+            Ok(n) if n > 0 => {
+                let data = buffer[..n].to_vec();
+                let _ = self.tx.send(BackgroundMessage::AmpTrafficIn { data });
+                true
+            }
+            _ => false,
+        }
     }
 }

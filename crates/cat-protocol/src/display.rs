@@ -11,6 +11,7 @@ use crate::flex::{FlexCodec, FlexCommand, FlexMode};
 use crate::icom::{CivCodec, CivCommand, CivCommandType, PREAMBLE, TERMINATOR};
 use crate::kenwood::{KenwoodCodec, KenwoodCommand};
 use crate::yaesu::YaesuCommand;
+use crate::yaesu_ascii::{YaesuAsciiCodec, YaesuAsciiCommand};
 use crate::ProtocolCodec;
 
 /// Type of segment for UI coloring
@@ -187,6 +188,27 @@ fn format_kenwood_mode(mode: u8) -> &'static str {
         8 => "DATA-L",
         9 => "RTTY-R",
         10 => "DATA-U",
+        _ => "?",
+    }
+}
+
+/// Format Yaesu ASCII mode digit as a human-readable string
+fn format_yaesu_ascii_mode(mode: u8) -> &'static str {
+    match mode {
+        1 => "LSB",
+        2 => "USB",
+        3 => "CW-U",
+        4 => "FM",
+        5 => "AM",
+        6 => "RTTY-L",
+        7 => "CW-L",
+        8 => "DATA-L",
+        9 => "RTTY-U",
+        10 => "DATA-FM",
+        11 => "FM-N",
+        12 => "DATA-U",
+        13 => "AM-N",
+        14 => "C4FM",
         _ => "?",
     }
 }
@@ -1185,40 +1207,153 @@ impl FrameAnnotation for FlexCommand {
         });
 
         let summary = match self {
-            FlexCommand::FrequencyA(Some(hz)) | FlexCommand::FrequencyB(Some(hz)) => {
-                let vfo = if matches!(self, FlexCommand::FrequencyA(_)) {
-                    "A"
-                } else {
-                    "B"
-                };
-                let freq_range = if params_start < params_end {
-                    segments.push(FrameSegment {
-                        range: params_start..params_end,
-                        label: "freq",
-                        value: format_frequency(*hz),
-                        segment_type: SegmentType::Frequency,
-                    });
-                    Some(params_start..params_end)
-                } else {
-                    None
-                };
-                vec![
-                    SummaryPart::with_range(format!("VFO {}", vfo), SegmentType::Command, cmd_range),
-                    SummaryPart::plain(" "),
-                    if let Some(r) = freq_range {
-                        SummaryPart::with_range(format_frequency(*hz), SegmentType::Frequency, r)
-                    } else {
-                        SummaryPart::typed(format_frequency(*hz), SegmentType::Frequency)
-                    },
-                ]
-            }
-            FlexCommand::FrequencyA(None) | FlexCommand::FrequencyB(None) => {
-                let vfo = if matches!(self, FlexCommand::FrequencyA(_)) {
-                    "A"
-                } else {
-                    "B"
-                };
-                vec![SummaryPart::with_range(format!("Get Freq VFO {}", vfo), SegmentType::Command, cmd_range)]
+            // Delegate Kenwood-wrapped commands
+            FlexCommand::Kenwood(kw) => {
+                match kw {
+                    KenwoodCommand::FrequencyA(Some(hz)) | KenwoodCommand::FrequencyB(Some(hz)) => {
+                        let vfo = if matches!(kw, KenwoodCommand::FrequencyA(_)) {
+                            "A"
+                        } else {
+                            "B"
+                        };
+                        let freq_range = if params_start < params_end {
+                            segments.push(FrameSegment {
+                                range: params_start..params_end,
+                                label: "freq",
+                                value: format_frequency(*hz),
+                                segment_type: SegmentType::Frequency,
+                            });
+                            Some(params_start..params_end)
+                        } else {
+                            None
+                        };
+                        vec![
+                            SummaryPart::with_range(format!("VFO {}", vfo), SegmentType::Command, cmd_range),
+                            SummaryPart::plain(" "),
+                            if let Some(r) = freq_range {
+                                SummaryPart::with_range(format_frequency(*hz), SegmentType::Frequency, r)
+                            } else {
+                                SummaryPart::typed(format_frequency(*hz), SegmentType::Frequency)
+                            },
+                        ]
+                    }
+                    KenwoodCommand::FrequencyA(None) | KenwoodCommand::FrequencyB(None) => {
+                        let vfo = if matches!(kw, KenwoodCommand::FrequencyA(_)) {
+                            "A"
+                        } else {
+                            "B"
+                        };
+                        vec![SummaryPart::with_range(format!("Get Freq VFO {}", vfo), SegmentType::Command, cmd_range)]
+                    }
+                    KenwoodCommand::Transmit(Some(true)) => vec![
+                        SummaryPart::with_range("PTT", SegmentType::Command, cmd_range),
+                        SummaryPart::plain(" "),
+                        SummaryPart::typed("ON", SegmentType::Status),
+                    ],
+                    KenwoodCommand::Transmit(Some(false)) | KenwoodCommand::Receive => vec![
+                        SummaryPart::with_range("PTT", SegmentType::Command, cmd_range),
+                        SummaryPart::plain(" "),
+                        SummaryPart::typed("OFF", SegmentType::Status),
+                    ],
+                    KenwoodCommand::Transmit(None) => vec![SummaryPart::with_range("Get PTT", SegmentType::Command, cmd_range)],
+                    KenwoodCommand::Id(Some(id)) => {
+                        let id_range = if params_start < params_end {
+                            segments.push(FrameSegment {
+                                range: params_start..params_end,
+                                label: "id",
+                                value: id.clone(),
+                                segment_type: SegmentType::Data,
+                            });
+                            Some(params_start..params_end)
+                        } else {
+                            None
+                        };
+                        vec![
+                            SummaryPart::with_range("ID", SegmentType::Command, cmd_range),
+                            SummaryPart::plain(" "),
+                            if let Some(r) = id_range {
+                                SummaryPart::with_range(id, SegmentType::Data, r)
+                            } else {
+                                SummaryPart::typed(id, SegmentType::Data)
+                            },
+                        ]
+                    }
+                    KenwoodCommand::Id(None) => vec![SummaryPart::with_range("Get ID", SegmentType::Command, cmd_range)],
+                    KenwoodCommand::VfoSelect(Some(v)) => {
+                        let vfo = if *v == 0 { "A" } else { "B" };
+                        let vfo_range = if params_start < params_end {
+                            segments.push(FrameSegment {
+                                range: params_start..params_end,
+                                label: "vfo",
+                                value: vfo.to_string(),
+                                segment_type: SegmentType::Data,
+                            });
+                            Some(params_start..params_end)
+                        } else {
+                            None
+                        };
+                        vec![
+                            SummaryPart::with_range("VFO", SegmentType::Command, cmd_range),
+                            SummaryPart::plain(" "),
+                            if let Some(r) = vfo_range {
+                                SummaryPart::with_range(vfo, SegmentType::Data, r)
+                            } else {
+                                SummaryPart::typed(vfo, SegmentType::Data)
+                            },
+                        ]
+                    }
+                    KenwoodCommand::VfoSelect(None) => vec![SummaryPart::with_range("Get VFO", SegmentType::Command, cmd_range)],
+                    KenwoodCommand::Split(Some(s)) => {
+                        let state = if *s { "ON" } else { "OFF" };
+                        let split_range = if params_start < params_end {
+                            segments.push(FrameSegment {
+                                range: params_start..params_end,
+                                label: "split",
+                                value: state.to_string(),
+                                segment_type: SegmentType::Status,
+                            });
+                            Some(params_start..params_end)
+                        } else {
+                            None
+                        };
+                        vec![
+                            SummaryPart::with_range("Split", SegmentType::Command, cmd_range),
+                            SummaryPart::plain(" "),
+                            if let Some(r) = split_range {
+                                SummaryPart::with_range(state, SegmentType::Status, r)
+                            } else {
+                                SummaryPart::typed(state, SegmentType::Status)
+                            },
+                        ]
+                    }
+                    KenwoodCommand::Split(None) => vec![SummaryPart::with_range("Get Split", SegmentType::Command, cmd_range)],
+                    KenwoodCommand::Power(Some(on)) => {
+                        let state = if *on { "ON" } else { "OFF" };
+                        let power_range = if params_start < params_end {
+                            segments.push(FrameSegment {
+                                range: params_start..params_end,
+                                label: "power",
+                                value: state.to_string(),
+                                segment_type: SegmentType::Status,
+                            });
+                            Some(params_start..params_end)
+                        } else {
+                            None
+                        };
+                        vec![
+                            SummaryPart::with_range("Power", SegmentType::Command, cmd_range),
+                            SummaryPart::plain(" "),
+                            if let Some(r) = power_range {
+                                SummaryPart::with_range(state, SegmentType::Status, r)
+                            } else {
+                                SummaryPart::typed(state, SegmentType::Status)
+                            },
+                        ]
+                    }
+                    KenwoodCommand::Power(None) => vec![SummaryPart::with_range("Get Power", SegmentType::Command, cmd_range)],
+                    // Other Kenwood commands that might come through
+                    _ => vec![SummaryPart::with_range("Kenwood", SegmentType::Command, cmd_range)],
+                }
             }
             FlexCommand::Mode(Some(m)) => {
                 let mode_name = format_flex_mode(*m);
@@ -1244,40 +1379,6 @@ impl FrameAnnotation for FlexCommand {
                 ]
             }
             FlexCommand::Mode(None) => vec![SummaryPart::with_range("Get Mode", SegmentType::Command, cmd_range)],
-            FlexCommand::Transmit(Some(true)) => vec![
-                SummaryPart::with_range("PTT", SegmentType::Command, cmd_range),
-                SummaryPart::plain(" "),
-                SummaryPart::typed("ON", SegmentType::Status),
-            ],
-            FlexCommand::Transmit(Some(false)) | FlexCommand::Receive => vec![
-                SummaryPart::with_range("PTT", SegmentType::Command, cmd_range),
-                SummaryPart::plain(" "),
-                SummaryPart::typed("OFF", SegmentType::Status),
-            ],
-            FlexCommand::Transmit(None) => vec![SummaryPart::with_range("Get PTT", SegmentType::Command, cmd_range)],
-            FlexCommand::Id(Some(id)) => {
-                let id_range = if params_start < params_end {
-                    segments.push(FrameSegment {
-                        range: params_start..params_end,
-                        label: "id",
-                        value: id.clone(),
-                        segment_type: SegmentType::Data,
-                    });
-                    Some(params_start..params_end)
-                } else {
-                    None
-                };
-                vec![
-                    SummaryPart::with_range("ID", SegmentType::Command, cmd_range),
-                    SummaryPart::plain(" "),
-                    if let Some(r) = id_range {
-                        SummaryPart::with_range(id, SegmentType::Data, r)
-                    } else {
-                        SummaryPart::typed(id, SegmentType::Data)
-                    },
-                ]
-            }
-            FlexCommand::Id(None) => vec![SummaryPart::with_range("Get ID", SegmentType::Command, cmd_range)],
             FlexCommand::Info(Some(info)) => {
                 // Frequency at params_start for 11 digits
                 let freq_range = if params_start + 11 <= params_end {
@@ -1310,78 +1411,6 @@ impl FrameAnnotation for FlexCommand {
                 ]
             }
             FlexCommand::Info(None) => vec![SummaryPart::with_range("Get Status", SegmentType::Command, cmd_range)],
-            FlexCommand::VfoSelect(Some(v)) => {
-                let vfo = if *v == 0 { "A" } else { "B" };
-                let vfo_range = if params_start < params_end {
-                    segments.push(FrameSegment {
-                        range: params_start..params_end,
-                        label: "vfo",
-                        value: vfo.to_string(),
-                        segment_type: SegmentType::Data,
-                    });
-                    Some(params_start..params_end)
-                } else {
-                    None
-                };
-                vec![
-                    SummaryPart::with_range("VFO", SegmentType::Command, cmd_range),
-                    SummaryPart::plain(" "),
-                    if let Some(r) = vfo_range {
-                        SummaryPart::with_range(vfo, SegmentType::Data, r)
-                    } else {
-                        SummaryPart::typed(vfo, SegmentType::Data)
-                    },
-                ]
-            }
-            FlexCommand::VfoSelect(None) => vec![SummaryPart::with_range("Get VFO", SegmentType::Command, cmd_range)],
-            FlexCommand::Split(Some(s)) => {
-                let state = if *s { "ON" } else { "OFF" };
-                let split_range = if params_start < params_end {
-                    segments.push(FrameSegment {
-                        range: params_start..params_end,
-                        label: "split",
-                        value: state.to_string(),
-                        segment_type: SegmentType::Status,
-                    });
-                    Some(params_start..params_end)
-                } else {
-                    None
-                };
-                vec![
-                    SummaryPart::with_range("Split", SegmentType::Command, cmd_range),
-                    SummaryPart::plain(" "),
-                    if let Some(r) = split_range {
-                        SummaryPart::with_range(state, SegmentType::Status, r)
-                    } else {
-                        SummaryPart::typed(state, SegmentType::Status)
-                    },
-                ]
-            }
-            FlexCommand::Split(None) => vec![SummaryPart::with_range("Get Split", SegmentType::Command, cmd_range)],
-            FlexCommand::Power(Some(on)) => {
-                let state = if *on { "ON" } else { "OFF" };
-                let power_range = if params_start < params_end {
-                    segments.push(FrameSegment {
-                        range: params_start..params_end,
-                        label: "power",
-                        value: state.to_string(),
-                        segment_type: SegmentType::Status,
-                    });
-                    Some(params_start..params_end)
-                } else {
-                    None
-                };
-                vec![
-                    SummaryPart::with_range("Power", SegmentType::Command, cmd_range),
-                    SummaryPart::plain(" "),
-                    if let Some(r) = power_range {
-                        SummaryPart::with_range(state, SegmentType::Status, r)
-                    } else {
-                        SummaryPart::typed(state, SegmentType::Status)
-                    },
-                ]
-            }
-            FlexCommand::Power(None) => vec![SummaryPart::with_range("Get Power", SegmentType::Command, cmd_range.clone())],
             FlexCommand::AudioGain(Some(g)) => vec![
                 SummaryPart::with_range("Audio Gain", SegmentType::Command, cmd_range),
                 SummaryPart::plain(" "),
@@ -1489,6 +1518,407 @@ fn format_flex_mode(mode: FlexMode) -> &'static str {
         FlexMode::Fdv => "FreeDV",
         FlexMode::Rtty => "RTTY",
         FlexMode::Dstar => "D-STAR",
+    }
+}
+
+// ============================================================================
+// FrameAnnotation for YaesuAsciiCommand
+// ============================================================================
+
+impl FrameAnnotation for YaesuAsciiCommand {
+    fn annotate(&self, raw_bytes: &[u8]) -> AnnotatedFrame {
+        let data_len = raw_bytes.len();
+        let has_terminator = raw_bytes.last() == Some(&b';');
+        let mut segments = Vec::new();
+
+        // Parse command prefix from raw bytes
+        let cmd_str = std::str::from_utf8(raw_bytes).unwrap_or("");
+        let prefix = if cmd_str.len() >= 2 {
+            &cmd_str[..2]
+        } else {
+            ""
+        };
+
+        // Command prefix (first 2 bytes)
+        segments.push(FrameSegment {
+            range: 0..2,
+            label: "cmd",
+            value: prefix.to_string(),
+            segment_type: SegmentType::Command,
+        });
+
+        let params_start = 2;
+        let params_end = if has_terminator {
+            data_len - 1
+        } else {
+            data_len
+        };
+        let cmd_range = 0..2;
+
+        let summary = match self {
+            YaesuAsciiCommand::FrequencyA(Some(hz)) | YaesuAsciiCommand::FrequencyB(Some(hz)) => {
+                let vfo = if matches!(self, YaesuAsciiCommand::FrequencyA(_)) {
+                    "A"
+                } else {
+                    "B"
+                };
+                let freq_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "freq",
+                        value: format_frequency(*hz),
+                        segment_type: SegmentType::Frequency,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range(format!("VFO {}", vfo), SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = freq_range {
+                        SummaryPart::with_range(format_frequency(*hz), SegmentType::Frequency, r)
+                    } else {
+                        SummaryPart::typed(format_frequency(*hz), SegmentType::Frequency)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::FrequencyA(None) | YaesuAsciiCommand::FrequencyB(None) => {
+                let vfo = if matches!(self, YaesuAsciiCommand::FrequencyA(_)) {
+                    "A"
+                } else {
+                    "B"
+                };
+                vec![SummaryPart::with_range(
+                    format!("Get Freq VFO {}", vfo),
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::Mode {
+                receiver,
+                mode: Some(m),
+            } => {
+                // Yaesu ASCII mode: MD + receiver(1) + mode(1)
+                let mode_range = if params_start + 1 < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..(params_start + 1),
+                        label: "rx",
+                        value: format!("RX{}", receiver),
+                        segment_type: SegmentType::Data,
+                    });
+                    segments.push(FrameSegment {
+                        range: (params_start + 1)..params_end,
+                        label: "mode",
+                        value: format_yaesu_ascii_mode(*m).to_string(),
+                        segment_type: SegmentType::Mode,
+                    });
+                    Some((params_start + 1)..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("Mode", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = mode_range {
+                        SummaryPart::with_range(format_yaesu_ascii_mode(*m), SegmentType::Mode, r)
+                    } else {
+                        SummaryPart::typed(format_yaesu_ascii_mode(*m), SegmentType::Mode)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::Mode { mode: None, .. } => {
+                vec![SummaryPart::with_range(
+                    "Get Mode",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::Transmit(Some(tx)) => {
+                let state = match tx {
+                    0 => "OFF",
+                    1 => "ON",
+                    2 => "TUNE",
+                    _ => "?",
+                };
+                let tx_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "state",
+                        value: state.to_string(),
+                        segment_type: SegmentType::Status,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("PTT", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = tx_range {
+                        SummaryPart::with_range(state, SegmentType::Status, r)
+                    } else {
+                        SummaryPart::typed(state, SegmentType::Status)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::Transmit(None) => {
+                vec![SummaryPart::with_range(
+                    "Get PTT",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::Id(Some(id)) => {
+                let id_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "id",
+                        value: id.clone(),
+                        segment_type: SegmentType::Data,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("ID", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = id_range {
+                        SummaryPart::with_range(id, SegmentType::Data, r)
+                    } else {
+                        SummaryPart::typed(id, SegmentType::Data)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::Id(None) => {
+                vec![SummaryPart::with_range(
+                    "Get ID",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::Info(Some(info)) => {
+                // Frequency portion in IF response (9 digits after 3-digit memory channel)
+                let freq_range = if params_start + 12 <= params_end {
+                    segments.push(FrameSegment {
+                        range: (params_start + 3)..(params_start + 12),
+                        label: "freq",
+                        value: format_frequency(info.frequency_hz),
+                        segment_type: SegmentType::Frequency,
+                    });
+                    Some((params_start + 3)..(params_start + 12))
+                } else {
+                    None
+                };
+                if params_start + 12 < params_end {
+                    segments.push(FrameSegment {
+                        range: (params_start + 12)..params_end,
+                        label: "status",
+                        value: "flags".to_string(),
+                        segment_type: SegmentType::Status,
+                    });
+                }
+                vec![
+                    SummaryPart::with_range("Status", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(": "),
+                    if let Some(r) = freq_range {
+                        SummaryPart::with_range(
+                            format_frequency(info.frequency_hz),
+                            SegmentType::Frequency,
+                            r,
+                        )
+                    } else {
+                        SummaryPart::typed(
+                            format_frequency(info.frequency_hz),
+                            SegmentType::Frequency,
+                        )
+                    },
+                ]
+            }
+            YaesuAsciiCommand::Info(None) => {
+                vec![SummaryPart::with_range(
+                    "Get Status",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::VfoSelect(Some(v)) => {
+                let vfo = if *v == 0 { "A" } else { "B" };
+                let vfo_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "vfo",
+                        value: vfo.to_string(),
+                        segment_type: SegmentType::Data,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("VFO", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = vfo_range {
+                        SummaryPart::with_range(vfo, SegmentType::Data, r)
+                    } else {
+                        SummaryPart::typed(vfo, SegmentType::Data)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::VfoSelect(None) => {
+                vec![SummaryPart::with_range(
+                    "Get VFO",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::Split(Some(s)) => {
+                let state = if *s { "ON" } else { "OFF" };
+                let split_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "split",
+                        value: state.to_string(),
+                        segment_type: SegmentType::Status,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("Split", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = split_range {
+                        SummaryPart::with_range(state, SegmentType::Status, r)
+                    } else {
+                        SummaryPart::typed(state, SegmentType::Status)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::Split(None) => {
+                vec![SummaryPart::with_range(
+                    "Get Split",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::Power(Some(on)) => {
+                let state = if *on { "ON" } else { "OFF" };
+                let power_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "power",
+                        value: state.to_string(),
+                        segment_type: SegmentType::Status,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("Power", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = power_range {
+                        SummaryPart::with_range(state, SegmentType::Status, r)
+                    } else {
+                        SummaryPart::typed(state, SegmentType::Status)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::Power(None) => {
+                vec![SummaryPart::with_range(
+                    "Get Power",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::AutoInfo(Some(enabled)) => {
+                let state = if *enabled { "ON" } else { "OFF" };
+                let ai_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "state",
+                        value: state.to_string(),
+                        segment_type: SegmentType::Status,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("Auto Info", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = ai_range {
+                        SummaryPart::with_range(state, SegmentType::Status, r)
+                    } else {
+                        SummaryPart::typed(state, SegmentType::Status)
+                    },
+                ]
+            }
+            YaesuAsciiCommand::AutoInfo(None) => {
+                vec![SummaryPart::with_range(
+                    "Get Auto Info",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::SMeter(Some(v)) => {
+                vec![
+                    SummaryPart::with_range("S-Meter", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    SummaryPart::typed(format!("{}", v), SegmentType::Data),
+                ]
+            }
+            YaesuAsciiCommand::SMeter(None) => {
+                vec![SummaryPart::with_range(
+                    "Read S-Meter",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::RfPower(Some(p)) => {
+                vec![
+                    SummaryPart::with_range("RF Power", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    SummaryPart::typed(format!("{}%", p), SegmentType::Data),
+                ]
+            }
+            YaesuAsciiCommand::RfPower(None) => {
+                vec![SummaryPart::with_range(
+                    "Get RF Power",
+                    SegmentType::Command,
+                    cmd_range,
+                )]
+            }
+            YaesuAsciiCommand::Unknown(s) => {
+                if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "params",
+                        value: s.get(2..).unwrap_or("").to_string(),
+                        segment_type: SegmentType::Data,
+                    });
+                }
+                vec![SummaryPart::with_range(s, SegmentType::Command, cmd_range)]
+            }
+        };
+
+        // Terminator if present
+        if has_terminator {
+            segments.push(FrameSegment {
+                range: (data_len - 1)..data_len,
+                label: "end",
+                value: ";".to_string(),
+                segment_type: SegmentType::Terminator,
+            });
+        }
+
+        AnnotatedFrame {
+            protocol: "Yaesu ASCII",
+            summary,
+            segments,
+        }
     }
 }
 
@@ -1726,15 +2156,10 @@ fn try_decode_yaesu_ascii(data: &[u8]) -> Option<AnnotatedFrame> {
         return None;
     }
 
-    // Yaesu ASCII is very similar to Kenwood - use Kenwood decoder with Yaesu label
-    let mut codec = KenwoodCodec::new();
+    let mut codec = YaesuAsciiCodec::new();
     codec.push_bytes(data);
 
-    codec.next_command().map(|cmd| {
-        let mut frame = cmd.annotate(data);
-        frame.protocol = "Yaesu";
-        frame
-    })
+    codec.next_command().map(|cmd| cmd.annotate(data))
 }
 
 #[cfg(test)]
@@ -1821,10 +2246,54 @@ mod tests {
         let frame = decode_and_annotate(data).unwrap();
         assert_eq!(frame.protocol, "Kenwood");
         // VFO select should have a data segment
-        let vfo_seg = frame
-            .segments
-            .iter()
-            .find(|s| s.label == "vfo");
+        let vfo_seg = frame.segments.iter().find(|s| s.label == "vfo");
         assert!(vfo_seg.is_some());
+    }
+
+    #[test]
+    fn test_protocol_hint_elecraft() {
+        use crate::Protocol;
+
+        // Without hint, this decodes as Kenwood
+        let data = b"FA00014250000;";
+        let frame = decode_and_annotate(data).unwrap();
+        assert_eq!(frame.protocol, "Kenwood");
+
+        // With Elecraft hint, should decode as Elecraft
+        let frame = decode_and_annotate_with_hint(data, Some(Protocol::Elecraft)).unwrap();
+        assert_eq!(frame.protocol, "Elecraft");
+        assert!(frame.summary.iter().any(|p| p.text.contains("14.250")));
+    }
+
+    #[test]
+    fn test_protocol_hint_flex() {
+        use crate::Protocol;
+
+        // Standard Kenwood command decoded with FlexRadio hint
+        let data = b"FA00014250000;";
+        let frame = decode_and_annotate_with_hint(data, Some(Protocol::FlexRadio)).unwrap();
+        assert_eq!(frame.protocol, "Flex");
+    }
+
+    #[test]
+    fn test_protocol_hint_yaesu_ascii() {
+        use crate::Protocol;
+
+        // ASCII command with YaesuAscii hint should show Yaesu ASCII
+        let data = b"FA00014250000;";
+        let frame = decode_and_annotate_with_hint(data, Some(Protocol::YaesuAscii)).unwrap();
+        assert_eq!(frame.protocol, "Yaesu ASCII");
+    }
+
+    #[test]
+    fn test_protocol_hint_civ() {
+        use crate::Protocol;
+
+        // CI-V frequency report
+        let data = [
+            0xFE, 0xFE, 0xE0, 0x94, 0x03, 0x00, 0x00, 0x25, 0x14, 0x00, 0xFD,
+        ];
+        let frame = decode_and_annotate_with_hint(&data, Some(Protocol::IcomCIV)).unwrap();
+        assert_eq!(frame.protocol, "CI-V");
     }
 }

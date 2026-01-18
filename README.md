@@ -11,7 +11,7 @@ not been tested with real hardware yet.
 
 ## Features
 
-- **Multi-Protocol Support**: Yaesu CAT, Icom CI-V, Kenwood, and Elecraft protocols
+- **Multi-Protocol Support**: Yaesu CAT (binary), Yaesu ASCII, Icom CI-V, Kenwood, Elecraft, and FlexRadio protocols
 - **Auto-Detection**: Automatically detects CAT-capable radios on serial ports
 - **Protocol Translation**: Translates between any supported protocol
 - **Intelligent Switching**: Manual, PTT-triggered, or frequency-change triggered
@@ -68,10 +68,15 @@ cargo run -p cat-desktop
 
 ## Supported Protocols
 
-### Yaesu CAT
+### Yaesu CAT (Binary)
 - 5-byte binary command format
 - BCD frequency encoding
-- Tested with: FT-817, FT-857, FT-897, FT-991, FTDX10
+- For older radios: FT-817, FT-857, FT-897, FT-450, etc.
+
+### Yaesu ASCII
+- ASCII semicolon-terminated commands (similar to Kenwood)
+- 9-digit frequency format with hex mode codes (A-E for extended modes)
+- For newer radios: FT-991, FT-991A, FTDX-101D, FTDX-10, FT-710
 
 ### Icom CI-V
 - Framed variable-length messages (0xFE preamble, 0xFD terminator)
@@ -86,6 +91,11 @@ cargo run -p cat-desktop
 ### Elecraft
 - Kenwood-compatible base with extensions
 - Extended commands for K3, KX3, KX2
+
+### FlexRadio SmartSDR
+- Kenwood-compatible base with ZZ extensions
+- ZZFA/ZZMD commands for frequency/mode
+- For FLEX-6000 series radios
 
 ## Configuration
 
