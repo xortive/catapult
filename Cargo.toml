@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cat-protocol",
+    "crates/cat-detect",
+    "crates/cat-mux",
+    "crates/cat-sim",
+    "cat-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["M Alonso"]
+license = "MIT"
+repository = "https://github.com/malonso/catapult"
+
+[workspace.dependencies]
+# Internal crates
+cat-protocol = { path = "crates/cat-protocol" }
+cat-detect = { path = "crates/cat-detect" }
+cat-mux = { path = "crates/cat-mux" }
+cat-sim = { path = "crates/cat-sim" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Serial port handling
+tokio-serial = "5.4"
+serialport = "4.6"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# GUI
+eframe = "0.30"
+egui = "0.30"
+
+# Testing
+proptest = "1.5"

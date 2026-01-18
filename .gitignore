@@ -1,0 +1,32 @@
+# Generated files
+/target/
+cat-bridge/target/
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Logs
+*.log
+
+# ESP32 specific
+cat-bridge/.embuild/
+
+# IDE specific
+*.iml
+.project
+.classpath
+.settings/

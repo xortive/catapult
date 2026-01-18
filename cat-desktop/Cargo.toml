@@ -1,0 +1,32 @@
+[package]
+name = "cat-desktop"
+description = "Desktop application for the CAT protocol multiplexer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "catapult"
+path = "src/main.rs"
+
+[dependencies]
+cat-protocol.workspace = true
+cat-detect.workspace = true
+cat-mux.workspace = true
+cat-sim.workspace = true
+tokio.workspace = true
+tokio-serial.workspace = true
+eframe.workspace = true
+egui.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+dirs = "6.0"
+serialport.workspace = true
+espflash = { version = "4", default-features = false, features = ["serialport"] }
+
+[dev-dependencies]
+proptest.workspace = true

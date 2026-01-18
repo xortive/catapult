@@ -1,0 +1,19 @@
+[package]
+name = "cat-mux"
+description = "CAT protocol multiplexer engine for switching between multiple radios"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+cat-protocol = { workspace = true, features = ["serde"] }
+cat-detect.workspace = true
+tokio.workspace = true
+tokio-serial.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+proptest.workspace = true

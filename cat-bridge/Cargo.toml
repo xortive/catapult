@@ -1,0 +1,39 @@
+[package]
+name = "cat-bridge"
+version = "0.1.0"
+edition = "2021"
+authors = ["M Alonso"]
+license = "MIT"
+description = "ESP32-S3 dual USB serial bridge firmware - allows host computer to appear as USB serial device to amplifier"
+
+[dependencies]
+# ESP-HAL for ESP32-S3
+esp-hal = { version = "0.22", features = ["esp32s3"] }
+esp-backtrace = { version = "0.14", features = ["esp32s3", "panic-handler", "println"] }
+esp-println = { version = "0.12", features = ["esp32s3", "log"] }
+esp-alloc = "0.5"
+
+# USB support
+esp-hal-embassy = { version = "0.5", features = ["esp32s3"] }
+embassy-executor = { version = "0.6", features = ["task-arena-size-65536"] }
+embassy-time = "0.3"
+embassy-sync = "0.6"
+embassy-usb = "0.3"
+usbd-serial = "0.2"
+
+# Embedded I/O traits for USB-Serial-JTAG
+embedded-io-async = "0.6"
+
+# Logging
+log = "0.4"
+
+# Static cell for singleton patterns
+static_cell = "2"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

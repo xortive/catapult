@@ -1,0 +1,19 @@
+[package]
+name = "cat-protocol"
+description = "CAT protocol parsing and encoding library for amateur radio transceivers"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]
