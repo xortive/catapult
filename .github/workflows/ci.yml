@@ -15,6 +15,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  SKIP_FIRMWARE_CHECK: "1"
 
 jobs:
   # Check formatting
@@ -88,8 +89,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libudev-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p cat-desktop
-        env:
-          SKIP_FIRMWARE_CHECK: ${{ inputs.skip_firmware }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
