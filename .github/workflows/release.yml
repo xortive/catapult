@@ -71,17 +71,26 @@ jobs:
         if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }} -p cat-desktop
 
+      # Load secrets from 1Password (macOS)
+      - name: Load 1Password Secrets (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          MACOS_CERTIFICATE_BASE64: op://CI-CD/macOS Signing Certificate/certificate
+          MACOS_CERTIFICATE_PWD: op://CI-CD/macOS Signing Certificate/password
+          MACOS_SIGNING_IDENTITY: op://CI-CD/macOS Signing Certificate/identity
+
       # macOS codesigning
       - name: Codesign (macOS)
-        if: matrix.os == 'macos-latest' && env.MACOS_CERTIFICATE != ''
+        if: matrix.os == 'macos-latest' && env.MACOS_CERTIFICATE_BASE64 != ''
         env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-          MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_KEYCHAIN_PWD: ${{ github.run_id }}
         run: |
           # Decode certificate
-          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          echo "$MACOS_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
 
           # Create temporary keychain
           security create-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
@@ -99,16 +108,25 @@ jobs:
 
           # Cleanup
           rm certificate.p12
+          security delete-keychain build.keychain
+
+      # Load secrets from 1Password (Windows)
+      - name: Load 1Password Secrets (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          WINDOWS_CERTIFICATE_BASE64: op://CI-CD/Windows Signing Certificate/certificate
+          WINDOWS_CERTIFICATE_PWD: op://CI-CD/Windows Signing Certificate/password
 
       # Windows codesigning
       - name: Codesign (Windows)
-        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PWD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE_BASE64 != ''
         run: |
           # Decode certificate
-          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64)
           [IO.File]::WriteAllBytes("certificate.pfx", $certBytes)
 
           # Sign the binary
