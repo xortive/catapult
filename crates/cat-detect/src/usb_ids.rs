@@ -1,7 +1,8 @@
 //! USB Vendor/Product ID database for known serial adapters
 //!
 //! This module contains VID/PID pairs for common USB-to-serial adapters
-//! used with amateur radio equipment.
+//! used with amateur radio equipment, as well as pattern matching for
+//! virtual serial ports created by software like SmartSDR.
 
 /// USB Vendor ID / Product ID pair
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +117,53 @@ pub mod radio {
     }
 }
 
+/// Virtual serial port detection for software-created ports
+///
+/// Some radios (like FlexRadio SDRs) connect via network and use software
+/// to create virtual serial ports for CAT control. These ports don't have
+/// USB VID/PID, but can be identified by name patterns.
+pub mod virtual_ports {
+    /// Information about a detected virtual port
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct VirtualPortMatch {
+        /// Manufacturer/software name
+        pub manufacturer: &'static str,
+        /// Hint about the radio type (model determined via CAT probing)
+        pub hint: &'static str,
+    }
+
+    /// Check if a port name matches a known virtual serial port pattern
+    ///
+    /// Returns manufacturer info if matched. The actual radio model is
+    /// determined via CAT command probing (e.g., ID; command).
+    pub fn match_port_name(port_name: &str) -> Option<VirtualPortMatch> {
+        let name_lower = port_name.to_lowercase();
+
+        // FlexRadio SmartSDR virtual serial ports
+        // Windows: "FlexVSP", "FLEX CAT", port descriptions containing "FlexRadio"
+        // macOS: May appear as /dev/tty.FlexRadio* or similar
+        if name_lower.contains("flexvsp")
+            || name_lower.contains("flex cat")
+            || name_lower.contains("flexradio")
+            || name_lower.contains("smartsdr")
+        {
+            return Some(VirtualPortMatch {
+                manufacturer: "FlexRadio",
+                hint: "FLEX-6000/8000 series (via SmartSDR)",
+            });
+        }
+
+        None
+    }
+
+    /// Check if a port name or description suggests a FlexRadio SmartSDR port
+    pub fn is_smartsdr_port(port_name: &str) -> bool {
+        match_port_name(port_name)
+            .map(|m| m.manufacturer == "FlexRadio")
+            .unwrap_or(false)
+    }
+}
+
 /// Check if a VID/PID is a known serial adapter
 pub fn is_known_serial_adapter(vid: u16, pid: u16) -> bool {
     match vid {
@@ -153,4 +201,86 @@ pub fn adapter_name(vid: u16) -> Option<&'static str> {
         radio::kenwood::VID => Some("Kenwood USB"),
         _ => None,
     }
+}
+
+/// Port classification for safe probing decisions
+///
+/// Ports are classified into tiers based on how safe it is to auto-probe them.
+/// Known radio USB ports and virtual ports (like SmartSDR) can be safely probed,
+/// while generic serial adapters may be connected to other devices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PortClassification {
+    /// Known radio manufacturer USB (Icom, Kenwood) - safe to auto-probe
+    KnownRadio,
+    /// Virtual serial port (SmartSDR, FlexRadio) - safe to auto-probe
+    VirtualPort,
+    /// Known serial adapter (FTDI, CP210x, CH340, PL2303) - manual probe only
+    KnownAdapter,
+    /// Unknown device - manual probe only
+    Unknown,
+}
+
+impl PortClassification {
+    /// Returns true if this port classification is safe for automatic probing
+    pub fn is_safe_to_probe(&self) -> bool {
+        matches!(self, Self::KnownRadio | Self::VirtualPort)
+    }
+}
+
+/// Suggest a protocol for a port based on USB VID or port name patterns
+///
+/// Returns a suggested protocol if the port is associated with a known manufacturer.
+/// This helps auto-select the protocol when adding a COM radio.
+pub fn suggest_protocol_for_port(vid: Option<u16>, port_name: &str) -> Option<cat_protocol::Protocol> {
+    use cat_protocol::Protocol;
+
+    // Check for known radio USB VIDs
+    if let Some(v) = vid {
+        match v {
+            radio::icom::VID => return Some(Protocol::IcomCIV),
+            radio::kenwood::VID => return Some(Protocol::Kenwood),
+            _ => {}
+        }
+    }
+
+    // Check for FlexRadio virtual ports
+    if virtual_ports::is_smartsdr_port(port_name) {
+        return Some(Protocol::FlexRadio);
+    }
+
+    None
+}
+
+/// Classify a port based on USB IDs and port name
+///
+/// Returns the classification tier and an optional hint string for display
+/// (e.g., "Icom USB", "SmartSDR", "FTDI")
+pub fn classify_port(vid: Option<u16>, pid: Option<u16>, port_name: &str) -> (PortClassification, Option<&'static str>) {
+    // Check for known radio USB first (highest priority)
+    if let (Some(v), Some(p)) = (vid, pid) {
+        if is_known_radio_usb(v, p).is_some() {
+            let hint = match v {
+                radio::icom::VID => "Icom USB",
+                radio::kenwood::VID => "Kenwood USB",
+                _ => "Radio USB",
+            };
+            return (PortClassification::KnownRadio, Some(hint));
+        }
+    }
+
+    // Check for virtual port patterns (SmartSDR, FlexRadio)
+    if let Some(vp_match) = virtual_ports::match_port_name(port_name) {
+        return (PortClassification::VirtualPort, Some(vp_match.manufacturer));
+    }
+
+    // Check for known serial adapters
+    if let Some(v) = vid {
+        if matches!(v, ftdi::VID | cp210x::VID | ch340::VID | prolific::VID) {
+            let hint = adapter_name(v);
+            return (PortClassification::KnownAdapter, hint);
+        }
+    }
+
+    // Unknown device
+    (PortClassification::Unknown, None)
 }

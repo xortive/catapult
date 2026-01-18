@@ -307,7 +307,7 @@ impl VirtualRadio {
                 Protocol::Elecraft => "K3".to_string(),   // K3
                 Protocol::FlexRadio => "909".to_string(), // FLEX-6600
                 Protocol::IcomCIV => "94".to_string(),    // IC-7300
-                Protocol::Yaesu => "01".to_string(),      // FT-991A
+                Protocol::Yaesu | Protocol::YaesuAscii => "01".to_string(), // FT-991A
             }
         }
     }
@@ -344,7 +344,7 @@ impl VirtualRadio {
                     CivCommand::new(0xE0, addr, c.command).encode()
                 })
             }
-            Protocol::Yaesu => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::Yaesu | Protocol::YaesuAscii => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
             Protocol::FlexRadio => FlexCommand::from_radio_command(cmd).map(|c| c.encode()),
         }
     }

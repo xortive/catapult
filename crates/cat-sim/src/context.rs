@@ -272,6 +272,11 @@ mod tests {
     fn test_set_frequency_generates_events() {
         let mut ctx = SimulationContext::new();
         let id = ctx.add_radio("Test", Protocol::Kenwood);
+
+        // Enable auto_info to get output on state changes
+        if let Some(radio) = ctx.get_radio_mut(&id) {
+            radio.set_auto_info(true);
+        }
         ctx.drain_events();
 
         ctx.set_radio_frequency(&id, 7_074_000);

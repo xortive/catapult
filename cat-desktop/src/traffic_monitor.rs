@@ -1,10 +1,27 @@
 //! Traffic monitor UI component
 
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::time::SystemTime;
 
 use cat_mux::RadioHandle;
-use egui::{Color32, RichText, Ui};
+use cat_protocol::display::{decode_and_annotate_with_hint, AnnotatedFrame, FrameSegment, SegmentType};
+use cat_protocol::Protocol;
+use egui::{Color32, Id, RichText, Ui};
+
+/// Map SegmentType to UI color
+fn segment_color(segment_type: SegmentType) -> Color32 {
+    match segment_type {
+        SegmentType::Preamble => Color32::from_rgb(128, 128, 128),   // Gray
+        SegmentType::Address => Color32::from_rgb(100, 180, 255),    // Light blue
+        SegmentType::Command => Color32::from_rgb(255, 180, 100),    // Orange
+        SegmentType::Frequency => Color32::from_rgb(255, 255, 100),  // Yellow
+        SegmentType::Mode => Color32::from_rgb(200, 150, 255),       // Light purple
+        SegmentType::Status => Color32::from_rgb(255, 150, 200),     // Pink
+        SegmentType::Data => Color32::from_rgb(100, 255, 180),       // Light green
+        SegmentType::Terminator => Color32::from_rgb(128, 128, 128), // Gray
+    }
+}
 
 /// Source of traffic data
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +55,7 @@ pub struct TrafficEntry {
     /// Raw data
     pub data: Vec<u8>,
     /// Decoded representation (if available)
-    pub decoded: Option<String>,
+    pub decoded: Option<AnnotatedFrame>,
 }
 
 /// Traffic direction
@@ -56,10 +73,6 @@ pub struct TrafficMonitor {
     entries: VecDeque<TrafficEntry>,
     /// Maximum entries to keep
     max_entries: usize,
-    /// Show hex view
-    show_hex: bool,
-    /// Show decoded view
-    show_decoded: bool,
     /// Auto-scroll to bottom
     auto_scroll: bool,
     /// Filter by direction
@@ -71,13 +84,11 @@ pub struct TrafficMonitor {
 }
 
 impl TrafficMonitor {
-    /// Create a new traffic monitor with display settings
-    pub fn new(max_entries: usize, show_hex: bool, show_decoded: bool) -> Self {
+    /// Create a new traffic monitor
+    pub fn new(max_entries: usize) -> Self {
         Self {
             entries: VecDeque::with_capacity(max_entries),
             max_entries,
-            show_hex,
-            show_decoded,
             auto_scroll: true,
             filter_direction: None,
             show_simulated: true,
@@ -104,7 +115,7 @@ impl TrafficMonitor {
                 port,
             },
             data: data.to_vec(),
-            decoded: try_decode(data),
+            decoded: decode_and_annotate(data),
         });
     }
 
@@ -119,7 +130,7 @@ impl TrafficMonitor {
             direction: TrafficDirection::Incoming,
             source: TrafficSource::SimulatedRadio { id },
             data: data.to_vec(),
-            decoded: try_decode(data),
+            decoded: decode_and_annotate(data),
         });
     }
 
@@ -139,7 +150,7 @@ impl TrafficMonitor {
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::RealAmplifier { port },
             data: data.to_vec(),
-            decoded: try_decode(data),
+            decoded: decode_and_annotate(data),
         });
     }
 
@@ -154,7 +165,7 @@ impl TrafficMonitor {
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::SimulatedAmplifier,
             data: data.to_vec(),
-            decoded: try_decode(data),
+            decoded: decode_and_annotate(data),
         });
     }
 
@@ -171,13 +182,10 @@ impl TrafficMonitor {
         self.entries.clear();
     }
 
-    /// Draw the traffic monitor UI
-    pub fn draw(&mut self, ui: &mut Ui) {
+    /// Draw the traffic monitor UI with display settings
+    pub fn draw(&mut self, ui: &mut Ui, show_hex: bool, show_decoded: bool) {
         // Toolbar
         ui.horizontal(|ui| {
-            ui.checkbox(&mut self.show_hex, "Hex");
-            ui.checkbox(&mut self.show_decoded, "Decoded");
-            ui.separator();
             ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
             ui.separator();
 
@@ -258,7 +266,7 @@ impl TrafficMonitor {
                 for i in row_range {
                     if let Some(&entry_idx) = filtered_indices.get(i) {
                         if let Some(entry) = self.entries.get(entry_idx) {
-                            self.draw_entry(ui, entry);
+                            self.draw_entry(ui, entry, entry_idx, show_hex, show_decoded);
                         }
                     }
                 }
@@ -266,8 +274,17 @@ impl TrafficMonitor {
     }
 
     /// Draw a single traffic entry
-    fn draw_entry(&self, ui: &mut Ui, entry: &TrafficEntry) {
+    fn draw_entry(&self, ui: &mut Ui, entry: &TrafficEntry, entry_idx: usize, show_hex: bool, show_decoded: bool) {
         ui.horizontal(|ui| {
+            // Create a unique ID for this entry's hover state
+            let hover_id = Id::new("traffic_hover").with(entry_idx);
+
+            // Get the currently hovered byte range from previous frame
+            let hovered_range: Option<Range<usize>> = ui.memory(|mem| mem.data.get_temp(hover_id));
+
+            // Track new hover state for this frame
+            let mut new_hovered_range: Option<Range<usize>> = None;
+
             // Timestamp
             let time = entry
                 .timestamp
@@ -326,52 +343,302 @@ impl TrafficMonitor {
                 }
             }
 
-            // Data
-            if self.show_hex {
-                let hex: String = entry
-                    .data
+            // Protocol badge
+            if let Some(decoded) = &entry.decoded {
+                let protocol_color = match decoded.protocol {
+                    "CI-V" => Color32::from_rgb(255, 180, 100),  // Orange
+                    "Yaesu" => Color32::from_rgb(100, 200, 255), // Cyan
+                    "Kenwood" => Color32::from_rgb(180, 255, 100), // Lime
+                    "Flex" => Color32::from_rgb(255, 150, 255),  // Magenta
+                    _ => Color32::GRAY,
+                };
+                ui.label(
+                    RichText::new(format!("[{}]", decoded.protocol))
+                        .color(protocol_color)
+                        .strong()
+                        .monospace(),
+                );
+            }
+
+            // Decoded summary with colored parts (shown first, after badges)
+            if show_decoded {
+                if let Some(decoded) = &entry.decoded {
+                    let prev_spacing = ui.spacing().item_spacing.x;
+                    ui.spacing_mut().item_spacing.x = 0.0;
+
+                    for part in &decoded.summary {
+                        let color = segment_color(part.part_type);
+
+                        // Check if this part should be highlighted
+                        let is_highlighted = part.range.as_ref().map(|pr| {
+                            hovered_range.as_ref().map(|hr| hr.start == pr.start && hr.end == pr.end).unwrap_or(false)
+                        }).unwrap_or(false);
+
+                        let text = if is_highlighted {
+                            RichText::new(&part.text)
+                                .color(Color32::WHITE)
+                                .background_color(Color32::from_rgb(60, 60, 80))
+                                .monospace()
+                        } else {
+                            RichText::new(&part.text).color(color).monospace()
+                        };
+
+                        let response = ui.label(text);
+
+                        // Track hover on summary parts to highlight hex/ASCII
+                        if let Some(range) = &part.range {
+                            if response.hovered() {
+                                new_hovered_range = Some(range.clone());
+                            }
+                        }
+                    }
+
+                    ui.spacing_mut().item_spacing.x = prev_spacing;
+                }
+            }
+
+            // ASCII representation with highlighting
+            if show_hex {
+                ui.add_space(8.0);
+                if let Some(decoded) = &entry.decoded {
+                    self.draw_ascii_with_segments(
+                        ui,
+                        &entry.data,
+                        &decoded.segments,
+                        hovered_range.as_ref(),
+                        &mut new_hovered_range,
+                    );
+                } else {
+                    let ascii: String = entry
+                        .data
+                        .iter()
+                        .map(|&b| {
+                            if b.is_ascii_graphic() || b == b' ' {
+                                b as char
+                            } else {
+                                '.'
+                            }
+                        })
+                        .collect();
+                    ui.label(RichText::new(ascii).color(Color32::GRAY).monospace());
+                }
+            }
+
+            // Color-coded hex data with segment annotations (shown last)
+            if show_hex {
+                ui.add_space(8.0);
+                if let Some(decoded) = &entry.decoded {
+                    self.draw_colored_hex(
+                        ui,
+                        &entry.data,
+                        &decoded.segments,
+                        hovered_range.as_ref(),
+                        &mut new_hovered_range,
+                    );
+                } else {
+                    let hex: String = entry
+                        .data
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    ui.label(RichText::new(hex).monospace());
+                }
+            }
+
+            // Store hover state for next frame
+            ui.memory_mut(|mem| {
+                if let Some(range) = new_hovered_range {
+                    mem.data.insert_temp(hover_id, range);
+                } else {
+                    mem.data.remove::<Range<usize>>(hover_id);
+                }
+            });
+        });
+    }
+
+    /// Draw ASCII representation with segment-based highlighting
+    fn draw_ascii_with_segments(
+        &self,
+        ui: &mut Ui,
+        data: &[u8],
+        segments: &[FrameSegment],
+        hovered_range: Option<&Range<usize>>,
+        new_hovered_range: &mut Option<Range<usize>>,
+    ) {
+        let mut sorted_segments: Vec<_> = segments.iter().collect();
+        sorted_segments.sort_by_key(|s| s.range.start);
+
+        let prev_spacing = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 0.0;
+
+        let mut pos = 0;
+        for seg in &sorted_segments {
+            // Handle gap before segment
+            while pos < seg.range.start && pos < data.len() {
+                let ch = if data[pos].is_ascii_graphic() || data[pos] == b' ' {
+                    data[pos] as char
+                } else {
+                    '.'
+                };
+                ui.label(RichText::new(ch).color(Color32::DARK_GRAY).monospace());
+                pos += 1;
+            }
+
+            // Render segment's ASCII
+            if seg.range.start < data.len() {
+                let end = seg.range.end.min(data.len());
+                let ascii: String = data[seg.range.start..end]
+                    .iter()
+                    .map(|&b| {
+                        if b.is_ascii_graphic() || b == b' ' {
+                            b as char
+                        } else {
+                            '.'
+                        }
+                    })
+                    .collect();
+
+                // Check if this segment is highlighted
+                let is_highlighted = hovered_range
+                    .map(|hr| hr.start == seg.range.start && hr.end == seg.range.end)
+                    .unwrap_or(false);
+
+                let color = if is_highlighted {
+                    Color32::WHITE
+                } else {
+                    segment_color(seg.segment_type)
+                };
+
+                let text = if is_highlighted {
+                    RichText::new(&ascii)
+                        .color(color)
+                        .background_color(Color32::from_rgb(60, 60, 80))
+                        .monospace()
+                } else {
+                    RichText::new(&ascii).color(color).monospace()
+                };
+
+                let response = ui.label(text);
+
+                // Track hover and show tooltip
+                if response.hovered() {
+                    *new_hovered_range = Some(seg.range.clone());
+                    if !seg.label.is_empty() && !seg.value.is_empty() {
+                        response.on_hover_text(format!("{}: {}", seg.label, seg.value));
+                    } else if !seg.label.is_empty() {
+                        response.on_hover_text(seg.label);
+                    }
+                }
+
+                pos = end;
+            }
+        }
+
+        // Handle remaining bytes
+        while pos < data.len() {
+            let ch = if data[pos].is_ascii_graphic() || data[pos] == b' ' {
+                data[pos] as char
+            } else {
+                '.'
+            };
+            ui.label(RichText::new(ch).color(Color32::DARK_GRAY).monospace());
+            pos += 1;
+        }
+
+        ui.spacing_mut().item_spacing.x = prev_spacing;
+    }
+
+    /// Draw hex bytes with colors based on frame segments
+    fn draw_colored_hex(
+        &self,
+        ui: &mut Ui,
+        data: &[u8],
+        segments: &[FrameSegment],
+        hovered_range: Option<&Range<usize>>,
+        new_hovered_range: &mut Option<Range<usize>>,
+    ) {
+        // Sort segments by start position
+        let mut sorted_segments: Vec<_> = segments.iter().collect();
+        sorted_segments.sort_by_key(|s| s.range.start);
+
+        // Remove item spacing for tight hex display
+        let prev_spacing = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 0.0;
+
+        let mut pos = 0;
+        for seg in &sorted_segments {
+            // Handle any gap before this segment (shouldn't happen normally)
+            while pos < seg.range.start && pos < data.len() {
+                let hex = format!("{:02X} ", data[pos]);
+                ui.label(RichText::new(hex).color(Color32::WHITE).monospace());
+                pos += 1;
+            }
+
+            // Render this segment's bytes together
+            if seg.range.start < data.len() {
+                let end = seg.range.end.min(data.len());
+                let hex: String = data[seg.range.start..end]
                     .iter()
                     .map(|b| format!("{:02X}", b))
                     .collect::<Vec<_>>()
                     .join(" ");
-                ui.label(RichText::new(hex).monospace());
-            }
 
-            if self.show_decoded {
-                if let Some(decoded) = &entry.decoded {
-                    ui.label(
-                        RichText::new(format!("({})", decoded))
-                            .color(Color32::YELLOW)
-                            .monospace(),
-                    );
+                // Add trailing space unless this is the last segment
+                let hex_display = if end < data.len() {
+                    format!("{} ", hex)
+                } else {
+                    hex
+                };
+
+                // Check if this segment is highlighted
+                let is_highlighted = hovered_range
+                    .map(|hr| hr.start == seg.range.start && hr.end == seg.range.end)
+                    .unwrap_or(false);
+
+                let color = if is_highlighted {
+                    Color32::WHITE
+                } else {
+                    segment_color(seg.segment_type)
+                };
+
+                let text = if is_highlighted {
+                    RichText::new(&hex_display)
+                        .color(color)
+                        .background_color(Color32::from_rgb(60, 60, 80))
+                        .monospace()
+                } else {
+                    RichText::new(&hex_display).color(color).monospace()
+                };
+
+                let response = ui.label(text);
+
+                // Track hover and show tooltip
+                if response.hovered() {
+                    *new_hovered_range = Some(seg.range.clone());
+                    if !seg.label.is_empty() && !seg.value.is_empty() {
+                        response.on_hover_text(format!("{}: {}", seg.label, seg.value));
+                    } else if !seg.label.is_empty() {
+                        response.on_hover_text(seg.label);
+                    }
                 }
+
+                pos = end;
             }
-        });
-    }
-}
-
-/// Try to decode raw data into a human-readable string
-fn try_decode(data: &[u8]) -> Option<String> {
-    // Try ASCII (Kenwood/Elecraft)
-    if let Ok(s) = std::str::from_utf8(data) {
-        if s.chars().all(|c| c.is_ascii_graphic() || c == ';') {
-            return Some(s.trim_end_matches(';').to_string());
         }
-    }
 
-    // Try CI-V frame
-    if data.len() >= 6 && data[0] == 0xFE && data[1] == 0xFE {
-        let to = data[2];
-        let from = data[3];
-        let cmd = data[4];
-        return Some(format!("CI-V {:02X}→{:02X} cmd={:02X}", from, to, cmd));
-    }
+        // Handle any remaining bytes after all segments
+        while pos < data.len() {
+            let hex = if pos < data.len() - 1 {
+                format!("{:02X} ", data[pos])
+            } else {
+                format!("{:02X}", data[pos])
+            };
+            ui.label(RichText::new(hex).color(Color32::WHITE).monospace());
+            pos += 1;
+        }
 
-    // Yaesu 5-byte command
-    if data.len() == 5 {
-        let opcode = data[4];
-        return Some(format!("Yaesu cmd={:02X}", opcode));
+        // Restore spacing
+        ui.spacing_mut().item_spacing.x = prev_spacing;
     }
-
-    None
 }

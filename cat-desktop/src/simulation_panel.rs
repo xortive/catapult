@@ -73,6 +73,11 @@ impl SimulationPanel {
         &self.context
     }
 
+    /// Get a mutable reference to the simulation context
+    pub fn context_mut(&mut self) -> &mut SimulationContext {
+        &mut self.context
+    }
+
     /// Drain all pending simulation events
     pub fn drain_events(&mut self) -> Vec<SimulationEvent> {
         self.context.drain_events()

@@ -1,9 +1,10 @@
 //! CAT Protocol Library
 //!
-//! This crate provides parsing and encoding for the four major amateur radio
+//! This crate provides parsing and encoding for amateur radio
 //! CAT (Computer Aided Transceiver) protocols:
 //!
-//! - **Yaesu CAT**: 5-byte binary command format with BCD frequency encoding
+//! - **Yaesu CAT**: 5-byte binary command format with BCD frequency encoding (FT-817/857/897)
+//! - **Yaesu ASCII**: ASCII semicolon-terminated commands (FT-991/FTDX series)
 //! - **Icom CI-V**: Variable-length framed messages with address-based routing
 //! - **Kenwood**: ASCII semicolon-terminated commands
 //! - **Elecraft**: Kenwood-compatible with extended commands
@@ -32,6 +33,7 @@
 //! ```
 
 pub mod command;
+pub mod display;
 pub mod elecraft;
 pub mod error;
 pub mod flex;
@@ -39,6 +41,7 @@ pub mod icom;
 pub mod kenwood;
 pub mod models;
 pub mod yaesu;
+pub mod yaesu_ascii;
 
 pub use command::{OperatingMode, RadioCommand};
 pub use error::{ParseError, ProtocolError};
@@ -48,8 +51,10 @@ pub use models::{ProtocolId, RadioCapabilities, RadioDatabase, RadioModel};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Protocol {
-    /// Yaesu CAT protocol (5-byte binary commands)
+    /// Yaesu CAT protocol (5-byte binary commands for FT-817/857/897)
     Yaesu,
+    /// Yaesu ASCII protocol (semicolon-terminated for FT-991/FTDX series)
+    YaesuAscii,
     /// Icom CI-V protocol (framed variable-length messages)
     IcomCIV,
     /// Kenwood protocol (ASCII semicolon-terminated)
@@ -65,6 +70,7 @@ impl Protocol {
     pub fn name(&self) -> &'static str {
         match self {
             Protocol::Yaesu => "Yaesu CAT",
+            Protocol::YaesuAscii => "Yaesu ASCII",
             Protocol::IcomCIV => "Icom CI-V",
             Protocol::Kenwood => "Kenwood",
             Protocol::Elecraft => "Elecraft",

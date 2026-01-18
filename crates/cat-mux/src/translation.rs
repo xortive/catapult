@@ -78,7 +78,7 @@ impl ProtocolTranslator {
             Protocol::Kenwood => self.to_kenwood(&cmd),
             Protocol::Elecraft => self.to_elecraft(&cmd),
             Protocol::IcomCIV => self.to_icom(&cmd),
-            Protocol::Yaesu => self.to_yaesu(&cmd),
+            Protocol::Yaesu | Protocol::YaesuAscii => self.to_yaesu(&cmd),
             Protocol::FlexRadio => self.to_flex(&cmd),
         }
     }
@@ -123,7 +123,7 @@ impl ProtocolTranslator {
                     .map(|c| c.to_radio_command())
                     .ok_or_else(|| MuxError::TranslationError("incomplete CI-V data".into()))
             }
-            Protocol::Yaesu => {
+            Protocol::Yaesu | Protocol::YaesuAscii => {
                 let mut codec = YaesuCodec::new();
                 codec.push_bytes(data);
                 codec

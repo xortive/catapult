@@ -35,3 +35,4 @@ pub mod usb_ids;
 pub use error::DetectError;
 pub use probe::{ProbeResult, RadioProber};
 pub use scanner::{DetectedRadio, PortScanner, SerialPortInfo};
+pub use usb_ids::{suggest_protocol_for_port, PortClassification};

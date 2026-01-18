@@ -329,9 +329,14 @@ impl FromRadioCommand for YaesuCommand {
             RadioCommand::SetMode { mode } => Some(YaesuCommand::SetMode {
                 mode: operating_mode_to_yaesu(*mode),
             }),
+            RadioCommand::ModeReport { mode } => Some(YaesuCommand::SetMode {
+                mode: operating_mode_to_yaesu(*mode),
+            }),
             RadioCommand::GetMode => Some(YaesuCommand::GetFrequencyMode),
             RadioCommand::SetPtt { active: true } => Some(YaesuCommand::PttOn),
             RadioCommand::SetPtt { active: false } => Some(YaesuCommand::PttOff),
+            RadioCommand::PttReport { active: true } => Some(YaesuCommand::PttOn),
+            RadioCommand::PttReport { active: false } => Some(YaesuCommand::PttOff),
             RadioCommand::GetPtt => Some(YaesuCommand::ReadTxStatus),
             RadioCommand::GetStatus => Some(YaesuCommand::ReadRxStatus),
             RadioCommand::SetVfo { vfo: Vfo::Split } => Some(YaesuCommand::SplitOn),

@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::DetectError;
 use crate::probe::{ProbeConfig, RadioProber};
-use crate::usb_ids;
+use crate::usb_ids::{self, PortClassification};
 
 /// Information about a serial port
 #[derive(Debug, Clone)]
@@ -32,30 +32,45 @@ pub struct SerialPortInfo {
     pub product: Option<String>,
     /// Adapter type (FTDI, CP210x, etc.)
     pub adapter_type: Option<String>,
+    /// Port classification for safe probing decisions
+    pub classification: PortClassification,
+    /// Human-readable hint for display (e.g., "Icom USB", "SmartSDR", "FTDI")
+    pub classification_hint: Option<String>,
 }
 
 impl SerialPortInfo {
     /// Create from serialport crate's port info
     fn from_serialport(name: String, port_type: &SerialPortType) -> Self {
         match port_type {
-            SerialPortType::UsbPort(usb) => Self {
-                port: name,
-                vid: Some(usb.vid),
-                pid: Some(usb.pid),
-                serial_number: usb.serial_number.clone(),
-                manufacturer: usb.manufacturer.clone(),
-                product: usb.product.clone(),
-                adapter_type: usb_ids::adapter_name(usb.vid).map(String::from),
-            },
-            _ => Self {
-                port: name,
-                vid: None,
-                pid: None,
-                serial_number: None,
-                manufacturer: None,
-                product: None,
-                adapter_type: None,
-            },
+            SerialPortType::UsbPort(usb) => {
+                let (classification, hint) =
+                    usb_ids::classify_port(Some(usb.vid), Some(usb.pid), &name);
+                Self {
+                    port: name,
+                    vid: Some(usb.vid),
+                    pid: Some(usb.pid),
+                    serial_number: usb.serial_number.clone(),
+                    manufacturer: usb.manufacturer.clone(),
+                    product: usb.product.clone(),
+                    adapter_type: usb_ids::adapter_name(usb.vid).map(String::from),
+                    classification,
+                    classification_hint: hint.map(String::from),
+                }
+            }
+            _ => {
+                let (classification, hint) = usb_ids::classify_port(None, None, &name);
+                Self {
+                    port: name,
+                    vid: None,
+                    pid: None,
+                    serial_number: None,
+                    manufacturer: None,
+                    product: None,
+                    adapter_type: None,
+                    classification,
+                    classification_hint: hint.map(String::from),
+                }
+            }
         }
     }
 
@@ -155,6 +170,11 @@ impl PortScanner {
         }
     }
 
+    /// Sort ports by classification (known radios first, unknown last)
+    pub fn sort_by_classification(ports: &mut [SerialPortInfo]) {
+        ports.sort_by_key(|p| p.classification);
+    }
+
     /// Create a scanner with custom configuration
     pub fn with_config(config: ScannerConfig) -> Self {
         Self {
@@ -189,6 +209,10 @@ impl PortScanner {
     }
 
     /// Scan all ports and detect radios
+    ///
+    /// Only probes ports classified as safe (KnownRadio or VirtualPort).
+    /// Ports with generic adapters or unknown devices are skipped to avoid
+    /// disrupting other equipment.
     pub async fn scan(&mut self) -> Vec<DetectedRadio> {
         let ports = match self.enumerate_ports() {
             Ok(p) => p,
@@ -201,6 +225,15 @@ impl PortScanner {
         let mut detected = Vec::new();
 
         for port_info in ports {
+            // Only auto-probe ports that are safe to probe
+            if !port_info.classification.is_safe_to_probe() {
+                debug!(
+                    "Skipping probe of {}: {:?} (not safe to auto-probe)",
+                    port_info.port, port_info.classification
+                );
+                continue;
+            }
+
             if self.config.filter_known_adapters && !port_info.is_known_adapter() {
                 debug!("Skipping unknown adapter: {}", port_info.port);
                 continue;
@@ -317,6 +350,27 @@ mod tests {
         assert_eq!(info.pid, Some(0x6001));
         assert_eq!(info.adapter_type.as_deref(), Some("FTDI"));
         assert!(info.is_known_adapter());
+        // FTDI is a known adapter, not a known radio
+        assert_eq!(info.classification, PortClassification::KnownAdapter);
+        assert_eq!(info.classification_hint.as_deref(), Some("FTDI"));
+        assert!(!info.classification.is_safe_to_probe());
+    }
+
+    #[test]
+    fn test_serial_port_info_from_icom() {
+        let usb_info = SerialPortType::UsbPort(UsbPortInfo {
+            vid: 0x0C26, // Icom VID
+            pid: 0x0036, // IC-7300
+            serial_number: None,
+            manufacturer: Some("Icom Inc.".to_string()),
+            product: Some("IC-7300".to_string()),
+        });
+
+        let info = SerialPortInfo::from_serialport("/dev/ttyACM0".to_string(), &usb_info);
+
+        assert_eq!(info.classification, PortClassification::KnownRadio);
+        assert_eq!(info.classification_hint.as_deref(), Some("Icom USB"));
+        assert!(info.classification.is_safe_to_probe());
     }
 
     #[test]
@@ -333,6 +387,8 @@ mod tests {
                 manufacturer: None,
                 product: None,
                 adapter_type: None,
+                classification: PortClassification::Unknown,
+                classification_hint: None,
             },
             civ_address: None,
             baud_rate: 38400,
@@ -340,5 +396,51 @@ mod tests {
         };
 
         assert_eq!(radio.model_name(), "Kenwood radio");
+    }
+
+    #[test]
+    fn test_sort_by_classification() {
+        let mut ports = vec![
+            SerialPortInfo {
+                port: "/dev/ttyUSB0".to_string(),
+                vid: None,
+                pid: None,
+                serial_number: None,
+                manufacturer: None,
+                product: None,
+                adapter_type: None,
+                classification: PortClassification::Unknown,
+                classification_hint: None,
+            },
+            SerialPortInfo {
+                port: "/dev/ttyACM0".to_string(),
+                vid: Some(0x0C26),
+                pid: Some(0x0036),
+                serial_number: None,
+                manufacturer: None,
+                product: None,
+                adapter_type: Some("Icom USB".to_string()),
+                classification: PortClassification::KnownRadio,
+                classification_hint: Some("Icom USB".to_string()),
+            },
+            SerialPortInfo {
+                port: "/dev/ttyUSB1".to_string(),
+                vid: Some(0x0403),
+                pid: Some(0x6001),
+                serial_number: None,
+                manufacturer: None,
+                product: None,
+                adapter_type: Some("FTDI".to_string()),
+                classification: PortClassification::KnownAdapter,
+                classification_hint: Some("FTDI".to_string()),
+            },
+        ];
+
+        PortScanner::sort_by_classification(&mut ports);
+
+        // Should be sorted: KnownRadio, KnownAdapter, Unknown
+        assert_eq!(ports[0].classification, PortClassification::KnownRadio);
+        assert_eq!(ports[1].classification, PortClassification::KnownAdapter);
+        assert_eq!(ports[2].classification, PortClassification::Unknown);
     }
 }

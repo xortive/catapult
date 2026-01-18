@@ -237,7 +237,7 @@ impl RadioDatabase {
             Protocol::IcomCIV => Self::icom_radios().collect(),
             Protocol::Kenwood => Self::kenwood_radios().collect(),
             Protocol::Elecraft => Self::elecraft_radios().collect(),
-            Protocol::Yaesu => Self::yaesu_radios().collect(),
+            Protocol::Yaesu | Protocol::YaesuAscii => Self::yaesu_radios().collect(),
             Protocol::FlexRadio => Self::flex_radios().collect(),
         }
     }
@@ -248,7 +248,7 @@ impl RadioDatabase {
             Protocol::IcomCIV => Self::by_civ_address(0x94), // IC-7300
             Protocol::Kenwood => Self::by_kenwood_id("023"), // TS-590SG
             Protocol::Elecraft => Self::by_elecraft_id("K3"), // K3
-            Protocol::Yaesu => YAESU_RADIOS.first().map(|(_, m)| m.into()),
+            Protocol::Yaesu | Protocol::YaesuAscii => YAESU_RADIOS.first().map(|(_, m)| m.into()),
             Protocol::FlexRadio => Self::by_flex_id("909"), // FLEX-6600
         }
     }

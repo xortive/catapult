@@ -2,8 +2,60 @@
 
 use std::path::PathBuf;
 
+use cat_protocol::Protocol;
+use cat_sim::VirtualRadioConfig;
 use egui::Ui;
 use serde::{Deserialize, Serialize};
+
+/// Saved COM port radio configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConfiguredRadio {
+    /// Serial port path
+    pub port: String,
+    /// Protocol used
+    pub protocol: Protocol,
+    /// Model name (for display)
+    pub model_name: String,
+    /// Baud rate
+    pub baud_rate: u32,
+    /// CI-V address for Icom radios
+    #[serde(default)]
+    pub civ_address: Option<u8>,
+}
+
+/// Saved amplifier configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AmplifierSettings {
+    /// Connection type: "com" or "simulated"
+    pub connection_type: String,
+    /// Protocol used
+    pub protocol: Protocol,
+    /// COM port (if connection_type is "com")
+    #[serde(default)]
+    pub port: String,
+    /// Baud rate
+    #[serde(default = "default_amp_baud")]
+    pub baud_rate: u32,
+    /// CI-V address for Icom amplifiers
+    #[serde(default)]
+    pub civ_address: u8,
+}
+
+fn default_amp_baud() -> u32 {
+    9600
+}
+
+impl Default for AmplifierSettings {
+    fn default() -> Self {
+        Self {
+            connection_type: "simulated".to_string(),
+            protocol: Protocol::Kenwood,
+            port: String::new(),
+            baud_rate: 9600,
+            civ_address: 0x00,
+        }
+    }
+}
 
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -20,9 +72,15 @@ pub struct Settings {
     pub show_decoded: bool,
     /// Default baud rates to try
     pub baud_rates: Vec<u32>,
-    /// Debug mode - enables simulated radio without hardware
+    /// Virtual radios to restore on startup
     #[serde(default)]
-    pub debug_mode: bool,
+    pub virtual_radios: Vec<VirtualRadioConfig>,
+    /// Configured COM port radios to restore on startup
+    #[serde(default)]
+    pub configured_radios: Vec<ConfiguredRadio>,
+    /// Amplifier configuration
+    #[serde(default)]
+    pub amplifier: AmplifierSettings,
 }
 
 impl Default for Settings {
@@ -34,7 +92,9 @@ impl Default for Settings {
             show_hex: true,
             show_decoded: true,
             baud_rates: vec![38400, 19200, 9600, 4800, 115200],
-            debug_mode: false,
+            virtual_radios: Vec::new(),
+            configured_radios: Vec::new(),
+            amplifier: AmplifierSettings::default(),
         }
     }
 }
@@ -119,23 +179,7 @@ impl Settings {
                 ui.label("Show decoded:");
                 ui.checkbox(&mut self.show_decoded, "");
                 ui.end_row();
-
-                // Debug mode
-                ui.label("Debug mode:");
-                ui.checkbox(&mut self.debug_mode, "");
-                ui.end_row();
             });
-
-        if self.debug_mode {
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(
-                    "Debug mode enables simulated radio for testing without hardware",
-                )
-                .color(egui::Color32::YELLOW)
-                .small(),
-            );
-        }
 
         ui.add_space(16.0);
 

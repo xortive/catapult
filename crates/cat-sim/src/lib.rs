@@ -34,4 +34,4 @@ pub mod context;
 pub mod radio;
 
 pub use context::{SimulationContext, SimulationEvent};
-pub use radio::VirtualRadio;
+pub use radio::{VirtualRadio, VirtualRadioConfig};

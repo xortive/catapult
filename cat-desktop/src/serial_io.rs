@@ -61,7 +61,7 @@ impl RadioConnection {
                 ProtocolCodecBox::Kenwood(KenwoodCodec::new())
             }
             Protocol::IcomCIV => ProtocolCodecBox::Icom(CivCodec::new()),
-            Protocol::Yaesu => ProtocolCodecBox::Yaesu(YaesuCodec::new()),
+            Protocol::Yaesu | Protocol::YaesuAscii => ProtocolCodecBox::Yaesu(YaesuCodec::new()),
             Protocol::FlexRadio => {
                 // FlexRadio uses Ethernet/TCP, not serial - use Kenwood as fallback
                 ProtocolCodecBox::Kenwood(KenwoodCodec::new())
@@ -113,7 +113,7 @@ impl RadioConnection {
                     CivCommand::new(addr, cat_protocol::icom::CONTROLLER_ADDR, c.command).encode()
                 })
             }
-            Protocol::Yaesu => {
+            Protocol::Yaesu | Protocol::YaesuAscii => {
                 // Legacy Yaesu binary protocol doesn't support AI
                 None
             }
