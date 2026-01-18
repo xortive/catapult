@@ -4,8 +4,6 @@
 //! connected to a single amplifier via CAT protocol translation.
 
 mod app;
-mod firmware;
-mod firmware_panel;
 mod radio_panel;
 mod serial_io;
 mod settings;

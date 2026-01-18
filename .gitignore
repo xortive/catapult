@@ -1,6 +1,6 @@
 # Generated files
 /target/
-cat-bridge/target/
+**/target/
 
 # Editor files
 .idea/
@@ -19,14 +19,8 @@ Thumbs.db
 *.so
 *.dylib
 
-# Bundled firmware (built separately)
-cat-desktop/assets/cat-bridge.bin
-
 # Logs
 *.log
-
-# ESP32 specific
-cat-bridge/.embuild/
 
 # IDE specific
 *.iml

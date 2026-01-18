@@ -10,8 +10,7 @@ catapult/
 ├── cat-mux/          # Multiplexer engine
 ├── cat-detect/       # Hardware detection
 ├── cat-sim/          # Simulation framework
-├── cat-desktop/      # GUI application
-└── cat-bridge/       # ESP32 null modem firmware (optional)
+└── cat-desktop/      # GUI application
 ```
 
 ## Data Flow

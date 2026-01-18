@@ -85,12 +85,11 @@ The project is organized as a Cargo workspace:
 catapult/
 ├── Cargo.toml          # Workspace root
 ├── cat-desktop/        # GUI application
-├── crates/
-│   ├── cat-protocol/   # Protocol library
-│   ├── cat-mux/        # Multiplexer library
-│   ├── cat-detect/     # Detection library
-│   └── cat-sim/        # Simulation library
-└── cat-bridge/         # ESP32 firmware
+└── crates/
+    ├── cat-protocol/   # Protocol library
+    ├── cat-mux/        # Multiplexer library
+    ├── cat-detect/     # Detection library
+    └── cat-sim/        # Simulation library
 ```
 
 ## Building Individual Crates

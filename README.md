@@ -16,7 +16,6 @@ not been tested with real hardware yet.
 - **Protocol Translation**: Translates between any supported protocol
 - **Intelligent Switching**: Manual, PTT-triggered, or frequency-change triggered
 - **Desktop Application**: Cross-platform GUI built with egui
-- **ESP32 Bridge**: Dual USB serial bridge allowing host to appear as USB device to amplifier
 
 ## Architecture
 
@@ -39,31 +38,11 @@ not been tested with real hardware yet.
 └────┴──────────┴─┴──────────┴─┴──────────┴─┴──────────┴───────────────┘
           │            │            │              │
           ▼            ▼            ▼              ▼
-     ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────┐
-     │ Radio A │  │ Radio B │  │ Radio C │  │  ESP32-S3       │
-     │ (Yaesu) │  │ (Icom)  │  │(Kenwood)│  │  USB Bridge     │
-     └─────────┘  └─────────┘  └─────────┘  │  (JTAG port)    │
-                                            └────────┬────────┘
-                                                     │ USB OTG
-                                                     │ (CDC device)
-                                                     ▼
-                                               ┌───────────┐
-                                               │ Amplifier │
-                                               │ (USB host)│
-                                               └───────────┘
+     ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────────┐
+     │ Radio A │  │ Radio B │  │ Radio C │  │ Amplifier │
+     │ (Yaesu) │  │ (Icom)  │  │(Kenwood)│  │           │
+     └─────────┘  └─────────┘  └─────────┘  └───────────┘
 ```
-
-### Why the ESP32 Bridge?
-
-Many amplifiers have a USB host port expecting a USB serial device (like a USB-to-serial
-adapter). However, desktop operating systems (Windows, macOS, Linux) can only act as USB
-**hosts**, not USB **devices**. The ESP32-S3 solves this by:
-
-1. Connecting to the host computer via its **USB-Serial-JTAG** port (appears as a COM port)
-2. Acting as a USB **CDC device** on its **USB OTG** port (plugs into the amplifier)
-3. Bridging data bidirectionally between the two USB interfaces
-
-This allows the host computer to effectively "be" a USB serial device to the amplifier.
 
 ## Project Structure
 
@@ -72,14 +51,12 @@ catapult/
 ├── crates/
 │   ├── cat-protocol/     # CAT protocol parsing/encoding library
 │   ├── cat-detect/       # Auto-detection of radios
-│   └── cat-mux/          # Multiplexer engine
-├── cat-desktop/          # Desktop application (egui)
-└── cat-bridge/           # ESP32-S3 firmware
+│   ├── cat-mux/          # Multiplexer engine
+│   └── cat-sim/          # Simulation framework
+└── cat-desktop/          # Desktop application (egui)
 ```
 
 ## Building
-
-### Desktop Application
 
 ```bash
 # Build the desktop app
@@ -87,23 +64,6 @@ cargo build --release -p cat-desktop
 
 # Run the desktop app
 cargo run -p cat-desktop
-```
-
-### ESP32 Firmware
-
-Requires the esp-rs toolchain:
-
-```bash
-# Install esp-rs toolchain
-cargo install espup
-espup install
-
-# Build firmware
-cd cat-bridge
-cargo build --release
-
-# Flash to ESP32-S3
-cargo run --release
 ```
 
 ## Supported Protocols
@@ -142,15 +102,9 @@ A configurable lockout time (default 500ms) prevents rapid switching between rad
 
 ## Hardware Requirements
 
-### Desktop
-- USB serial ports connected to radios
+- USB serial ports or adapters connected to radios
 - Common USB-serial adapters: FTDI, CP210x, CH340
-
-### ESP32 Bridge
-- ESP32-S3 development board with **two USB ports** (e.g., ESP32-S3-DevKitC)
-  - **USB-UART/JTAG port**: Connect to host computer
-  - **USB OTG port**: Connect to amplifier's USB host port
-- The amplifier must have a USB host port that accepts USB serial devices
+- For RS232 amplifiers: USB-to-RS232 adapter with null modem cable
 
 ## License
 

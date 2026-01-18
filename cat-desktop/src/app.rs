@@ -11,7 +11,6 @@ use cat_sim::SimulationEvent;
 use eframe::CreationContext;
 use egui::{Color32, RichText, Ui};
 
-use crate::firmware_panel::FirmwarePanel;
 use crate::radio_panel::RadioPanel;
 use crate::serial_io::AmplifierConnection;
 use crate::settings::Settings;
@@ -54,10 +53,6 @@ pub struct CatapultApp {
     status_message: Option<(String, Instant)>,
     /// Show settings panel
     show_settings: bool,
-    /// Show firmware panel
-    show_firmware: bool,
-    /// Firmware panel
-    firmware_panel: FirmwarePanel,
     /// Show simulation panel
     show_simulation: bool,
     /// Simulation panel for virtual radios
@@ -102,8 +97,6 @@ impl CatapultApp {
             last_scan: None,
             status_message: None,
             show_settings: false,
-            show_firmware: false,
-            firmware_panel: FirmwarePanel::new(),
             show_simulation: false,
             simulation_panel: SimulationPanel::new(),
             bg_rx,
@@ -235,10 +228,6 @@ impl CatapultApp {
 
             if ui.button("Settings").clicked() {
                 self.show_settings = !self.show_settings;
-            }
-
-            if ui.button("Firmware").clicked() {
-                self.show_firmware = !self.show_firmware;
             }
 
             // Simulation mode button (only shown when enabled in settings)
@@ -821,23 +810,6 @@ impl eframe::App for CatapultApp {
                 });
         }
 
-        // Firmware panel (side panel)
-        if self.show_firmware {
-            egui::SidePanel::right("firmware")
-                .default_width(320.0)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.firmware_panel.draw(ui);
-
-                        ui.add_space(16.0);
-                        ui.separator();
-                        if ui.button("Close").clicked() {
-                            self.show_firmware = false;
-                        }
-                    });
-                });
-        }
-
         // Simulation panel (side panel, only when debug mode enabled)
         if self.show_simulation && self.settings.debug_mode {
             egui::SidePanel::right("simulation")
@@ -883,7 +855,7 @@ impl eframe::App for CatapultApp {
         });
 
         // Request repaint only when animations are active
-        if self.scanning || self.show_firmware || self.show_simulation {
+        if self.scanning || self.show_simulation {
             ctx.request_repaint();
         }
     }

@@ -15,7 +15,6 @@ jobs:
   # Build binaries for all platforms
   build:
     name: Build (${{ matrix.target }})
-    needs: firmware
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -45,16 +44,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download firmware binary
-        uses: actions/download-artifact@v4
-        with:
-          name: firmware-binary
-          path: cat-desktop/assets
-
-      - name: Rename firmware binary
-        run: mv cat-desktop/assets/cat-bridge cat-desktop/assets/cat-bridge.bin
-        shell: bash
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -79,12 +68,12 @@ jobs:
       # Build with cross for ARM64 Linux
       - name: Build (cross)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p cat-desktop --features bundle-firmware
+        run: cross build --release --target ${{ matrix.target }} -p cat-desktop
 
       # Build natively for other targets
       - name: Build (native)
         if: "!matrix.cross"
-        run: cargo build --release --target ${{ matrix.target }} -p cat-desktop --features bundle-firmware
+        run: cargo build --release --target ${{ matrix.target }} -p cat-desktop
 
       # Package the binary
       - name: Package (Unix)
@@ -107,50 +96,10 @@ jobs:
             ${{ matrix.asset_name }}.tar.gz
             ${{ matrix.asset_name }}.zip
 
-  # Build ESP32 firmware
-  firmware:
-    name: ESP32 Firmware
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup esp-rs toolchain
-        uses: esp-rs/xtensa-toolchain@v1.5
-        with:
-          default: true
-          buildtargets: esp32s3
-          ldproxy: true
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: cat-bridge
-
-      - name: Build firmware
-        working-directory: cat-bridge
-        run: cargo build --release
-
-      - name: Package firmware
-        run: |
-          mkdir -p firmware
-          cp cat-bridge/target/xtensa-esp32s3-none-elf/release/cat-bridge firmware/
-          tar -czvf catapult-esp32s3-firmware.tar.gz -C firmware .
-
-      - name: Upload firmware tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: catapult-esp32s3-firmware
-          path: catapult-esp32s3-firmware.tar.gz
-
-      - name: Upload firmware binary for embedding
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-binary
-          path: cat-bridge/target/xtensa-esp32s3-none-elf/release/cat-bridge
-
   # Create GitHub Release
   release:
     name: Create Release
-    needs: [build, firmware]
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

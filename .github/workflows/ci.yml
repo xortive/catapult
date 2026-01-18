@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      skip_firmware:
-        description: 'Skip firmware binary requirement (use empty placeholder)'
-        type: boolean
-        default: false
 
 env:
   CARGO_TERM_COLOR: always
