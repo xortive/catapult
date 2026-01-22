@@ -84,6 +84,32 @@ impl RadioConnection {
         self.civ_address = Some(addr);
     }
 
+    /// Query the radio's current frequency and mode
+    /// This gets the initial state before enabling auto-info
+    pub fn query_initial_state(&mut self) -> Result<(), std::io::Error> {
+        // Query frequency
+        let freq_cmd = RadioCommand::GetFrequency;
+        if let Some(data) = self.encode_radio_command(&freq_cmd) {
+            debug!(
+                "Querying frequency on radio {:?} with protocol {:?}",
+                self.handle, self.protocol
+            );
+            self.write(&data)?;
+        }
+
+        // Query mode
+        let mode_cmd = RadioCommand::GetMode;
+        if let Some(data) = self.encode_radio_command(&mode_cmd) {
+            debug!(
+                "Querying mode on radio {:?} with protocol {:?}",
+                self.handle, self.protocol
+            );
+            self.write(&data)?;
+        }
+
+        Ok(())
+    }
+
     /// Enable auto-information mode on the radio
     /// This causes the radio to send unsolicited updates when parameters change
     pub fn enable_auto_info(&mut self) -> Result<(), std::io::Error> {

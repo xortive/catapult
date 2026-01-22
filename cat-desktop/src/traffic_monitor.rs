@@ -64,6 +64,8 @@ impl TrafficSource {
 /// Severity level for diagnostic entries
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
+    /// Debug message
+    Debug,
     /// Informational message
     Info,
     /// Warning
@@ -156,6 +158,8 @@ pub struct TrafficMonitor {
     paused: bool,
     /// Show diagnostic entries (master toggle)
     show_diagnostics: bool,
+    /// Show Debug-level diagnostics
+    show_diagnostic_debug: bool,
     /// Show Info-level diagnostics
     show_diagnostic_info: bool,
     /// Show Warning-level diagnostics
@@ -169,6 +173,7 @@ impl TrafficMonitor {
     pub fn new(
         max_entries: usize,
         show_diagnostics: bool,
+        show_diagnostic_debug: bool,
         show_diagnostic_info: bool,
         show_diagnostic_warning: bool,
         show_diagnostic_error: bool,
@@ -181,6 +186,7 @@ impl TrafficMonitor {
             show_simulated: true,
             paused: false,
             show_diagnostics,
+            show_diagnostic_debug,
             show_diagnostic_info,
             show_diagnostic_warning,
             show_diagnostic_error,
@@ -188,9 +194,12 @@ impl TrafficMonitor {
     }
 
     /// Get mutable access to diagnostic filter settings for persisting changes
-    pub fn diagnostic_settings_mut(&mut self) -> (&mut bool, &mut bool, &mut bool, &mut bool) {
+    pub fn diagnostic_settings_mut(
+        &mut self,
+    ) -> (&mut bool, &mut bool, &mut bool, &mut bool, &mut bool) {
         (
             &mut self.show_diagnostics,
+            &mut self.show_diagnostic_debug,
             &mut self.show_diagnostic_info,
             &mut self.show_diagnostic_warning,
             &mut self.show_diagnostic_error,
@@ -205,6 +214,11 @@ impl TrafficMonitor {
                 return false;
             }
             match severity {
+                DiagnosticSeverity::Debug => {
+                    if !self.show_diagnostic_debug {
+                        return false;
+                    }
+                }
                 DiagnosticSeverity::Info => {
                     if !self.show_diagnostic_info {
                         return false;
@@ -298,6 +312,7 @@ impl TrafficMonitor {
             } => {
                 let time = Self::format_timestamp(timestamp);
                 let sev = match severity {
+                    DiagnosticSeverity::Debug => "DEBUG",
                     DiagnosticSeverity::Info => "INFO ",
                     DiagnosticSeverity::Warning => "WARN ",
                     DiagnosticSeverity::Error => "ERROR",
@@ -614,68 +629,25 @@ impl TrafficMonitor {
 
             ui.separator();
 
-            // Diagnostic filter controls
-            ui.checkbox(&mut self.show_diagnostics, "Diag");
-
-            // Show severity toggles when diagnostics are enabled
-            if self.show_diagnostics {
-                // Info toggle
-                let info_btn = egui::Button::new(
-                    RichText::new("ℹ")
-                        .color(if self.show_diagnostic_info {
-                            Color32::from_rgb(100, 180, 255)
-                        } else {
-                            Color32::GRAY
-                        })
-                        .size(14.0),
-                )
-                .min_size(egui::vec2(20.0, 20.0));
-                if ui
-                    .add(info_btn)
-                    .on_hover_text("Toggle Info messages")
-                    .clicked()
-                {
-                    self.show_diagnostic_info = !self.show_diagnostic_info;
-                }
-
-                // Warning toggle
-                let warn_btn = egui::Button::new(
-                    RichText::new("⚠")
-                        .color(if self.show_diagnostic_warning {
-                            Color32::from_rgb(255, 200, 0)
-                        } else {
-                            Color32::GRAY
-                        })
-                        .size(14.0),
-                )
-                .min_size(egui::vec2(20.0, 20.0));
-                if ui
-                    .add(warn_btn)
-                    .on_hover_text("Toggle Warning messages")
-                    .clicked()
-                {
-                    self.show_diagnostic_warning = !self.show_diagnostic_warning;
-                }
-
-                // Error toggle
-                let err_btn = egui::Button::new(
-                    RichText::new("✖")
-                        .color(if self.show_diagnostic_error {
-                            Color32::from_rgb(255, 80, 80)
-                        } else {
-                            Color32::GRAY
-                        })
-                        .size(14.0),
-                )
-                .min_size(egui::vec2(20.0, 20.0));
-                if ui
-                    .add(err_btn)
-                    .on_hover_text("Toggle Error messages")
-                    .clicked()
-                {
-                    self.show_diagnostic_error = !self.show_diagnostic_error;
-                }
-            }
+            // Diagnostic filter controls with popout menu
+            ui.menu_button(
+                RichText::new(if self.show_diagnostics { "Logs ▾" } else { "Logs" })
+                    .color(if self.show_diagnostics {
+                        Color32::WHITE
+                    } else {
+                        Color32::GRAY
+                    }),
+                |ui| {
+                    ui.checkbox(&mut self.show_diagnostics, "Show Logs");
+                    ui.separator();
+                    ui.add_enabled_ui(self.show_diagnostics, |ui| {
+                        ui.checkbox(&mut self.show_diagnostic_debug, "Debug");
+                        ui.checkbox(&mut self.show_diagnostic_info, "Info");
+                        ui.checkbox(&mut self.show_diagnostic_warning, "Warning");
+                        ui.checkbox(&mut self.show_diagnostic_error, "Error");
+                    });
+                },
+            );
         });
 
         ui.separator();
@@ -1005,9 +977,10 @@ impl TrafficMonitor {
 
             // Severity badge and color
             let (badge, color) = match severity {
-                DiagnosticSeverity::Info => ("ℹ", Color32::from_rgb(100, 180, 255)), // Blue
+                DiagnosticSeverity::Debug => ("●", Color32::from_rgb(128, 128, 128)), // Gray
+                DiagnosticSeverity::Info => ("ℹ", Color32::from_rgb(100, 180, 255)),  // Blue
                 DiagnosticSeverity::Warning => ("⚠", Color32::from_rgb(255, 200, 0)), // Yellow
-                DiagnosticSeverity::Error => ("✖", Color32::from_rgb(255, 80, 80)),  // Red
+                DiagnosticSeverity::Error => ("✖", Color32::from_rgb(255, 80, 80)),   // Red
             };
 
             ui.label(RichText::new(badge).color(color).monospace());

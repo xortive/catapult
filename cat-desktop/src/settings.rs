@@ -73,6 +73,9 @@ pub struct Settings {
     /// Show diagnostic entries in traffic monitor (master toggle)
     #[serde(default)]
     pub show_diagnostics: bool,
+    /// Show Debug-level diagnostics
+    #[serde(default)]
+    pub show_diagnostic_debug: bool,
     /// Show Info-level diagnostics
     #[serde(default = "default_true")]
     pub show_diagnostic_info: bool,
@@ -108,6 +111,7 @@ impl Default for Settings {
             show_hex: true,
             show_decoded: true,
             show_diagnostics: false,
+            show_diagnostic_debug: false,
             show_diagnostic_info: true,
             show_diagnostic_warning: true,
             show_diagnostic_error: true,

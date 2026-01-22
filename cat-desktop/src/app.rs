@@ -145,6 +145,7 @@ impl CatapultApp {
             traffic_monitor: TrafficMonitor::new(
                 settings.traffic_history_size,
                 settings.show_diagnostics,
+                settings.show_diagnostic_debug,
                 settings.show_diagnostic_info,
                 settings.show_diagnostic_warning,
                 settings.show_diagnostic_error,
@@ -329,6 +330,15 @@ impl CatapultApp {
 
                         // Small delay to let the radio settle after port open
                         std::thread::sleep(std::time::Duration::from_millis(100));
+
+                        // Query initial state (frequency/mode) before enabling auto-info
+                        if let Err(e) = conn.query_initial_state() {
+                            tracing::warn!(
+                                "Failed to query initial state on {}: {}",
+                                config.port,
+                                e
+                            );
+                        }
 
                         // Try to enable auto-info mode
                         if let Err(e) = conn.enable_auto_info() {
@@ -728,6 +738,15 @@ impl CatapultApp {
 
                 // Small delay to let the radio settle after port open
                 std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // Query initial state (frequency/mode) before enabling auto-info
+                if let Err(e) = conn.query_initial_state() {
+                    tracing::warn!(
+                        "Failed to query initial state on {}: {}",
+                        self.add_radio_port,
+                        e
+                    );
+                }
 
                 // Try to enable auto-info mode
                 if let Err(e) = conn.enable_auto_info() {
