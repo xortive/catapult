@@ -76,11 +76,6 @@ impl RadioConnection {
         })
     }
 
-    /// Get the radio handle
-    pub fn handle(&self) -> RadioHandle {
-        self.handle
-    }
-
     /// Set the CI-V address for Icom radios
     pub fn set_civ_address(&mut self, addr: u8) {
         self.civ_address = Some(addr);

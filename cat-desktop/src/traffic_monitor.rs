@@ -100,14 +100,6 @@ pub enum TrafficEntry {
 }
 
 impl TrafficEntry {
-    /// Get the timestamp
-    pub fn timestamp(&self) -> SystemTime {
-        match self {
-            TrafficEntry::Data { timestamp, .. } => *timestamp,
-            TrafficEntry::Diagnostic { timestamp, .. } => *timestamp,
-        }
-    }
-
     /// Get the direction (None for diagnostics)
     pub fn direction(&self) -> Option<TrafficDirection> {
         match self {
@@ -122,11 +114,6 @@ impl TrafficEntry {
             TrafficEntry::Data { source, .. } => source.is_simulated(),
             TrafficEntry::Diagnostic { .. } => false,
         }
-    }
-
-    /// Check if this is a diagnostic entry
-    pub fn is_diagnostic(&self) -> bool {
-        matches!(self, TrafficEntry::Diagnostic { .. })
     }
 }
 
