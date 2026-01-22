@@ -136,7 +136,13 @@ impl CatapultApp {
         };
 
         let mut app = Self {
-            traffic_monitor: TrafficMonitor::new(settings.traffic_history_size),
+            traffic_monitor: TrafficMonitor::new(
+                settings.traffic_history_size,
+                settings.show_diagnostics,
+                settings.show_diagnostic_info,
+                settings.show_diagnostic_warning,
+                settings.show_diagnostic_error,
+            ),
             multiplexer: Multiplexer::new(),
             scanner: PortScanner::new(),
             available_ports: Vec::new(),
@@ -1502,6 +1508,23 @@ impl CatapultApp {
 
         self.traffic_monitor
             .draw(ui, self.settings.show_hex, self.settings.show_decoded);
+
+        // Sync diagnostic filter settings back to settings and save if changed
+        let (show_diag, show_info, show_warn, show_err) =
+            self.traffic_monitor.diagnostic_settings_mut();
+        if self.settings.show_diagnostics != *show_diag
+            || self.settings.show_diagnostic_info != *show_info
+            || self.settings.show_diagnostic_warning != *show_warn
+            || self.settings.show_diagnostic_error != *show_err
+        {
+            self.settings.show_diagnostics = *show_diag;
+            self.settings.show_diagnostic_info = *show_info;
+            self.settings.show_diagnostic_warning = *show_warn;
+            self.settings.show_diagnostic_error = *show_err;
+            if let Err(e) = self.settings.save() {
+                self.handle_save_error(e);
+            }
+        }
     }
 
     /// Detect new radios (without clearing existing configured radios)

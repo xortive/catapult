@@ -152,11 +152,25 @@ pub struct TrafficMonitor {
     show_simulated: bool,
     /// Pause monitoring
     paused: bool,
+    /// Show diagnostic entries (master toggle)
+    show_diagnostics: bool,
+    /// Show Info-level diagnostics
+    show_diagnostic_info: bool,
+    /// Show Warning-level diagnostics
+    show_diagnostic_warning: bool,
+    /// Show Error-level diagnostics
+    show_diagnostic_error: bool,
 }
 
 impl TrafficMonitor {
     /// Create a new traffic monitor
-    pub fn new(max_entries: usize) -> Self {
+    pub fn new(
+        max_entries: usize,
+        show_diagnostics: bool,
+        show_diagnostic_info: bool,
+        show_diagnostic_warning: bool,
+        show_diagnostic_error: bool,
+    ) -> Self {
         Self {
             entries: VecDeque::with_capacity(max_entries),
             max_entries,
@@ -164,7 +178,28 @@ impl TrafficMonitor {
             filter_direction: None,
             show_simulated: true,
             paused: false,
+            show_diagnostics,
+            show_diagnostic_info,
+            show_diagnostic_warning,
+            show_diagnostic_error,
         }
+    }
+
+    /// Get mutable access to diagnostic filter settings for persisting changes
+    pub fn diagnostic_settings_mut(
+        &mut self,
+    ) -> (
+        &mut bool,
+        &mut bool,
+        &mut bool,
+        &mut bool,
+    ) {
+        (
+            &mut self.show_diagnostics,
+            &mut self.show_diagnostic_info,
+            &mut self.show_diagnostic_warning,
+            &mut self.show_diagnostic_error,
+        )
     }
 
     /// Add an incoming traffic entry from a real radio
@@ -380,6 +415,59 @@ impl TrafficMonitor {
 
             // Simulated traffic toggle
             ui.checkbox(&mut self.show_simulated, "Show SIM");
+
+            ui.separator();
+
+            // Diagnostic filter controls
+            ui.checkbox(&mut self.show_diagnostics, "Diag");
+
+            // Show severity toggles when diagnostics are enabled
+            if self.show_diagnostics {
+                // Info toggle
+                let info_btn = egui::Button::new(
+                    RichText::new("ℹ")
+                        .color(if self.show_diagnostic_info {
+                            Color32::from_rgb(100, 180, 255)
+                        } else {
+                            Color32::GRAY
+                        })
+                        .size(14.0),
+                )
+                .min_size(egui::vec2(20.0, 20.0));
+                if ui.add(info_btn).on_hover_text("Toggle Info messages").clicked() {
+                    self.show_diagnostic_info = !self.show_diagnostic_info;
+                }
+
+                // Warning toggle
+                let warn_btn = egui::Button::new(
+                    RichText::new("⚠")
+                        .color(if self.show_diagnostic_warning {
+                            Color32::from_rgb(255, 200, 0)
+                        } else {
+                            Color32::GRAY
+                        })
+                        .size(14.0),
+                )
+                .min_size(egui::vec2(20.0, 20.0));
+                if ui.add(warn_btn).on_hover_text("Toggle Warning messages").clicked() {
+                    self.show_diagnostic_warning = !self.show_diagnostic_warning;
+                }
+
+                // Error toggle
+                let err_btn = egui::Button::new(
+                    RichText::new("✖")
+                        .color(if self.show_diagnostic_error {
+                            Color32::from_rgb(255, 80, 80)
+                        } else {
+                            Color32::GRAY
+                        })
+                        .size(14.0),
+                )
+                .min_size(egui::vec2(20.0, 20.0));
+                if ui.add(err_btn).on_hover_text("Toggle Error messages").clicked() {
+                    self.show_diagnostic_error = !self.show_diagnostic_error;
+                }
+            }
         });
 
         ui.separator();
@@ -390,11 +478,38 @@ impl TrafficMonitor {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                // Direction filter - diagnostics pass through when no filter or match
+                // Diagnostic filtering
+                if let TrafficEntry::Diagnostic { severity, .. } = entry {
+                    // Master toggle
+                    if !self.show_diagnostics {
+                        return false;
+                    }
+                    // Severity-specific toggles
+                    match severity {
+                        DiagnosticSeverity::Info => {
+                            if !self.show_diagnostic_info {
+                                return false;
+                            }
+                        }
+                        DiagnosticSeverity::Warning => {
+                            if !self.show_diagnostic_warning {
+                                return false;
+                            }
+                        }
+                        DiagnosticSeverity::Error => {
+                            if !self.show_diagnostic_error {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                }
+
+                // Direction filter for data entries
                 let direction_match = entry
                     .direction()
                     .map(|dir| self.filter_direction.is_none_or(|filter| dir == filter))
-                    .unwrap_or(true); // Diagnostics pass through
+                    .unwrap_or(true);
 
                 // Simulated filter
                 let sim_match = self.show_simulated || !entry.is_simulated();

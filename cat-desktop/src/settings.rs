@@ -70,6 +70,18 @@ pub struct Settings {
     pub show_hex: bool,
     /// Show decoded in traffic monitor
     pub show_decoded: bool,
+    /// Show diagnostic entries in traffic monitor (master toggle)
+    #[serde(default)]
+    pub show_diagnostics: bool,
+    /// Show Info-level diagnostics
+    #[serde(default = "default_true")]
+    pub show_diagnostic_info: bool,
+    /// Show Warning-level diagnostics
+    #[serde(default = "default_true")]
+    pub show_diagnostic_warning: bool,
+    /// Show Error-level diagnostics
+    #[serde(default = "default_true")]
+    pub show_diagnostic_error: bool,
     /// Default baud rates to try
     pub baud_rates: Vec<u32>,
     /// Virtual radios to restore on startup
@@ -83,6 +95,10 @@ pub struct Settings {
     pub amplifier: AmplifierSettings,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -91,6 +107,10 @@ impl Default for Settings {
             traffic_history_size: 1000,
             show_hex: true,
             show_decoded: true,
+            show_diagnostics: false,
+            show_diagnostic_info: true,
+            show_diagnostic_warning: true,
+            show_diagnostic_error: true,
             baud_rates: vec![38400, 19200, 9600, 4800, 115200],
             virtual_radios: Vec::new(),
             configured_radios: Vec::new(),
