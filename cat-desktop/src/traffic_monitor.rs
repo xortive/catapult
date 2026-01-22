@@ -1,7 +1,9 @@
 //! Traffic monitor UI component
 
 use std::collections::VecDeque;
+use std::io::Write;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use cat_mux::RadioHandle;
@@ -202,6 +204,166 @@ impl TrafficMonitor {
         )
     }
 
+    /// Check if an entry passes the current filters
+    fn entry_passes_filter(&self, entry: &TrafficEntry) -> bool {
+        // Diagnostic filtering
+        if let TrafficEntry::Diagnostic { severity, .. } = entry {
+            if !self.show_diagnostics {
+                return false;
+            }
+            match severity {
+                DiagnosticSeverity::Info => {
+                    if !self.show_diagnostic_info {
+                        return false;
+                    }
+                }
+                DiagnosticSeverity::Warning => {
+                    if !self.show_diagnostic_warning {
+                        return false;
+                    }
+                }
+                DiagnosticSeverity::Error => {
+                    if !self.show_diagnostic_error {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Direction filter for data entries
+        let direction_match = entry
+            .direction()
+            .map(|dir| self.filter_direction.is_none_or(|filter| dir == filter))
+            .unwrap_or(true);
+
+        // Simulated filter
+        let sim_match = self.show_simulated || !entry.is_simulated();
+
+        direction_match && sim_match
+    }
+
+    /// Format a timestamp for export
+    fn format_timestamp(timestamp: &SystemTime) -> String {
+        timestamp
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| {
+                let secs = d.as_secs() % 86400;
+                let hours = secs / 3600;
+                let mins = (secs % 3600) / 60;
+                let secs = secs % 60;
+                let millis = d.subsec_millis();
+                format!("{:02}:{:02}:{:02}.{:03}", hours, mins, secs, millis)
+            })
+            .unwrap_or_else(|_| "??:??:??.???".to_string())
+    }
+
+    /// Format an entry as a text line for export
+    fn format_entry_for_export(entry: &TrafficEntry) -> String {
+        match entry {
+            TrafficEntry::Data {
+                timestamp,
+                direction,
+                source,
+                data,
+                decoded,
+            } => {
+                let time = Self::format_timestamp(timestamp);
+                let dir = match direction {
+                    TrafficDirection::Incoming => "IN ",
+                    TrafficDirection::Outgoing => "OUT",
+                };
+                let src = match source {
+                    TrafficSource::RealRadio { port, .. } => format!("Radio({})", port),
+                    TrafficSource::SimulatedRadio { id } => format!("Sim({})", id),
+                    TrafficSource::ToSimulatedRadio { id } => format!("->Sim({})", id),
+                    TrafficSource::RealAmplifier { port } => format!("->Amp({})", port),
+                    TrafficSource::FromRealAmplifier { port } => format!("Amp({})", port),
+                    TrafficSource::SimulatedAmplifier => "->SimAmp".to_string(),
+                    TrafficSource::FromSimulatedAmplifier => "SimAmp".to_string(),
+                };
+                let hex: String = data
+                    .iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let decoded_str = decoded
+                    .as_ref()
+                    .map(|d| {
+                        let summary: String = d.summary.iter().map(|p| p.text.as_str()).collect();
+                        format!(" [{}] {}", d.protocol, summary)
+                    })
+                    .unwrap_or_default();
+                format!("{} {} {:12} {}{}", time, dir, src, hex, decoded_str)
+            }
+            TrafficEntry::Diagnostic {
+                timestamp,
+                source,
+                severity,
+                message,
+            } => {
+                let time = Self::format_timestamp(timestamp);
+                let sev = match severity {
+                    DiagnosticSeverity::Info => "INFO ",
+                    DiagnosticSeverity::Warning => "WARN ",
+                    DiagnosticSeverity::Error => "ERROR",
+                };
+                format!("{} {} [{}] {}", time, sev, source, message)
+            }
+        }
+    }
+
+    /// Get the default export directory (same as settings)
+    fn export_dir() -> Option<PathBuf> {
+        if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
+            let path = PathBuf::from(xdg_config);
+            if path.is_absolute() {
+                return Some(path.join("catapult").join("logs"));
+            }
+        }
+        dirs::home_dir().map(|h| h.join(".config").join("catapult").join("logs"))
+    }
+
+    /// Export the currently filtered log to a file
+    /// Returns Ok(path) on success, Err(message) on failure
+    pub fn export_filtered_log(&self) -> Result<PathBuf, String> {
+        let dir = Self::export_dir().ok_or("Could not determine export directory")?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create export directory: {}", e))?;
+
+        // Generate filename with timestamp
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let filename = format!("traffic-log-{}.txt", now);
+        let path = dir.join(&filename);
+
+        // Collect filtered entries
+        let filtered: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|e| self.entry_passes_filter(e))
+            .collect();
+
+        // Write to file
+        let mut file = std::fs::File::create(&path)
+            .map_err(|e| format!("Failed to create file: {}", e))?;
+
+        writeln!(file, "# Catapult Traffic Log Export")
+            .map_err(|e| format!("Failed to write: {}", e))?;
+        writeln!(file, "# Entries: {}", filtered.len())
+            .map_err(|e| format!("Failed to write: {}", e))?;
+        writeln!(file).map_err(|e| format!("Failed to write: {}", e))?;
+
+        for entry in filtered {
+            writeln!(file, "{}", Self::format_entry_for_export(entry))
+                .map_err(|e| format!("Failed to write: {}", e))?;
+        }
+
+        Ok(path)
+    }
+
     /// Add an incoming traffic entry from a real radio
     pub fn add_incoming(&mut self, radio: RadioHandle, data: &[u8], protocol: Option<Protocol>) {
         self.add_incoming_with_port(radio, String::new(), data, protocol);
@@ -365,7 +527,9 @@ impl TrafficMonitor {
     }
 
     /// Draw the traffic monitor UI with display settings
-    pub fn draw(&mut self, ui: &mut Ui, show_hex: bool, show_decoded: bool) {
+    /// Returns Some(result) if export was requested
+    pub fn draw(&mut self, ui: &mut Ui, show_hex: bool, show_decoded: bool) -> Option<Result<PathBuf, String>> {
+        let mut export_result = None;
         // Toolbar
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
@@ -380,6 +544,10 @@ impl TrafficMonitor {
 
             if ui.button("Clear").clicked() {
                 self.clear();
+            }
+
+            if ui.button("Export").on_hover_text("Export filtered log to file").clicked() {
+                export_result = Some(self.export_filtered_log());
             }
 
             ui.separator();
@@ -477,45 +645,7 @@ impl TrafficMonitor {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| {
-                // Diagnostic filtering
-                if let TrafficEntry::Diagnostic { severity, .. } = entry {
-                    // Master toggle
-                    if !self.show_diagnostics {
-                        return false;
-                    }
-                    // Severity-specific toggles
-                    match severity {
-                        DiagnosticSeverity::Info => {
-                            if !self.show_diagnostic_info {
-                                return false;
-                            }
-                        }
-                        DiagnosticSeverity::Warning => {
-                            if !self.show_diagnostic_warning {
-                                return false;
-                            }
-                        }
-                        DiagnosticSeverity::Error => {
-                            if !self.show_diagnostic_error {
-                                return false;
-                            }
-                        }
-                    }
-                    return true;
-                }
-
-                // Direction filter for data entries
-                let direction_match = entry
-                    .direction()
-                    .map(|dir| self.filter_direction.is_none_or(|filter| dir == filter))
-                    .unwrap_or(true);
-
-                // Simulated filter
-                let sim_match = self.show_simulated || !entry.is_simulated();
-
-                direction_match && sim_match
-            })
+            .filter(|(_, entry)| self.entry_passes_filter(entry))
             .map(|(i, _)| i)
             .collect();
 
@@ -536,6 +666,8 @@ impl TrafficMonitor {
                 // Bottom padding to prevent scroll jitter at boundary
                 ui.add_space(4.0);
             });
+
+        export_result
     }
 
     /// Draw a single traffic entry

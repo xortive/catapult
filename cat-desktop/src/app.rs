@@ -1517,8 +1517,19 @@ impl CatapultApp {
     fn draw_traffic_panel(&mut self, ui: &mut Ui) {
         ui.heading("Traffic Monitor");
 
-        self.traffic_monitor
-            .draw(ui, self.settings.show_hex, self.settings.show_decoded);
+        // Draw and handle export result
+        if let Some(result) = self.traffic_monitor
+            .draw(ui, self.settings.show_hex, self.settings.show_decoded)
+        {
+            match result {
+                Ok(path) => {
+                    self.set_status(format!("Log exported to {}", path.display()));
+                }
+                Err(e) => {
+                    self.report_err("Export", e);
+                }
+            }
+        }
 
         // Sync diagnostic filter settings back to settings and save if changed
         let (show_diag, show_info, show_warn, show_err) =
