@@ -150,8 +150,8 @@ impl Settings {
 
     /// Save settings to disk
     pub fn save(&self) -> Result<(), String> {
-        let path = Self::settings_path()
-            .ok_or_else(|| "Could not determine settings path".to_string())?;
+        let path =
+            Self::settings_path().ok_or_else(|| "Could not determine settings path".to_string())?;
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -161,8 +161,7 @@ impl Settings {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-        std::fs::write(&path, json)
-            .map_err(|e| format!("Failed to write settings: {}", e))?;
+        std::fs::write(&path, json).map_err(|e| format!("Failed to write settings: {}", e))?;
 
         Ok(())
     }

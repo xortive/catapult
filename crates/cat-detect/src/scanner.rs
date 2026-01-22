@@ -204,7 +204,10 @@ impl PortScanner {
                     );
                 }
                 _ => {
-                    debug!("Found port: {} (no USB info) - {:?}", port.port, port.classification);
+                    debug!(
+                        "Found port: {} (no USB info) - {:?}",
+                        port.port, port.classification
+                    );
                 }
             }
         }

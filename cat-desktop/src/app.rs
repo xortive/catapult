@@ -322,12 +322,15 @@ impl CatapultApp {
 
                         // Try to enable auto-info mode
                         if let Err(e) = conn.enable_auto_info() {
-                            let msg = format!("Failed to enable auto-info on {}: {}", config.port, e);
+                            let msg =
+                                format!("Failed to enable auto-info on {}: {}", config.port, e);
                             tracing::warn!("{}", msg);
                             // Add to traffic monitor so users can see it
                             let _ = self.bg_tx.send(BackgroundMessage::IoError {
                                 source: format!("Radio {}", config.port),
-                                message: "Auto-info not enabled - radio won't send automatic updates".to_string(),
+                                message:
+                                    "Auto-info not enabled - radio won't send automatic updates"
+                                        .to_string(),
                             });
                         }
 
@@ -373,8 +376,11 @@ impl CatapultApp {
     /// Set a status message (also adds Info diagnostic to traffic monitor)
     fn set_status(&mut self, msg: String) {
         self.status_message = Some((msg.clone(), Instant::now()));
-        self.traffic_monitor
-            .add_diagnostic("Status".to_string(), DiagnosticSeverity::Info, msg.clone());
+        self.traffic_monitor.add_diagnostic(
+            "Status".to_string(),
+            DiagnosticSeverity::Info,
+            msg.clone(),
+        );
         tracing::info!("[Status] {}", msg);
     }
 
@@ -504,7 +510,11 @@ impl CatapultApp {
 
                         self.report_info(
                             "Scanner",
-                            format!("New radio detected: {} on {}", radio.model_name(), radio.port),
+                            format!(
+                                "New radio detected: {} on {}",
+                                radio.model_name(),
+                                radio.port
+                            ),
                         );
 
                         let handle = self.multiplexer.add_radio(
@@ -702,12 +712,16 @@ impl CatapultApp {
 
                 // Try to enable auto-info mode
                 if let Err(e) = conn.enable_auto_info() {
-                    let msg = format!("Failed to enable auto-info on {}: {}", self.add_radio_port, e);
+                    let msg = format!(
+                        "Failed to enable auto-info on {}: {}",
+                        self.add_radio_port, e
+                    );
                     tracing::warn!("{}", msg);
                     // Add to traffic monitor so users can see it
                     let _ = self.bg_tx.send(BackgroundMessage::IoError {
                         source: format!("Radio {}", self.add_radio_port),
-                        message: "Auto-info not enabled - radio won't send automatic updates".to_string(),
+                        message: "Auto-info not enabled - radio won't send automatic updates"
+                            .to_string(),
                     });
                 }
 
@@ -1294,7 +1308,6 @@ impl CatapultApp {
 
     /// Draw the amplifier configuration panel
     fn draw_amplifier_panel(&mut self, ui: &mut Ui) {
-
         // Capture previous state for change detection
         let prev_connection_type = self.amp_connection_type;
         let prev_protocol = self.amp_protocol;
@@ -1475,7 +1488,6 @@ impl CatapultApp {
 
     /// Draw the switching mode panel
     fn draw_switching_panel(&mut self, ui: &mut Ui) {
-
         let mut mode = self.multiplexer.switching_mode();
 
         egui::Grid::new("switch_config")
@@ -1518,8 +1530,9 @@ impl CatapultApp {
         ui.heading("Traffic Monitor");
 
         // Draw and handle export actions
-        if let Some(action) = self.traffic_monitor
-            .draw(ui, self.settings.show_hex, self.settings.show_decoded)
+        if let Some(action) =
+            self.traffic_monitor
+                .draw(ui, self.settings.show_hex, self.settings.show_decoded)
         {
             match action {
                 ExportAction::CopyToClipboard(content) => {

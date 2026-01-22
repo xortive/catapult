@@ -131,7 +131,10 @@ impl RadioProber {
                     let model = RadioDatabase::by_elecraft_id(model_name);
                     info!(
                         "Identified {} via Elecraft protocol",
-                        model.as_ref().map(|m| m.model.as_str()).unwrap_or(model_name)
+                        model
+                            .as_ref()
+                            .map(|m| m.model.as_str())
+                            .unwrap_or(model_name)
                     );
                     return Some(ProbeResult {
                         protocol: Protocol::Elecraft,
@@ -171,7 +174,10 @@ impl RadioProber {
                     let model = RadioDatabase::by_flex_id(&id_str);
                     info!(
                         "Identified {} via FlexRadio protocol",
-                        model.as_ref().map(|m| m.model.as_str()).unwrap_or("FlexRadio")
+                        model
+                            .as_ref()
+                            .map(|m| m.model.as_str())
+                            .unwrap_or("FlexRadio")
                     );
                     return Some(ProbeResult {
                         protocol: Protocol::FlexRadio,
@@ -203,7 +209,10 @@ impl RadioProber {
                     let model = RadioDatabase::by_kenwood_id(&id_str);
                     info!(
                         "Identified {} via Kenwood protocol",
-                        model.as_ref().map(|m| m.model.as_str()).unwrap_or("Kenwood")
+                        model
+                            .as_ref()
+                            .map(|m| m.model.as_str())
+                            .unwrap_or("Kenwood")
                     );
                     return Some(ProbeResult {
                         protocol: Protocol::Kenwood,

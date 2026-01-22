@@ -186,14 +186,7 @@ impl TrafficMonitor {
     }
 
     /// Get mutable access to diagnostic filter settings for persisting changes
-    pub fn diagnostic_settings_mut(
-        &mut self,
-    ) -> (
-        &mut bool,
-        &mut bool,
-        &mut bool,
-        &mut bool,
-    ) {
+    pub fn diagnostic_settings_mut(&mut self) -> (&mut bool, &mut bool, &mut bool, &mut bool) {
         (
             &mut self.show_diagnostics,
             &mut self.show_diagnostic_info,
@@ -353,8 +346,7 @@ impl TrafficMonitor {
         };
 
         let content = self.format_filtered_log();
-        std::fs::write(&path, content)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))?;
 
         Ok(Some(path))
     }
@@ -523,7 +515,12 @@ impl TrafficMonitor {
 
     /// Draw the traffic monitor UI with display settings
     /// Returns Some(ExportAction) if an export action was requested
-    pub fn draw(&mut self, ui: &mut Ui, show_hex: bool, show_decoded: bool) -> Option<ExportAction> {
+    pub fn draw(
+        &mut self,
+        ui: &mut Ui,
+        show_hex: bool,
+        show_decoded: bool,
+    ) -> Option<ExportAction> {
         let mut export_action = None;
         // Toolbar
         ui.horizontal(|ui| {
@@ -609,7 +606,11 @@ impl TrafficMonitor {
                         .size(14.0),
                 )
                 .min_size(egui::vec2(20.0, 20.0));
-                if ui.add(info_btn).on_hover_text("Toggle Info messages").clicked() {
+                if ui
+                    .add(info_btn)
+                    .on_hover_text("Toggle Info messages")
+                    .clicked()
+                {
                     self.show_diagnostic_info = !self.show_diagnostic_info;
                 }
 
@@ -624,7 +625,11 @@ impl TrafficMonitor {
                         .size(14.0),
                 )
                 .min_size(egui::vec2(20.0, 20.0));
-                if ui.add(warn_btn).on_hover_text("Toggle Warning messages").clicked() {
+                if ui
+                    .add(warn_btn)
+                    .on_hover_text("Toggle Warning messages")
+                    .clicked()
+                {
                     self.show_diagnostic_warning = !self.show_diagnostic_warning;
                 }
 
@@ -639,7 +644,11 @@ impl TrafficMonitor {
                         .size(14.0),
                 )
                 .min_size(egui::vec2(20.0, 20.0));
-                if ui.add(err_btn).on_hover_text("Toggle Error messages").clicked() {
+                if ui
+                    .add(err_btn)
+                    .on_hover_text("Toggle Error messages")
+                    .clicked()
+                {
                     self.show_diagnostic_error = !self.show_diagnostic_error;
                 }
             }
@@ -717,6 +726,7 @@ impl TrafficMonitor {
     }
 
     /// Draw a data traffic entry
+    #[allow(clippy::too_many_arguments)]
     fn draw_data_entry(
         &self,
         ui: &mut Ui,
@@ -964,9 +974,9 @@ impl TrafficMonitor {
 
             // Severity badge and color
             let (badge, color) = match severity {
-                DiagnosticSeverity::Info => ("ℹ", Color32::from_rgb(100, 180, 255)),  // Blue
+                DiagnosticSeverity::Info => ("ℹ", Color32::from_rgb(100, 180, 255)), // Blue
                 DiagnosticSeverity::Warning => ("⚠", Color32::from_rgb(255, 200, 0)), // Yellow
-                DiagnosticSeverity::Error => ("✖", Color32::from_rgb(255, 80, 80)),   // Red
+                DiagnosticSeverity::Error => ("✖", Color32::from_rgb(255, 80, 80)),  // Red
             };
 
             ui.label(RichText::new(badge).color(color).monospace());

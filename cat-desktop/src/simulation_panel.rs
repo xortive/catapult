@@ -93,7 +93,10 @@ impl SimulationPanel {
             ui.label(RichText::new("DEBUG MODE").color(Color32::YELLOW).strong());
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(if self.expanded { "Less" } else { "More" }).clicked() {
+                if ui
+                    .button(if self.expanded { "Less" } else { "More" })
+                    .clicked()
+                {
                     self.expanded = !self.expanded;
                 }
             });
