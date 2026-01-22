@@ -212,7 +212,7 @@ impl KenwoodCodec {
         // - c: Scan status
         // - t: Split/CTCSS
 
-        if params.len() < 32 {
+        if params.len() < 33 {
             return Err(ParseError::InvalidFrame(format!(
                 "IF response too short: {} chars",
                 params.len()

@@ -260,7 +260,7 @@ impl ProtocolCodec for YaesuCodec {
         self.expected_response_len = None;
 
         if len == 5 {
-            let arr: [u8; 5] = bytes.try_into().unwrap();
+            let arr: [u8; 5] = bytes.try_into().ok()?;
             Some(Self::parse_command(&arr))
         } else {
             Some(Self::parse_freq_mode_response(&bytes))
