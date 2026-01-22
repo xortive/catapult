@@ -588,13 +588,12 @@ impl CatapultApp {
     fn draw_toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             // Console toggle button
-            let console_label = if self.show_traffic_monitor {
-                "Console ▼"
-            } else {
-                "Console ▶"
-            };
-            if ui.button(console_label).clicked() {
-                self.show_traffic_monitor = !self.show_traffic_monitor;
+            if self.show_traffic_monitor {
+                if ui.button("Hide Console").clicked() {
+                    self.show_traffic_monitor = false;
+                }
+            } else if ui.button("Show Console").clicked() {
+                self.show_traffic_monitor = true;
             }
 
             ui.separator();
@@ -1063,18 +1062,9 @@ impl CatapultApp {
                             if !is_active && ui.button("Select").clicked() {
                                 selected_handle = Some(*handle);
                             }
-                            // For virtual radios, show expand/collapse toggle
-                            if is_virtual {
-                                let expand_label = if *expanded { "▼" } else { "▶" };
-                                if ui.button(expand_label).clicked() {
-                                    toggle_expanded_idx = Some(*idx);
-                                }
-                            } else {
-                                // For COM radios, show expand/collapse toggle too
-                                let expand_label = if *expanded { "▼" } else { "▶" };
-                                if ui.button(expand_label).clicked() {
-                                    toggle_expanded_idx = Some(*idx);
-                                }
+                            // Expand/collapse toggle
+                            if ui.button(if *expanded { "Less" } else { "More" }).clicked() {
+                                toggle_expanded_idx = Some(*idx);
                             }
                         });
                     });
