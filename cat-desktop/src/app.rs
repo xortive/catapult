@@ -370,9 +370,12 @@ impl CatapultApp {
         }
     }
 
-    /// Set a status message
+    /// Set a status message (also adds Info diagnostic to traffic monitor)
     fn set_status(&mut self, msg: String) {
-        self.status_message = Some((msg, Instant::now()));
+        self.status_message = Some((msg.clone(), Instant::now()));
+        self.traffic_monitor
+            .add_diagnostic("Status".to_string(), DiagnosticSeverity::Info, msg.clone());
+        tracing::info!("[Status] {}", msg);
     }
 
     /// Report a message to all logging destinations (traffic monitor, tracing, and optionally status bar)
@@ -383,9 +386,9 @@ impl CatapultApp {
         message: impl Into<String>,
     ) {
         let message = message.into();
-        // Info messages don't update status bar (too noisy)
+        // Warning/Error messages update status bar (set directly to avoid double-logging)
         if severity != DiagnosticSeverity::Info {
-            self.set_status(format!("{}: {}", source, message));
+            self.status_message = Some((format!("{}: {}", source, message), Instant::now()));
         }
         self.traffic_monitor
             .add_diagnostic(source.to_string(), severity, message.clone());
@@ -761,7 +764,7 @@ impl CatapultApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Add Radio dropdown menu
-                ui.menu_button("Add ▼", |ui| {
+                ui.menu_button("+", |ui| {
                     // Add COM Radio section
                     ui.label(RichText::new("Add COM Radio:").small());
 
@@ -882,7 +885,8 @@ impl CatapultApp {
                         // Add Radio button
                         let can_add = !self.add_radio_port.is_empty();
                         if ui
-                            .add_enabled(can_add, egui::Button::new("Add Radio"))
+                            .add_enabled(can_add, egui::Button::new("+"))
+                            .on_hover_text("Add radio")
                             .clicked()
                         {
                             self.add_com_radio();
@@ -907,11 +911,18 @@ impl CatapultApp {
                         }
                     }
                 });
+
+                // Scan for radios button
+                if self.scanning {
+                    ui.spinner();
+                } else if ui.button("↻").on_hover_text("Scan for radios").clicked() {
+                    self.detect_new_radios();
+                }
             });
         });
 
         if self.radio_panels.is_empty() {
-            ui.label("No radios. Click 'Add' to scan ports or add virtual radios.");
+            ui.label("No radios. Click '+' to add or '↻' to scan for radios.");
             return;
         }
 
