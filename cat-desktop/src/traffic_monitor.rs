@@ -1,7 +1,6 @@
 //! Traffic monitor UI component
 
 use std::collections::VecDeque;
-use std::io::Write;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -138,6 +137,18 @@ pub enum TrafficDirection {
     Incoming,
     /// Outgoing to amplifier
     Outgoing,
+}
+
+/// Result of an export action from the traffic monitor
+pub enum ExportAction {
+    /// Copy log content to clipboard
+    CopyToClipboard(String),
+    /// Log was saved to a file
+    SavedToFile(PathBuf),
+    /// User cancelled the save dialog
+    Cancelled,
+    /// An error occurred
+    Error(String),
 }
 
 /// Traffic monitor state
@@ -313,55 +324,52 @@ impl TrafficMonitor {
         }
     }
 
-    /// Get the default export directory (same as settings)
-    fn export_dir() -> Option<PathBuf> {
-        if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
-            let path = PathBuf::from(xdg_config);
-            if path.is_absolute() {
-                return Some(path.join("catapult").join("logs"));
-            }
-        }
-        dirs::home_dir().map(|h| h.join(".config").join("catapult").join("logs"))
-    }
-
-    /// Export the currently filtered log to a file
-    /// Returns Ok(path) on success, Err(message) on failure
-    pub fn export_filtered_log(&self) -> Result<PathBuf, String> {
-        let dir = Self::export_dir().ok_or("Could not determine export directory")?;
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create export directory: {}", e))?;
-
-        // Generate filename with timestamp
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let filename = format!("traffic-log-{}.txt", now);
-        let path = dir.join(&filename);
-
-        // Collect filtered entries
+    /// Format the filtered log as a string
+    pub fn format_filtered_log(&self) -> String {
         let filtered: Vec<_> = self
             .entries
             .iter()
             .filter(|e| self.entry_passes_filter(e))
             .collect();
 
-        // Write to file
-        let mut file = std::fs::File::create(&path)
-            .map_err(|e| format!("Failed to create file: {}", e))?;
-
-        writeln!(file, "# Catapult Traffic Log Export")
-            .map_err(|e| format!("Failed to write: {}", e))?;
-        writeln!(file, "# Entries: {}", filtered.len())
-            .map_err(|e| format!("Failed to write: {}", e))?;
-        writeln!(file).map_err(|e| format!("Failed to write: {}", e))?;
+        let mut output = String::new();
+        output.push_str("# Catapult Traffic Log Export\n");
+        output.push_str(&format!("# Entries: {}\n\n", filtered.len()));
 
         for entry in filtered {
-            writeln!(file, "{}", Self::format_entry_for_export(entry))
-                .map_err(|e| format!("Failed to write: {}", e))?;
+            output.push_str(&Self::format_entry_for_export(entry));
+            output.push('\n');
         }
 
-        Ok(path)
+        output
+    }
+
+    /// Save the filtered log to a user-selected file
+    /// Returns Ok(Some(path)) on success, Ok(None) if cancelled, Err on failure
+    pub fn save_filtered_log_with_dialog(&self) -> Result<Option<PathBuf>, String> {
+        let default_name = format!(
+            "traffic-log-{}.txt",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        );
+
+        let path = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("Text files", &["txt"])
+            .add_filter("All files", &["*"])
+            .save_file();
+
+        let Some(path) = path else {
+            return Ok(None); // User cancelled
+        };
+
+        let content = self.format_filtered_log();
+        std::fs::write(&path, content)
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+
+        Ok(Some(path))
     }
 
     /// Add an incoming traffic entry from a real radio
@@ -527,9 +535,9 @@ impl TrafficMonitor {
     }
 
     /// Draw the traffic monitor UI with display settings
-    /// Returns Some(result) if export was requested
-    pub fn draw(&mut self, ui: &mut Ui, show_hex: bool, show_decoded: bool) -> Option<Result<PathBuf, String>> {
-        let mut export_result = None;
+    /// Returns Some(ExportAction) if an export action was requested
+    pub fn draw(&mut self, ui: &mut Ui, show_hex: bool, show_decoded: bool) -> Option<ExportAction> {
+        let mut export_action = None;
         // Toolbar
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
@@ -546,9 +554,21 @@ impl TrafficMonitor {
                 self.clear();
             }
 
-            if ui.button("Export").on_hover_text("Export filtered log to file").clicked() {
-                export_result = Some(self.export_filtered_log());
-            }
+            // Export dropdown menu
+            ui.menu_button("Export ▼", |ui| {
+                if ui.button("Copy to Clipboard").clicked() {
+                    export_action = Some(ExportAction::CopyToClipboard(self.format_filtered_log()));
+                    ui.close_menu();
+                }
+                if ui.button("Save to File...").clicked() {
+                    export_action = Some(match self.save_filtered_log_with_dialog() {
+                        Ok(Some(path)) => ExportAction::SavedToFile(path),
+                        Ok(None) => ExportAction::Cancelled,
+                        Err(e) => ExportAction::Error(e),
+                    });
+                    ui.close_menu();
+                }
+            });
 
             ui.separator();
 
@@ -667,7 +687,7 @@ impl TrafficMonitor {
                 ui.add_space(4.0);
             });
 
-        export_result
+        export_action
     }
 
     /// Draw a single traffic entry

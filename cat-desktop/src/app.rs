@@ -15,7 +15,7 @@ use crate::radio_panel::{RadioConnectionType, RadioPanel};
 use crate::serial_io::{AmplifierConnection, RadioConnection};
 use crate::settings::{AmplifierSettings, ConfiguredRadio, Settings};
 use crate::simulation_panel::SimulationPanel;
-use crate::traffic_monitor::{DiagnosticSeverity, TrafficMonitor};
+use crate::traffic_monitor::{DiagnosticSeverity, ExportAction, TrafficMonitor};
 
 /// Connection type for amplifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1517,15 +1517,22 @@ impl CatapultApp {
     fn draw_traffic_panel(&mut self, ui: &mut Ui) {
         ui.heading("Traffic Monitor");
 
-        // Draw and handle export result
-        if let Some(result) = self.traffic_monitor
+        // Draw and handle export actions
+        if let Some(action) = self.traffic_monitor
             .draw(ui, self.settings.show_hex, self.settings.show_decoded)
         {
-            match result {
-                Ok(path) => {
-                    self.set_status(format!("Log exported to {}", path.display()));
+            match action {
+                ExportAction::CopyToClipboard(content) => {
+                    ui.output_mut(|o| o.copied_text = content);
+                    self.set_status("Log copied to clipboard".to_string());
                 }
-                Err(e) => {
+                ExportAction::SavedToFile(path) => {
+                    self.set_status(format!("Log saved to {}", path.display()));
+                }
+                ExportAction::Cancelled => {
+                    // User cancelled, do nothing
+                }
+                ExportAction::Error(e) => {
                     self.report_err("Export", e);
                 }
             }

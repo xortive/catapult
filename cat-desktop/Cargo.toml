@@ -26,6 +26,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 dirs = "6.0"
 serialport.workspace = true
+rfd = "0.15"
 
 [dev-dependencies]
 proptest.workspace = true
