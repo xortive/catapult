@@ -555,7 +555,7 @@ impl TrafficMonitor {
             }
 
             // Export dropdown menu
-            ui.menu_button("Export ▼", |ui| {
+            ui.menu_button("Export", |ui| {
                 if ui.button("Copy to Clipboard").clicked() {
                     export_action = Some(ExportAction::CopyToClipboard(self.format_filtered_log()));
                     ui.close_menu();
