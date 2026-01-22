@@ -7,7 +7,13 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
 /// Crate prefixes to capture in the diagnostics layer
-const CRATE_PREFIXES: &[&str] = &["catapult", "cat_protocol", "cat_detect", "cat_mux", "cat_sim"];
+const CRATE_PREFIXES: &[&str] = &[
+    "catapult",
+    "cat_protocol",
+    "cat_detect",
+    "cat_mux",
+    "cat_sim",
+];
 
 /// A diagnostic event captured from tracing
 #[derive(Debug, Clone)]
@@ -37,7 +43,10 @@ impl<S: Subscriber> Layer<S> for DiagnosticsLayer {
         let target = event.metadata().target();
 
         // Only capture events from our crates
-        if !CRATE_PREFIXES.iter().any(|prefix| target.starts_with(prefix)) {
+        if !CRATE_PREFIXES
+            .iter()
+            .any(|prefix| target.starts_with(prefix))
+        {
             return;
         }
 
@@ -46,9 +55,7 @@ impl<S: Subscriber> Layer<S> for DiagnosticsLayer {
         event.record(&mut visitor);
 
         // Use custom source if provided, otherwise derive from target
-        let source = visitor
-            .source
-            .unwrap_or_else(|| simplify_target(target));
+        let source = visitor.source.unwrap_or_else(|| simplify_target(target));
 
         let diagnostic = DiagnosticEvent {
             source,
@@ -119,15 +126,29 @@ mod tests {
     #[test]
     fn test_crate_filter() {
         // Our crates should match
-        assert!(CRATE_PREFIXES.iter().any(|p| "catapult::app".starts_with(p)));
-        assert!(CRATE_PREFIXES.iter().any(|p| "cat_protocol::icom".starts_with(p)));
-        assert!(CRATE_PREFIXES.iter().any(|p| "cat_detect::scanner".starts_with(p)));
-        assert!(CRATE_PREFIXES.iter().any(|p| "cat_mux::state".starts_with(p)));
-        assert!(CRATE_PREFIXES.iter().any(|p| "cat_sim::radio".starts_with(p)));
+        assert!(CRATE_PREFIXES
+            .iter()
+            .any(|p| "catapult::app".starts_with(p)));
+        assert!(CRATE_PREFIXES
+            .iter()
+            .any(|p| "cat_protocol::icom".starts_with(p)));
+        assert!(CRATE_PREFIXES
+            .iter()
+            .any(|p| "cat_detect::scanner".starts_with(p)));
+        assert!(CRATE_PREFIXES
+            .iter()
+            .any(|p| "cat_mux::state".starts_with(p)));
+        assert!(CRATE_PREFIXES
+            .iter()
+            .any(|p| "cat_sim::radio".starts_with(p)));
 
         // Third-party crates should not match
-        assert!(!CRATE_PREFIXES.iter().any(|p| "tokio::runtime".starts_with(p)));
-        assert!(!CRATE_PREFIXES.iter().any(|p| "egui::widgets".starts_with(p)));
+        assert!(!CRATE_PREFIXES
+            .iter()
+            .any(|p| "tokio::runtime".starts_with(p)));
+        assert!(!CRATE_PREFIXES
+            .iter()
+            .any(|p| "egui::widgets".starts_with(p)));
         assert!(!CRATE_PREFIXES.iter().any(|p| "serialport".starts_with(p)));
     }
 }

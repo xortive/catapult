@@ -278,10 +278,7 @@ impl PortScanner {
             }
         }
 
-        debug!(
-            "Scan complete - {} radio(s) detected",
-            detected.len()
-        );
+        debug!("Scan complete - {} radio(s) detected", detected.len());
 
         detected
     }

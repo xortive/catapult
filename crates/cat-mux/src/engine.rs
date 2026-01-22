@@ -158,7 +158,10 @@ impl Multiplexer {
     /// Rename a radio (e.g., after ID probing identifies the actual model)
     pub fn rename_radio(&mut self, handle: RadioHandle, new_name: String) {
         if let Some(radio) = self.radios.get_mut(&handle) {
-            info!("Renamed radio {} -> {} (handle {})", radio.name, new_name, handle.0);
+            info!(
+                "Renamed radio {} -> {} (handle {})",
+                radio.name, new_name, handle.0
+            );
             radio.name = new_name;
         }
     }

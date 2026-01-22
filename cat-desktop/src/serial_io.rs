@@ -9,8 +9,8 @@ use std::time::Instant;
 use cat_mux::RadioHandle;
 use cat_protocol::{
     elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCodec, icom::CivCommand,
-    kenwood::KenwoodCodec, kenwood::KenwoodCommand, yaesu_ascii::YaesuAsciiCommand,
-    yaesu::YaesuCodec, EncodeCommand, FromRadioCommand, Protocol, ProtocolCodec,
+    kenwood::KenwoodCodec, kenwood::KenwoodCommand, yaesu::YaesuCodec,
+    yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand, Protocol, ProtocolCodec,
     RadioCommand, RadioDatabase, ToRadioCommand,
 };
 use serialport::SerialPort;
@@ -105,9 +105,7 @@ impl RadioConnection {
             }
         };
 
-        let Some(data) = encoded else {
-            return None;
-        };
+        let data = encoded?;
 
         debug!(
             "Querying ID on radio {:?} with protocol {:?}",

@@ -631,12 +631,16 @@ impl TrafficMonitor {
 
             // Diagnostic filter controls with popout menu
             ui.menu_button(
-                RichText::new(if self.show_diagnostics { "Logs ▾" } else { "Logs" })
-                    .color(if self.show_diagnostics {
-                        Color32::WHITE
-                    } else {
-                        Color32::GRAY
-                    }),
+                RichText::new(if self.show_diagnostics {
+                    "Logs ▾"
+                } else {
+                    "Logs"
+                })
+                .color(if self.show_diagnostics {
+                    Color32::WHITE
+                } else {
+                    Color32::GRAY
+                }),
                 |ui| {
                     ui.checkbox(&mut self.show_diagnostics, "Show Logs");
                     ui.separator();

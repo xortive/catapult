@@ -469,17 +469,14 @@ impl CatapultApp {
 
                 // Update multiplexer with actual model name if different
                 if actual_model_name != config.model_name {
-                    self.multiplexer.rename_radio(handle, actual_model_name.clone());
+                    self.multiplexer
+                        .rename_radio(handle, actual_model_name.clone());
                 }
 
                 // Query initial state if requested (manual additions need this, scanned radios don't)
                 if config.query_initial_state {
                     if let Err(e) = conn.query_initial_state() {
-                        tracing::warn!(
-                            "Failed to query initial state on {}: {}",
-                            config.port,
-                            e
-                        );
+                        tracing::warn!("Failed to query initial state on {}: {}", config.port, e);
                     }
                 }
 
@@ -494,7 +491,10 @@ impl CatapultApp {
                 }
 
                 self.radio_connections.insert(handle, conn);
-                self.report_info("Radio", format!("Connected {} on {}", actual_model_name, config.port));
+                self.report_info(
+                    "Radio",
+                    format!("Connected {} on {}", actual_model_name, config.port),
+                );
                 Some((handle, actual_model_name))
             }
             Err(e) => {
