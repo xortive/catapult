@@ -12,7 +12,7 @@ use cat_protocol::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 use tokio_serial::SerialStream;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Result of probing a serial port
 #[derive(Debug, Clone)]
@@ -89,6 +89,7 @@ impl RadioProber {
             return Some(result);
         }
 
+        debug!("No radio detected (tried all protocols)");
         None
     }
 
@@ -127,9 +128,14 @@ impl RadioProber {
                 trace!("K3 response: {:?}", String::from_utf8_lossy(response));
 
                 if let Some(model_name) = elecraft::is_elecraft_response(response) {
+                    let model = RadioDatabase::by_elecraft_id(model_name);
+                    info!(
+                        "Identified {} via Elecraft protocol",
+                        model.as_ref().map(|m| m.model.as_str()).unwrap_or(model_name)
+                    );
                     return Some(ProbeResult {
                         protocol: Protocol::Elecraft,
-                        model: RadioDatabase::by_elecraft_id(model_name),
+                        model,
                         id_data: response.to_vec(),
                         address: None,
                     });
@@ -163,7 +169,10 @@ impl RadioProber {
                 if flex::is_valid_id_response(response) {
                     let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
                     let model = RadioDatabase::by_flex_id(&id_str);
-
+                    info!(
+                        "Identified {} via FlexRadio protocol",
+                        model.as_ref().map(|m| m.model.as_str()).unwrap_or("FlexRadio")
+                    );
                     return Some(ProbeResult {
                         protocol: Protocol::FlexRadio,
                         model,
@@ -176,7 +185,10 @@ impl RadioProber {
                 if yaesu_ascii::is_valid_id_response(response) {
                     let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
                     let model = RadioDatabase::by_yaesu_ascii_id(&id_str);
-
+                    info!(
+                        "Identified {} via Yaesu ASCII protocol",
+                        model.as_ref().map(|m| m.model.as_str()).unwrap_or("Yaesu")
+                    );
                     return Some(ProbeResult {
                         protocol: Protocol::YaesuAscii,
                         model,
@@ -189,7 +201,10 @@ impl RadioProber {
                 if kenwood::is_valid_id_response(response) {
                     let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
                     let model = RadioDatabase::by_kenwood_id(&id_str);
-
+                    info!(
+                        "Identified {} via Kenwood protocol",
+                        model.as_ref().map(|m| m.model.as_str()).unwrap_or("Kenwood")
+                    );
                     return Some(ProbeResult {
                         protocol: Protocol::Kenwood,
                         model,
@@ -251,7 +266,11 @@ impl RadioProber {
                     let source_addr = icom::extract_source_address(response);
                     let model =
                         source_addr.and_then(cat_protocol::models::RadioDatabase::by_civ_address);
-
+                    info!(
+                        "Identified {} via Icom CI-V protocol (address 0x{:02X})",
+                        model.as_ref().map(|m| m.model.as_str()).unwrap_or("Icom"),
+                        source_addr.unwrap_or(0)
+                    );
                     return Some(ProbeResult {
                         protocol: Protocol::IcomCIV,
                         model,
@@ -289,6 +308,7 @@ impl RadioProber {
                 // Basic validation: mode byte should be in valid range
                 let mode = buf[4];
                 if mode <= 0x0C {
+                    info!("Identified Yaesu radio via binary protocol");
                     return Some(ProbeResult {
                         protocol: Protocol::Yaesu,
                         model: None, // Yaesu identification is harder

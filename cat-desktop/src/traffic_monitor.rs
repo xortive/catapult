@@ -61,7 +61,9 @@ impl TrafficSource {
 /// Severity level for diagnostic entries
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
-    /// Information or warning
+    /// Informational message
+    Info,
+    /// Warning
     Warning,
     /// Error
     Error,
@@ -708,6 +710,7 @@ impl TrafficMonitor {
 
             // Severity badge and color
             let (badge, color) = match severity {
+                DiagnosticSeverity::Info => ("ℹ", Color32::from_rgb(100, 180, 255)),  // Blue
                 DiagnosticSeverity::Warning => ("⚠", Color32::from_rgb(255, 200, 0)), // Yellow
                 DiagnosticSeverity::Error => ("✖", Color32::from_rgb(255, 80, 80)),   // Red
             };

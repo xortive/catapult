@@ -186,6 +186,7 @@ impl PortScanner {
 
     /// Enumerate all available serial ports
     pub fn enumerate_ports(&self) -> Result<Vec<SerialPortInfo>, DetectError> {
+        debug!("Starting port enumeration...");
         let ports = available_ports().map_err(|e| DetectError::EnumerationFailed(e.to_string()))?;
 
         let result: Vec<_> = ports
@@ -194,7 +195,21 @@ impl PortScanner {
             .filter(|p| !self.should_skip_port(p))
             .collect();
 
-        debug!("Enumerated {} ports", result.len());
+        for port in &result {
+            match (port.vid, port.pid) {
+                (Some(vid), Some(pid)) => {
+                    debug!(
+                        "Found port: {} (VID:{:04X} PID:{:04X}) - {:?}",
+                        port.port, vid, pid, port.classification
+                    );
+                }
+                _ => {
+                    debug!("Found port: {} (no USB info) - {:?}", port.port, port.classification);
+                }
+            }
+        }
+
+        debug!("Enumerated {} ports total", result.len());
         Ok(result)
     }
 
@@ -214,6 +229,7 @@ impl PortScanner {
     /// Ports with generic adapters or unknown devices are skipped to avoid
     /// disrupting other equipment.
     pub async fn scan(&mut self) -> Vec<DetectedRadio> {
+        info!("Starting radio scan...");
         let ports = match self.enumerate_ports() {
             Ok(p) => p,
             Err(e) => {
@@ -222,6 +238,7 @@ impl PortScanner {
             }
         };
 
+        info!("Scanning {} ports for radios", ports.len());
         let mut detected = Vec::new();
 
         for port_info in ports {
@@ -257,16 +274,28 @@ impl PortScanner {
             }
         }
 
+        if detected.is_empty() {
+            info!("Scan complete - no radios found");
+        } else {
+            info!("Scan complete - found {} radio(s)", detected.len());
+        }
+
         detected
     }
 
     /// Probe a specific port for a radio
     async fn probe_port(&self, port_info: &SerialPortInfo) -> Option<DetectedRadio> {
+        debug!(
+            "Probing port {} for radios (trying {} baud rates)...",
+            port_info.port,
+            self.config.baud_rates.len()
+        );
         for &baud in &self.config.baud_rates {
             if let Some(radio) = self.probe_at_baud(port_info, baud).await {
                 return Some(radio);
             }
         }
+        debug!("No response from {} at any baud rate", port_info.port);
         None
     }
 

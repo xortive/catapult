@@ -222,7 +222,7 @@ impl CatapultApp {
                 }
             }
             Err(e) => {
-                self.set_status(format!("Failed to enumerate ports: {}", e));
+                self.report_warning("System", format!("Failed to enumerate ports: {}", e));
             }
         }
     }
@@ -247,7 +247,9 @@ impl CatapultApp {
 
         if self.settings.virtual_radios != configs {
             self.settings.virtual_radios = configs;
-            self.settings.save();
+            if let Err(e) = self.settings.save() {
+                self.handle_save_error(e);
+            }
         }
     }
 
@@ -266,7 +268,9 @@ impl CatapultApp {
 
         if self.settings.amplifier != amp_settings {
             self.settings.amplifier = amp_settings;
-            self.settings.save();
+            if let Err(e) = self.settings.save() {
+                self.handle_save_error(e);
+            }
         }
     }
 
@@ -312,25 +316,27 @@ impl CatapultApp {
 
                         // Try to enable auto-info mode
                         if let Err(e) = conn.enable_auto_info() {
-                            tracing::warn!(
-                                "Failed to enable auto-info on {}: {}",
-                                config.port,
-                                e
-                            );
+                            let msg = format!("Failed to enable auto-info on {}: {}", config.port, e);
+                            tracing::warn!("{}", msg);
+                            // Add to traffic monitor so users can see it
+                            let _ = self.bg_tx.send(BackgroundMessage::IoError {
+                                source: format!("Radio {}", config.port),
+                                message: "Auto-info not enabled - radio won't send automatic updates".to_string(),
+                            });
                         }
 
                         self.radio_connections.insert(handle, conn);
-                        tracing::info!("Connected to radio on {}", config.port);
+                        self.report_info("Radio", format!("Connected on {}", config.port));
                     }
                     Err(e) => {
-                        self.set_status(format!(
-                            "Failed to connect to {}: {}",
-                            config.port, e
-                        ));
+                        self.report_err(
+                            "Radio",
+                            format!("Failed to connect to {}: {}", config.port, e),
+                        );
                     }
                 }
             } else {
-                self.set_status(format!("Warning: {} not available", config.port));
+                self.report_warning("Radio", format!("{} not available", config.port));
             }
         }
     }
@@ -352,13 +358,56 @@ impl CatapultApp {
 
         if self.settings.configured_radios != configs {
             self.settings.configured_radios = configs;
-            self.settings.save();
+            if let Err(e) = self.settings.save() {
+                self.handle_save_error(e);
+            }
         }
     }
 
     /// Set a status message
     fn set_status(&mut self, msg: String) {
         self.status_message = Some((msg, Instant::now()));
+    }
+
+    /// Report a message to all logging destinations (traffic monitor, tracing, and optionally status bar)
+    fn report_error(
+        &mut self,
+        source: &str,
+        severity: DiagnosticSeverity,
+        message: impl Into<String>,
+    ) {
+        let message = message.into();
+        // Info messages don't update status bar (too noisy)
+        if severity != DiagnosticSeverity::Info {
+            self.set_status(format!("{}: {}", source, message));
+        }
+        self.traffic_monitor
+            .add_diagnostic(source.to_string(), severity, message.clone());
+        match severity {
+            DiagnosticSeverity::Info => tracing::info!("[{}] {}", source, message),
+            DiagnosticSeverity::Warning => tracing::warn!("[{}] {}", source, message),
+            DiagnosticSeverity::Error => tracing::error!("[{}] {}", source, message),
+        }
+    }
+
+    /// Report an info message to traffic monitor and tracing (not status bar)
+    fn report_info(&mut self, source: &str, message: impl Into<String>) {
+        self.report_error(source, DiagnosticSeverity::Info, message);
+    }
+
+    /// Report a warning to all logging destinations
+    fn report_warning(&mut self, source: &str, message: impl Into<String>) {
+        self.report_error(source, DiagnosticSeverity::Warning, message);
+    }
+
+    /// Report an error to all logging destinations
+    fn report_err(&mut self, source: &str, message: impl Into<String>) {
+        self.report_error(source, DiagnosticSeverity::Error, message);
+    }
+
+    /// Handle a settings save error
+    fn handle_save_error(&mut self, error: String) {
+        self.report_err("Settings", error);
     }
 
     /// Get the protocol for a radio by its handle
@@ -419,6 +468,10 @@ impl CatapultApp {
                 BackgroundMessage::ScanComplete(radios) => {
                     self.scanning = false;
                     self.last_scan = Some(Instant::now());
+                    self.report_info(
+                        "Scanner",
+                        format!("Scan complete - detected {} radio(s)", radios.len()),
+                    );
 
                     // Get existing ports to filter out duplicates
                     let existing_ports: std::collections::HashSet<_> = self
@@ -432,8 +485,18 @@ impl CatapultApp {
                     let mut new_count = 0;
                     for radio in &radios {
                         if existing_ports.contains(&radio.port) {
+                            tracing::debug!(
+                                "Skipping {} on {} - already configured",
+                                radio.model_name(),
+                                radio.port
+                            );
                             continue;
                         }
+
+                        self.report_info(
+                            "Scanner",
+                            format!("New radio detected: {} on {}", radio.model_name(), radio.port),
+                        );
 
                         let handle = self.multiplexer.add_radio(
                             radio.model_name(),
@@ -462,7 +525,7 @@ impl CatapultApp {
                 }
                 BackgroundMessage::Error(e) => {
                     self.scanning = false;
-                    self.set_status(format!("Error: {}", e));
+                    self.report_err("System", e);
                 }
                 BackgroundMessage::TrafficIn { radio, data } => {
                     let protocol = self.get_protocol_for_radio(radio);
@@ -482,12 +545,7 @@ impl CatapultApp {
                     );
                 }
                 BackgroundMessage::IoError { source, message } => {
-                    self.set_status(format!("{}: {}", source, message));
-                    self.traffic_monitor.add_diagnostic(
-                        source,
-                        DiagnosticSeverity::Error,
-                        message,
-                    );
+                    self.report_err(&source, message);
                 }
             }
         }
@@ -511,7 +569,7 @@ impl CatapultApp {
                     if let Some(ref mut conn) = self.amp_connection {
                         self.traffic_monitor.add_outgoing(&data, amp_protocol);
                         if let Err(e) = conn.write(&data) {
-                            self.set_status(format!("Amplifier write error: {}", e));
+                            self.report_err("Amplifier", format!("Write error: {}", e));
                         }
                     } else {
                         self.traffic_monitor
@@ -519,7 +577,7 @@ impl CatapultApp {
                     }
                 }
                 MultiplexerEvent::Error(e) => {
-                    self.set_status(format!("Error: {}", e));
+                    self.report_err("Multiplexer", e);
                 }
                 _ => {}
             }
@@ -636,7 +694,13 @@ impl CatapultApp {
 
                 // Try to enable auto-info mode
                 if let Err(e) = conn.enable_auto_info() {
-                    tracing::warn!("Failed to enable auto-info: {}", e);
+                    let msg = format!("Failed to enable auto-info on {}: {}", self.add_radio_port, e);
+                    tracing::warn!("{}", msg);
+                    // Add to traffic monitor so users can see it
+                    let _ = self.bg_tx.send(BackgroundMessage::IoError {
+                        source: format!("Radio {}", self.add_radio_port),
+                        message: "Auto-info not enabled - radio won't send automatic updates".to_string(),
+                    });
                 }
 
                 self.radio_connections.insert(handle, conn);
@@ -645,10 +709,10 @@ impl CatapultApp {
             Err(e) => {
                 // Remove from multiplexer since we couldn't connect
                 self.multiplexer.remove_radio(handle);
-                self.set_status(format!(
-                    "Failed to connect to {}: {}",
-                    self.add_radio_port, e
-                ));
+                self.report_err(
+                    "Radio",
+                    format!("Failed to connect to {}: {}", self.add_radio_port, e),
+                );
                 return; // Don't create panel for failed connection
             }
         }
@@ -1174,7 +1238,9 @@ impl CatapultApp {
 
         // Handle deferred actions
         if let Some(handle) = selected_handle {
-            let _ = self.multiplexer.select_radio(handle);
+            if let Err(e) = self.multiplexer.select_radio(handle) {
+                self.report_warning("Multiplexer", format!("Radio selection failed: {}", e));
+            }
         }
         if let Some(idx) = toggle_expanded_idx {
             self.radio_panels[idx].expanded = !self.radio_panels[idx].expanded;
@@ -1195,16 +1261,23 @@ impl CatapultApp {
                 .set_radio_ptt(&sim_id, active);
         }
         if let Some(idx) = remove_radio_idx {
-            let panel = &self.radio_panels[idx];
-            if panel.connection_type == RadioConnectionType::Virtual {
+            let Some(panel) = self.radio_panels.get(idx) else {
+                return; // Index no longer valid
+            };
+            // Extract data before mutating
+            let is_virtual = panel.connection_type == RadioConnectionType::Virtual;
+            let sim_id = panel.sim_radio_id.clone();
+            let handle = panel.handle;
+
+            if is_virtual {
                 // Virtual radio - remove via simulation panel (event will clean up)
-                if let Some(sim_id) = &panel.sim_radio_id {
-                    self.simulation_panel.context_mut().remove_radio(sim_id);
+                if let Some(sim_id) = sim_id {
+                    self.simulation_panel.context_mut().remove_radio(&sim_id);
                 }
             } else {
                 // COM radio - remove connection and panel, save config
-                self.radio_connections.remove(&panel.handle);
-                self.multiplexer.remove_radio(panel.handle);
+                self.radio_connections.remove(&handle);
+                self.multiplexer.remove_radio(handle);
                 self.radio_panels.remove(idx);
                 self.save_configured_radios();
                 self.set_status("Radio removed".into());
@@ -1443,6 +1516,7 @@ impl CatapultApp {
 
     /// Detect new radios (without clearing existing configured radios)
     fn detect_new_radios(&mut self) {
+        self.report_info("Scanner", "Starting radio detection scan...");
         self.scanning = true;
         self.set_status("Detecting new radios...".into());
 
@@ -1501,7 +1575,7 @@ impl CatapultApp {
                 ));
             }
             Err(e) => {
-                self.set_status(format!("Failed to connect: {}", e));
+                self.report_err("Amplifier", format!("Failed to connect: {}", e));
             }
         }
     }
@@ -1636,7 +1710,7 @@ impl eframe::App for CatapultApp {
                 // Send to amplifier
                 if let Some(ref mut amp_conn) = self.amp_connection {
                     if let Err(e) = amp_conn.write(&amp_cmd) {
-                        self.set_status(format!("Amplifier write error: {}", e));
+                        self.report_err("Amplifier", format!("Write error: {}", e));
                     }
                 }
             }
@@ -1677,7 +1751,9 @@ impl eframe::App for CatapultApp {
                         ui.add_space(16.0);
                         ui.heading("Settings");
                         ui.separator();
-                        self.settings.draw(ui);
+                        if let Some(error) = self.settings.draw(ui) {
+                            self.handle_save_error(error);
+                        }
 
                         ui.add_space(16.0);
                         ui.separator();

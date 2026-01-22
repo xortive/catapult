@@ -129,26 +129,38 @@ impl Settings {
     }
 
     /// Save settings to disk
-    pub fn save(&self) {
-        if let Some(path) = Self::settings_path() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(path, json);
-            }
+    pub fn save(&self) -> Result<(), String> {
+        let path = Self::settings_path()
+            .ok_or_else(|| "Could not determine settings path".to_string())?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create settings directory: {}", e))?;
         }
+
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+        std::fs::write(&path, json)
+            .map_err(|e| format!("Failed to write settings: {}", e))?;
+
+        Ok(())
     }
 
     /// Check if settings have changed and auto-save if so
-    fn auto_save_if_changed(&self, previous: &Settings) {
+    /// Returns any error message for display
+    fn auto_save_if_changed(&self, previous: &Settings) -> Option<String> {
         if self != previous {
-            self.save();
+            if let Err(e) = self.save() {
+                return Some(e);
+            }
         }
+        None
     }
 
     /// Draw settings UI (auto-saves on change)
-    pub fn draw(&mut self, ui: &mut Ui) {
+    /// Returns an error message if save failed
+    pub fn draw(&mut self, ui: &mut Ui) -> Option<String> {
         let previous = self.clone();
 
         egui::Grid::new("settings_grid")
@@ -212,6 +224,6 @@ impl Settings {
         }
 
         // Auto-save when settings change
-        self.auto_save_if_changed(&previous);
+        self.auto_save_if_changed(&previous)
     }
 }
