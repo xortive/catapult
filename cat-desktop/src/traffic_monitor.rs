@@ -31,6 +31,8 @@ fn segment_color(segment_type: SegmentType) -> Color32 {
 pub enum TrafficSource {
     /// Real radio on a serial port (incoming)
     RealRadio { handle: RadioHandle, port: String },
+    /// Command sent to real radio (outgoing to radio)
+    ToRealRadio { handle: RadioHandle, port: String },
     /// Simulated radio (incoming)
     SimulatedRadio { id: String },
     /// Command sent to simulated radio (outgoing to radio)
@@ -266,6 +268,7 @@ impl TrafficMonitor {
                 };
                 let src = match source {
                     TrafficSource::RealRadio { port, .. } => format!("Radio({})", port),
+                    TrafficSource::ToRealRadio { port, .. } => format!("->Radio({})", port),
                     TrafficSource::SimulatedRadio { id } => format!("Sim({})", id),
                     TrafficSource::ToSimulatedRadio { id } => format!("->Sim({})", id),
                     TrafficSource::RealAmplifier { port } => format!("->Amp({})", port),
@@ -445,6 +448,27 @@ impl TrafficMonitor {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::ToSimulatedRadio { id },
+            data: data.to_vec(),
+            decoded: decode_and_annotate_with_hint(data, protocol),
+        });
+    }
+
+    /// Add an outgoing traffic entry to real radio (command sent to radio)
+    pub fn add_to_real_radio(
+        &mut self,
+        handle: RadioHandle,
+        port: String,
+        data: &[u8],
+        protocol: Option<Protocol>,
+    ) {
+        if self.paused {
+            return;
+        }
+
+        self.add_entry(TrafficEntry::Data {
+            timestamp: SystemTime::now(),
+            direction: TrafficDirection::Outgoing,
+            source: TrafficSource::ToRealRadio { handle, port },
             data: data.to_vec(),
             decoded: decode_and_annotate_with_hint(data, protocol),
         });
@@ -779,6 +803,13 @@ impl TrafficMonitor {
                     ui.label(
                         RichText::new("[Radio→]")
                             .color(Color32::LIGHT_BLUE)
+                            .monospace(),
+                    );
+                }
+                TrafficSource::ToRealRadio { .. } => {
+                    ui.label(
+                        RichText::new("[→Radio]")
+                            .color(Color32::from_rgb(180, 100, 255)) // Purple for outgoing to radio
                             .monospace(),
                     );
                 }

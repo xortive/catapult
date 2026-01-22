@@ -19,6 +19,8 @@ use crate::app::BackgroundMessage;
 pub struct RadioConnection {
     /// Radio handle
     handle: RadioHandle,
+    /// Serial port name (e.g., "/dev/ttyUSB0")
+    port_name: String,
     /// Serial port
     port: Box<dyn SerialPort>,
     /// Protocol being used
@@ -67,6 +69,7 @@ impl RadioConnection {
 
         Ok(Self {
             handle,
+            port_name: port_name.to_string(),
             port,
             protocol,
             codec,
@@ -166,7 +169,21 @@ impl RadioConnection {
     pub fn write(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
         self.port.write_all(data)?;
         self.port.flush()?;
+
+        // Send traffic notification for outgoing radio commands
+        if let Err(e) = self.tx.send(BackgroundMessage::RadioTrafficOut {
+            radio: self.handle,
+            data: data.to_vec(),
+        }) {
+            warn!("Radio channel send failed for {:?}: {}", self.handle, e);
+        }
+
         Ok(())
+    }
+
+    /// Get the port name
+    pub fn port_name(&self) -> &str {
+        &self.port_name
     }
 }
 

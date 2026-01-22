@@ -10,7 +10,9 @@ use cat_protocol::{OperatingMode, Protocol, RadioCommand};
 use cat_sim::SimulationEvent;
 use eframe::CreationContext;
 use egui::{Color32, RichText, Ui};
+use tracing::Level;
 
+use crate::diagnostics_layer::DiagnosticEvent;
 use crate::radio_panel::{RadioConnectionType, RadioPanel};
 use crate::serial_io::{AmplifierConnection, RadioConnection};
 use crate::settings::{AmplifierSettings, ConfiguredRadio, Settings};
@@ -56,6 +58,8 @@ pub enum BackgroundMessage {
     Error(String),
     /// Traffic received from radio
     TrafficIn { radio: RadioHandle, data: Vec<u8> },
+    /// Traffic sent to radio (outgoing commands)
+    RadioTrafficOut { radio: RadioHandle, data: Vec<u8> },
     /// Traffic sent to amplifier
     TrafficOut { data: Vec<u8> },
     /// Traffic received from amplifier
@@ -120,11 +124,13 @@ pub struct CatapultApp {
     add_radio_baud: u32,
     /// CI-V address for new Icom COM radio
     add_radio_civ_address: u8,
+    /// Diagnostic event receiver (from tracing layer)
+    diag_rx: Receiver<DiagnosticEvent>,
 }
 
 impl CatapultApp {
     /// Create a new application
-    pub fn new(_cc: &CreationContext<'_>) -> Self {
+    pub fn new(_cc: &CreationContext<'_>, diag_rx: Receiver<DiagnosticEvent>) -> Self {
         let (bg_tx, bg_rx) = mpsc::channel();
         let settings = Settings::load();
 
@@ -168,6 +174,7 @@ impl CatapultApp {
             add_radio_protocol: Protocol::Kenwood,
             add_radio_baud: 9600,
             add_radio_civ_address: 0x00,
+            diag_rx,
             settings,
         };
 
@@ -320,6 +327,9 @@ impl CatapultApp {
                             conn.set_civ_address(civ_addr);
                         }
 
+                        // Small delay to let the radio settle after port open
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+
                         // Try to enable auto-info mode
                         if let Err(e) = conn.enable_auto_info() {
                             let msg =
@@ -373,51 +383,30 @@ impl CatapultApp {
         }
     }
 
-    /// Set a status message (also adds Info diagnostic to traffic monitor)
+    /// Set a status message (also logs as Info via tracing, which goes to traffic monitor)
     fn set_status(&mut self, msg: String) {
         self.status_message = Some((msg.clone(), Instant::now()));
-        self.traffic_monitor.add_diagnostic(
-            "Status".to_string(),
-            DiagnosticSeverity::Info,
-            msg.clone(),
-        );
-        tracing::info!("[Status] {}", msg);
+        tracing::info!(source = "Status", "{}", msg);
     }
 
-    /// Report a message to all logging destinations (traffic monitor, tracing, and optionally status bar)
-    fn report_error(
-        &mut self,
-        source: &str,
-        severity: DiagnosticSeverity,
-        message: impl Into<String>,
-    ) {
-        let message = message.into();
-        // Warning/Error messages update status bar (set directly to avoid double-logging)
-        if severity != DiagnosticSeverity::Info {
-            self.status_message = Some((format!("{}: {}", source, message), Instant::now()));
-        }
-        self.traffic_monitor
-            .add_diagnostic(source.to_string(), severity, message.clone());
-        match severity {
-            DiagnosticSeverity::Info => tracing::info!("[{}] {}", source, message),
-            DiagnosticSeverity::Warning => tracing::warn!("[{}] {}", source, message),
-            DiagnosticSeverity::Error => tracing::error!("[{}] {}", source, message),
-        }
-    }
-
-    /// Report an info message to traffic monitor and tracing (not status bar)
+    /// Report an info message via tracing (shows in console and traffic monitor)
     fn report_info(&mut self, source: &str, message: impl Into<String>) {
-        self.report_error(source, DiagnosticSeverity::Info, message);
+        let message = message.into();
+        tracing::info!(source = source, "{}", message);
     }
 
-    /// Report a warning to all logging destinations
+    /// Report a warning via tracing (shows in console, traffic monitor, and status bar)
     fn report_warning(&mut self, source: &str, message: impl Into<String>) {
-        self.report_error(source, DiagnosticSeverity::Warning, message);
+        let message = message.into();
+        self.status_message = Some((format!("{}: {}", source, message), Instant::now()));
+        tracing::warn!(source = source, "{}", message);
     }
 
-    /// Report an error to all logging destinations
+    /// Report an error via tracing (shows in console, traffic monitor, and status bar)
     fn report_err(&mut self, source: &str, message: impl Into<String>) {
-        self.report_error(source, DiagnosticSeverity::Error, message);
+        let message = message.into();
+        self.status_message = Some((format!("{}: {}", source, message), Instant::now()));
+        tracing::error!(source = source, "{}", message);
     }
 
     /// Handle a settings save error
@@ -473,6 +462,22 @@ impl CatapultApp {
         match &port.classification_hint {
             Some(hint) => format!("{} ({})", port.port, hint),
             None => port.port.clone(),
+        }
+    }
+
+    /// Process diagnostic events from tracing layer
+    fn process_diagnostic_events(&mut self) {
+        while let Ok(event) = self.diag_rx.try_recv() {
+            // Map tracing Level to DiagnosticSeverity
+            let severity = match event.level {
+                Level::ERROR => DiagnosticSeverity::Error,
+                Level::WARN => DiagnosticSeverity::Warning,
+                // INFO, DEBUG, TRACE all map to Info
+                _ => DiagnosticSeverity::Info,
+            };
+
+            self.traffic_monitor
+                .add_diagnostic(event.source, severity, event.message);
         }
     }
 
@@ -549,6 +554,17 @@ impl CatapultApp {
                 BackgroundMessage::TrafficIn { radio, data } => {
                     let protocol = self.get_protocol_for_radio(radio);
                     self.traffic_monitor.add_incoming(radio, &data, protocol);
+                }
+                BackgroundMessage::RadioTrafficOut { radio, data } => {
+                    // Get protocol and port name from the radio connection
+                    let protocol = self.get_protocol_for_radio(radio);
+                    let port_name = self
+                        .radio_connections
+                        .get(&radio)
+                        .map(|c| c.port_name().to_string())
+                        .unwrap_or_default();
+                    self.traffic_monitor
+                        .add_to_real_radio(radio, port_name, &data, protocol);
                 }
                 BackgroundMessage::TrafficOut { data } => {
                     // Outgoing to amplifier - use amplifier protocol
@@ -709,6 +725,9 @@ impl CatapultApp {
                 if self.add_radio_protocol == Protocol::IcomCIV {
                     conn.set_civ_address(self.add_radio_civ_address);
                 }
+
+                // Small delay to let the radio settle after port open
+                std::thread::sleep(std::time::Duration::from_millis(100));
 
                 // Try to enable auto-info mode
                 if let Err(e) = conn.enable_auto_info() {
@@ -1747,7 +1766,8 @@ impl CatapultApp {
 
 impl eframe::App for CatapultApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Process background messages
+        // Process background messages and events
+        self.process_diagnostic_events();
         self.process_messages();
         self.process_simulation_events();
         self.process_mux_events();
