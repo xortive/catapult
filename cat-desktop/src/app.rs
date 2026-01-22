@@ -68,6 +68,17 @@ pub enum BackgroundMessage {
     IoError { source: String, message: String },
 }
 
+/// Configuration for connecting a COM port radio
+struct ComRadioConfig {
+    port: String,
+    protocol: Protocol,
+    baud_rate: u32,
+    civ_address: Option<u8>,
+    model_name: String,
+    /// Whether to query initial state (skip for scanned radios that already have state)
+    query_initial_state: bool,
+}
+
 /// Main application state
 pub struct CatapultApp {
     /// Settings
@@ -424,6 +435,80 @@ impl CatapultApp {
         self.report_err("Settings", error);
     }
 
+    /// Connect a COM port radio and add it to the multiplexer
+    /// Returns (RadioHandle, actual_model_name) on success, None on failure
+    /// The actual_model_name may differ from config if ID probing identifies the radio
+    /// Caller is responsible for creating the RadioPanel after this succeeds
+    fn connect_com_radio(&mut self, config: ComRadioConfig) -> Option<(RadioHandle, String)> {
+        // Add to multiplexer with initial model name (may be updated after ID query)
+        let handle = self.multiplexer.add_radio(
+            config.model_name.clone(),
+            config.port.clone(),
+            config.protocol,
+        );
+
+        // Open the serial connection
+        match RadioConnection::new(
+            handle,
+            &config.port,
+            config.baud_rate,
+            config.protocol,
+            self.bg_tx.clone(),
+        ) {
+            Ok(mut conn) => {
+                // Set CI-V address for Icom radios
+                if let Some(civ_addr) = config.civ_address {
+                    conn.set_civ_address(civ_addr);
+                }
+
+                // Small delay to let the radio settle after port open
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // Query radio ID to get actual model name
+                let actual_model_name = conn.query_id().unwrap_or(config.model_name.clone());
+
+                // Update multiplexer with actual model name if different
+                if actual_model_name != config.model_name {
+                    self.multiplexer.rename_radio(handle, actual_model_name.clone());
+                }
+
+                // Query initial state if requested (manual additions need this, scanned radios don't)
+                if config.query_initial_state {
+                    if let Err(e) = conn.query_initial_state() {
+                        tracing::warn!(
+                            "Failed to query initial state on {}: {}",
+                            config.port,
+                            e
+                        );
+                    }
+                }
+
+                // Try to enable auto-info mode
+                if let Err(e) = conn.enable_auto_info() {
+                    tracing::warn!("Failed to enable auto-info on {}: {}", config.port, e);
+                    let _ = self.bg_tx.send(BackgroundMessage::IoError {
+                        source: format!("Radio {}", config.port),
+                        message: "Auto-info not enabled - radio won't send automatic updates"
+                            .to_string(),
+                    });
+                }
+
+                self.radio_connections.insert(handle, conn);
+                self.report_info("Radio", format!("Connected {} on {}", actual_model_name, config.port));
+                Some((handle, actual_model_name))
+            }
+            Err(e) => {
+                // Remove from multiplexer since we couldn't connect
+                self.multiplexer.remove_radio(handle);
+                self.report_err(
+                    "Radio",
+                    format!("Failed to connect to {}: {}", config.port, e),
+                );
+                None
+            }
+        }
+    }
+
     /// Get the protocol for a radio by its handle
     fn get_protocol_for_radio(&self, handle: RadioHandle) -> Option<Protocol> {
         self.radio_panels
@@ -499,10 +584,6 @@ impl CatapultApp {
                 BackgroundMessage::ScanComplete(radios) => {
                     self.scanning = false;
                     self.last_scan = Some(Instant::now());
-                    self.report_info(
-                        "Scanner",
-                        format!("Scan complete - detected {} radio(s)", radios.len()),
-                    );
 
                     // Get existing ports to filter out duplicates
                     let existing_ports: std::collections::HashSet<_> = self
@@ -517,6 +598,7 @@ impl CatapultApp {
                     for radio in &radios {
                         if existing_ports.contains(&radio.port) {
                             tracing::debug!(
+                                source = "Scanner",
                                 "Skipping {} on {} - already configured",
                                 radio.model_name(),
                                 radio.port
@@ -524,33 +606,29 @@ impl CatapultApp {
                             continue;
                         }
 
-                        self.report_info(
-                            "Scanner",
-                            format!(
-                                "New radio detected: {} on {}",
-                                radio.model_name(),
-                                radio.port
-                            ),
-                        );
+                        let config = ComRadioConfig {
+                            port: radio.port.clone(),
+                            protocol: radio.protocol,
+                            baud_rate: radio.baud_rate,
+                            civ_address: radio.civ_address,
+                            model_name: radio.model_name(),
+                            query_initial_state: false, // Scanner already detected state
+                        };
 
-                        let handle = self.multiplexer.add_radio(
-                            radio.model_name(),
-                            radio.port.clone(),
-                            radio.protocol,
-                        );
+                        if let Some((handle, _model_name)) = self.connect_com_radio(config) {
+                            // Update radio state from detection
+                            if let Some(state) = self.multiplexer.get_radio_mut(handle) {
+                                state.update_from_detection(radio);
+                            }
 
-                        // Update radio state from detection
-                        if let Some(state) = self.multiplexer.get_radio_mut(handle) {
-                            state.update_from_detection(radio);
+                            self.radio_panels.push(RadioPanel::new(handle, radio));
+                            new_count += 1;
                         }
-
-                        self.radio_panels.push(RadioPanel::new(handle, radio));
-                        new_count += 1;
                     }
 
                     self.detected_radios = radios;
 
-                    // Save newly detected radios to config
+                    // Save newly detected radios to config and report summary
                     if new_count > 0 {
                         self.save_configured_radios();
                         self.set_status(format!("Found {} new radio(s)", new_count));
@@ -713,98 +791,46 @@ impl CatapultApp {
             return;
         }
 
-        // Generate a model name based on port/protocol
+        let civ_address = if self.add_radio_protocol == Protocol::IcomCIV {
+            Some(self.add_radio_civ_address)
+        } else {
+            None
+        };
         let model_name = format!("{} Radio", self.add_radio_protocol.name());
 
-        // Add to multiplexer
-        let handle = self.multiplexer.add_radio(
-            model_name.clone(),
-            self.add_radio_port.clone(),
-            self.add_radio_protocol,
-        );
+        let config = ComRadioConfig {
+            port: self.add_radio_port.clone(),
+            protocol: self.add_radio_protocol,
+            baud_rate: self.add_radio_baud,
+            civ_address,
+            model_name: model_name.clone(),
+            query_initial_state: true,
+        };
 
-        // Open the serial connection
-        match RadioConnection::new(
-            handle,
-            &self.add_radio_port,
-            self.add_radio_baud,
-            self.add_radio_protocol,
-            self.bg_tx.clone(),
-        ) {
-            Ok(mut conn) => {
-                // Set CI-V address for Icom radios
-                if self.add_radio_protocol == Protocol::IcomCIV {
-                    conn.set_civ_address(self.add_radio_civ_address);
+        if let Some((handle, actual_model_name)) = self.connect_com_radio(config) {
+            // Create RadioPanel with actual model name (may be identified via ID probe)
+            let panel = RadioPanel::new_com(
+                handle,
+                actual_model_name,
+                self.add_radio_port.clone(),
+                self.add_radio_protocol,
+                self.add_radio_baud,
+                civ_address,
+            );
+            self.radio_panels.push(panel);
+
+            // If this port was selected as amp port, clear it
+            if self.amp_port == self.add_radio_port {
+                self.amp_port.clear();
+                if self.amp_connection.is_some() {
+                    self.disconnect_amplifier();
                 }
-
-                // Small delay to let the radio settle after port open
-                std::thread::sleep(std::time::Duration::from_millis(100));
-
-                // Query initial state (frequency/mode) before enabling auto-info
-                if let Err(e) = conn.query_initial_state() {
-                    tracing::warn!(
-                        "Failed to query initial state on {}: {}",
-                        self.add_radio_port,
-                        e
-                    );
-                }
-
-                // Try to enable auto-info mode
-                if let Err(e) = conn.enable_auto_info() {
-                    let msg = format!(
-                        "Failed to enable auto-info on {}: {}",
-                        self.add_radio_port, e
-                    );
-                    tracing::warn!("{}", msg);
-                    // Add to traffic monitor so users can see it
-                    let _ = self.bg_tx.send(BackgroundMessage::IoError {
-                        source: format!("Radio {}", self.add_radio_port),
-                        message: "Auto-info not enabled - radio won't send automatic updates"
-                            .to_string(),
-                    });
-                }
-
-                self.radio_connections.insert(handle, conn);
-                self.set_status(format!("Connected to radio on {}", self.add_radio_port));
+                self.save_amplifier_settings();
             }
-            Err(e) => {
-                // Remove from multiplexer since we couldn't connect
-                self.multiplexer.remove_radio(handle);
-                self.report_err(
-                    "Radio",
-                    format!("Failed to connect to {}: {}", self.add_radio_port, e),
-                );
-                return; // Don't create panel for failed connection
-            }
+
+            // Save to config
+            self.save_configured_radios();
         }
-
-        // Create RadioPanel only after successful connection
-        let panel = RadioPanel::new_com(
-            handle,
-            model_name,
-            self.add_radio_port.clone(),
-            self.add_radio_protocol,
-            self.add_radio_baud,
-            if self.add_radio_protocol == Protocol::IcomCIV {
-                Some(self.add_radio_civ_address)
-            } else {
-                None
-            },
-        );
-        self.radio_panels.push(panel);
-
-        // If this port was selected as amp port, clear it
-        if self.amp_port == self.add_radio_port {
-            self.amp_port.clear();
-            // Disconnect amp if it was using this port
-            if self.amp_connection.is_some() {
-                self.disconnect_amplifier();
-            }
-            self.save_amplifier_settings();
-        }
-
-        // Save to config
-        self.save_configured_radios();
 
         // Clear the add_radio_port for next addition
         self.add_radio_port.clear();
@@ -1612,9 +1638,8 @@ impl CatapultApp {
 
     /// Detect new radios (without clearing existing configured radios)
     fn detect_new_radios(&mut self) {
-        self.report_info("Scanner", "Starting radio detection scan...");
         self.scanning = true;
-        self.set_status("Detecting new radios...".into());
+        self.set_status("Scanning for radios...".into());
 
         // Spawn background thread for async scanning
         let tx = self.bg_tx.clone();

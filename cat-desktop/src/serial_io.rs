@@ -4,14 +4,17 @@ use std::io::{Read, Write};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use std::time::Instant;
+
 use cat_mux::RadioHandle;
 use cat_protocol::{
     elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCodec, icom::CivCommand,
-    kenwood::KenwoodCodec, kenwood::KenwoodCommand, yaesu::YaesuCodec, EncodeCommand,
-    FromRadioCommand, Protocol, ProtocolCodec, RadioCommand, ToRadioCommand,
+    kenwood::KenwoodCodec, kenwood::KenwoodCommand, yaesu_ascii::YaesuAsciiCommand,
+    yaesu::YaesuCodec, EncodeCommand, FromRadioCommand, Protocol, ProtocolCodec,
+    RadioCommand, RadioDatabase, ToRadioCommand,
 };
 use serialport::SerialPort;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::app::BackgroundMessage;
 
@@ -82,6 +85,126 @@ impl RadioConnection {
     /// Set the CI-V address for Icom radios
     pub fn set_civ_address(&mut self, addr: u8) {
         self.civ_address = Some(addr);
+    }
+
+    /// Query the radio's ID and return the model name if identified
+    /// This sends ID; and waits for the response with a timeout
+    pub fn query_id(&mut self) -> Option<String> {
+        // Send ID query
+        let id_cmd = RadioCommand::GetId;
+        let encoded = match self.protocol {
+            Protocol::Kenwood => KenwoodCommand::from_radio_command(&id_cmd).map(|c| c.encode()),
+            Protocol::Elecraft => ElecraftCommand::from_radio_command(&id_cmd).map(|c| c.encode()),
+            Protocol::FlexRadio => FlexCommand::from_radio_command(&id_cmd).map(|c| c.encode()),
+            Protocol::YaesuAscii => {
+                YaesuAsciiCommand::from_radio_command(&id_cmd).map(|c| c.encode())
+            }
+            Protocol::IcomCIV | Protocol::Yaesu => {
+                // Icom and legacy Yaesu don't use ASCII ID command
+                return None;
+            }
+        };
+
+        let Some(data) = encoded else {
+            return None;
+        };
+
+        debug!(
+            "Querying ID on radio {:?} with protocol {:?}",
+            self.handle, self.protocol
+        );
+
+        if self.write(&data).is_err() {
+            return None;
+        }
+
+        // Poll for response with 500ms timeout
+        let timeout = Duration::from_millis(500);
+        let start = Instant::now();
+        let mut response_buf = Vec::new();
+
+        while start.elapsed() < timeout {
+            match self.port.read(&mut self.buffer) {
+                Ok(n) if n > 0 => {
+                    let data = &self.buffer[..n];
+
+                    // Send traffic notification
+                    let _ = self.tx.send(BackgroundMessage::TrafficIn {
+                        radio: self.handle,
+                        data: data.to_vec(),
+                    });
+
+                    response_buf.extend_from_slice(data);
+
+                    // Try to parse an ID response
+                    if let Some(model_name) = self.try_parse_id_response(&response_buf) {
+                        info!("Identified radio as {}", model_name);
+                        return Some(model_name);
+                    }
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    // Continue polling
+                }
+                Err(_) => break,
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        None
+    }
+
+    /// Try to parse an ID response and look up the model name
+    fn try_parse_id_response(&self, data: &[u8]) -> Option<String> {
+        // Look for semicolon-terminated response
+        if !data.contains(&b';') {
+            return None;
+        }
+
+        match self.protocol {
+            Protocol::Kenwood => {
+                if cat_protocol::kenwood::is_valid_id_response(data) {
+                    let id_str =
+                        String::from_utf8_lossy(&data[2..data.iter().position(|&b| b == b';')?]);
+                    if let Some(model) = RadioDatabase::by_kenwood_id(&id_str) {
+                        return Some(model.model);
+                    }
+                    // Return generic name with ID if not in database
+                    return Some(format!("Kenwood (ID{})", id_str));
+                }
+            }
+            Protocol::Elecraft => {
+                if let Some(model_name) = cat_protocol::elecraft::is_elecraft_response(data) {
+                    if let Some(model) = RadioDatabase::by_elecraft_id(model_name) {
+                        return Some(model.model);
+                    }
+                    return Some(model_name.to_string());
+                }
+            }
+            Protocol::FlexRadio => {
+                if cat_protocol::flex::is_valid_id_response(data) {
+                    let id_str =
+                        String::from_utf8_lossy(&data[2..data.iter().position(|&b| b == b';')?]);
+                    if let Some(model) = RadioDatabase::by_flex_id(&id_str) {
+                        return Some(model.model);
+                    }
+                    return Some(format!("FlexRadio (ID{})", id_str));
+                }
+            }
+            Protocol::YaesuAscii => {
+                if cat_protocol::yaesu_ascii::is_valid_id_response(data) {
+                    let id_str =
+                        String::from_utf8_lossy(&data[2..data.iter().position(|&b| b == b';')?]);
+                    if let Some(model) = RadioDatabase::by_yaesu_ascii_id(&id_str) {
+                        return Some(model.model);
+                    }
+                    return Some(format!("Yaesu (ID{})", id_str));
+                }
+            }
+            _ => {}
+        }
+
+        None
     }
 
     /// Query the radio's current frequency and mode
