@@ -399,12 +399,12 @@ static ICOM_RADIOS: &[(u8, RadioModelStatic)] = &[
 // Kenwood ID database
 static KENWOOD_RADIOS: &[(&str, RadioModelStatic)] = &[
     (
-        "021",
+        "022",
         RadioModelStatic {
             manufacturer: "Kenwood",
             model: "TS-990S",
             protocol: Protocol::Kenwood,
-            protocol_id: ProtocolIdStatic::KenwoodId("021"),
+            protocol_id: ProtocolIdStatic::KenwoodId("022"),
             capabilities: RadioCapabilitiesStatic {
                 modes: MODES_STANDARD,
                 min_frequency_hz: 30_000,

@@ -23,11 +23,12 @@ fn main() -> eframe::Result<()> {
     let (diag_tx, diag_rx) = mpsc::channel::<DiagnosticEvent>();
 
     // Initialize logging with our custom diagnostics layer
-    // Include all our crates in the default filter
+    // Include all our crates at debug level (UI filter controls what's displayed)
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "catapult=info,cat_protocol=info,cat_detect=info,cat_mux=info,cat_sim=info".into()
+                "catapult=debug,cat_protocol=debug,cat_detect=debug,cat_mux=debug,cat_sim=debug"
+                    .into()
             }),
         )
         .with(tracing_subscriber::fmt::layer())
