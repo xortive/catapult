@@ -186,7 +186,7 @@ impl PortScanner {
 
     /// Enumerate all available serial ports
     pub fn enumerate_ports(&self) -> Result<Vec<SerialPortInfo>, DetectError> {
-        debug!("Starting port enumeration...");
+        info!("Enumerating serial ports...");
         let ports = available_ports().map_err(|e| DetectError::EnumerationFailed(e.to_string()))?;
 
         let result: Vec<_> = ports
