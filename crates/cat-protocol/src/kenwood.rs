@@ -47,7 +47,7 @@ pub enum KenwoodCommand {
     Split(Option<bool>),
     /// Power on/off: PS0; or PS1;
     Power(Option<bool>),
-    /// Auto-information mode: AI0; (off) or AI1; (on) or AI; (query)
+    /// Auto-information mode: AI0; (off) or AI2; (on) or AI; (query)
     AutoInfo(Option<bool>),
     /// Unknown/unrecognized command
     Unknown(String),
@@ -403,7 +403,7 @@ impl EncodeCommand for KenwoodCommand {
             KenwoodCommand::Power(Some(on)) => format!("PS{}", if *on { 1 } else { 0 }),
             KenwoodCommand::Power(None) => "PS".to_string(),
             KenwoodCommand::AutoInfo(Some(enabled)) => {
-                format!("AI{}", if *enabled { 1 } else { 0 })
+                format!("AI{}", if *enabled { 2 } else { 0 })
             }
             KenwoodCommand::AutoInfo(None) => "AI".to_string(),
             KenwoodCommand::Unknown(s) => s.clone(),
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn test_encode_auto_info() {
         assert_eq!(KenwoodCommand::AutoInfo(None).encode(), b"AI;");
-        assert_eq!(KenwoodCommand::AutoInfo(Some(true)).encode(), b"AI1;");
+        assert_eq!(KenwoodCommand::AutoInfo(Some(true)).encode(), b"AI2;");
         assert_eq!(KenwoodCommand::AutoInfo(Some(false)).encode(), b"AI0;");
     }
 

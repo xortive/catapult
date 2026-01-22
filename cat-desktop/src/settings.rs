@@ -110,7 +110,7 @@ impl Default for Settings {
             traffic_history_size: 1000,
             show_hex: true,
             show_decoded: true,
-            show_diagnostics: false,
+            show_diagnostics: true,
             show_diagnostic_debug: false,
             show_diagnostic_info: true,
             show_diagnostic_warning: true,

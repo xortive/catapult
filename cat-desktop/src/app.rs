@@ -482,8 +482,9 @@ impl CatapultApp {
             let severity = match event.level {
                 Level::ERROR => DiagnosticSeverity::Error,
                 Level::WARN => DiagnosticSeverity::Warning,
-                // INFO, DEBUG, TRACE all map to Info
-                _ => DiagnosticSeverity::Info,
+                Level::INFO => DiagnosticSeverity::Info,
+                // DEBUG and TRACE map to Debug
+                _ => DiagnosticSeverity::Debug,
             };
 
             self.traffic_monitor
@@ -1590,14 +1591,16 @@ impl CatapultApp {
         }
 
         // Sync diagnostic filter settings back to settings and save if changed
-        let (show_diag, show_info, show_warn, show_err) =
+        let (show_diag, show_debug, show_info, show_warn, show_err) =
             self.traffic_monitor.diagnostic_settings_mut();
         if self.settings.show_diagnostics != *show_diag
+            || self.settings.show_diagnostic_debug != *show_debug
             || self.settings.show_diagnostic_info != *show_info
             || self.settings.show_diagnostic_warning != *show_warn
             || self.settings.show_diagnostic_error != *show_err
         {
             self.settings.show_diagnostics = *show_diag;
+            self.settings.show_diagnostic_debug = *show_debug;
             self.settings.show_diagnostic_info = *show_info;
             self.settings.show_diagnostic_warning = *show_warn;
             self.settings.show_diagnostic_error = *show_err;

@@ -539,12 +539,12 @@ mod tests {
 
         radio.set_auto_info(true);
         assert!(radio.auto_info_enabled());
-        assert!(radio.has_output()); // Should send AI1;
+        assert!(radio.has_output()); // Should send AI2;
 
         let output = radio.take_output().unwrap();
         let s = String::from_utf8_lossy(&output);
         assert!(s.contains("AI"));
-        assert!(s.contains("1"));
+        assert!(s.contains("2"));
 
         radio.set_auto_info(false);
         assert!(!radio.auto_info_enabled());
