@@ -12,10 +12,10 @@ use eframe::CreationContext;
 use egui::{Color32, RichText, Ui};
 
 use crate::radio_panel::{RadioConnectionType, RadioPanel};
-use crate::serial_io::AmplifierConnection;
+use crate::serial_io::{AmplifierConnection, RadioConnection};
 use crate::settings::{AmplifierSettings, ConfiguredRadio, Settings};
 use crate::simulation_panel::SimulationPanel;
-use crate::traffic_monitor::TrafficMonitor;
+use crate::traffic_monitor::{DiagnosticSeverity, TrafficMonitor};
 
 /// Connection type for amplifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,8 @@ pub enum BackgroundMessage {
     TrafficOut { data: Vec<u8> },
     /// Traffic received from amplifier
     AmpTrafficIn { data: Vec<u8> },
+    /// I/O error from radio or amplifier
+    IoError { source: String, message: String },
 }
 
 /// Main application state
@@ -76,6 +78,8 @@ pub struct CatapultApp {
     detected_radios: Vec<DetectedRadio>,
     /// Radio panels for UI (unified list of COM and Virtual radios)
     radio_panels: Vec<RadioPanel>,
+    /// Radio serial connections (keyed by RadioHandle)
+    radio_connections: HashMap<RadioHandle, RadioConnection>,
     /// Traffic monitor
     traffic_monitor: TrafficMonitor,
     /// Is scanning in progress
@@ -138,6 +142,7 @@ impl CatapultApp {
             available_ports: Vec::new(),
             detected_radios: Vec::new(),
             radio_panels: Vec::new(),
+            radio_connections: HashMap::new(),
             scanning: false,
             last_scan: None,
             status_message: None,
@@ -290,7 +295,41 @@ impl CatapultApp {
             }
             self.radio_panels.push(panel);
 
-            if !port_available {
+            // Open the serial connection if port is available
+            if port_available {
+                match RadioConnection::new(
+                    handle,
+                    &config.port,
+                    config.baud_rate,
+                    config.protocol,
+                    self.bg_tx.clone(),
+                ) {
+                    Ok(mut conn) => {
+                        // Set CI-V address for Icom radios
+                        if let Some(civ_addr) = config.civ_address {
+                            conn.set_civ_address(civ_addr);
+                        }
+
+                        // Try to enable auto-info mode
+                        if let Err(e) = conn.enable_auto_info() {
+                            tracing::warn!(
+                                "Failed to enable auto-info on {}: {}",
+                                config.port,
+                                e
+                            );
+                        }
+
+                        self.radio_connections.insert(handle, conn);
+                        tracing::info!("Connected to radio on {}", config.port);
+                    }
+                    Err(e) => {
+                        self.set_status(format!(
+                            "Failed to connect to {}: {}",
+                            config.port, e
+                        ));
+                    }
+                }
+            } else {
                 self.set_status(format!("Warning: {} not available", config.port));
             }
         }
@@ -442,6 +481,14 @@ impl CatapultApp {
                         Some(self.amp_protocol),
                     );
                 }
+                BackgroundMessage::IoError { source, message } => {
+                    self.set_status(format!("{}: {}", source, message));
+                    self.traffic_monitor.add_diagnostic(
+                        source,
+                        DiagnosticSeverity::Error,
+                        message,
+                    );
+                }
             }
         }
     }
@@ -573,7 +620,40 @@ impl CatapultApp {
             self.add_radio_protocol,
         );
 
-        // Create RadioPanel
+        // Open the serial connection
+        match RadioConnection::new(
+            handle,
+            &self.add_radio_port,
+            self.add_radio_baud,
+            self.add_radio_protocol,
+            self.bg_tx.clone(),
+        ) {
+            Ok(mut conn) => {
+                // Set CI-V address for Icom radios
+                if self.add_radio_protocol == Protocol::IcomCIV {
+                    conn.set_civ_address(self.add_radio_civ_address);
+                }
+
+                // Try to enable auto-info mode
+                if let Err(e) = conn.enable_auto_info() {
+                    tracing::warn!("Failed to enable auto-info: {}", e);
+                }
+
+                self.radio_connections.insert(handle, conn);
+                self.set_status(format!("Connected to radio on {}", self.add_radio_port));
+            }
+            Err(e) => {
+                // Remove from multiplexer since we couldn't connect
+                self.multiplexer.remove_radio(handle);
+                self.set_status(format!(
+                    "Failed to connect to {}: {}",
+                    self.add_radio_port, e
+                ));
+                return; // Don't create panel for failed connection
+            }
+        }
+
+        // Create RadioPanel only after successful connection
         let panel = RadioPanel::new_com(
             handle,
             model_name,
@@ -597,8 +677,6 @@ impl CatapultApp {
             }
             self.save_amplifier_settings();
         }
-
-        self.set_status(format!("Added radio on {}", self.add_radio_port));
 
         // Save to config
         self.save_configured_radios();
@@ -1124,7 +1202,8 @@ impl CatapultApp {
                     self.simulation_panel.context_mut().remove_radio(sim_id);
                 }
             } else {
-                // COM radio - remove directly and save config
+                // COM radio - remove connection and panel, save config
+                self.radio_connections.remove(&panel.handle);
                 self.multiplexer.remove_radio(panel.handle);
                 self.radio_panels.remove(idx);
                 self.save_configured_radios();
@@ -1543,6 +1622,25 @@ impl eframe::App for CatapultApp {
         self.process_messages();
         self.process_simulation_events();
         self.process_mux_events();
+
+        // Poll all radio connections and collect commands
+        let radio_commands: Vec<_> = self
+            .radio_connections
+            .iter_mut()
+            .filter_map(|(&handle, conn)| conn.poll().map(|cmd| (handle, cmd)))
+            .collect();
+
+        // Process radio commands through multiplexer
+        for (handle, cmd) in radio_commands {
+            if let Some(amp_cmd) = self.multiplexer.process_radio_command(handle, cmd) {
+                // Send to amplifier
+                if let Some(ref mut amp_conn) = self.amp_connection {
+                    if let Err(e) = amp_conn.write(&amp_cmd) {
+                        self.set_status(format!("Amplifier write error: {}", e));
+                    }
+                }
+            }
+        }
 
         // Poll amplifier for incoming data
         if let Some(ref mut conn) = self.amp_connection {

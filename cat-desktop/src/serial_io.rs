@@ -16,7 +16,6 @@ use tracing::{debug, warn};
 use crate::app::BackgroundMessage;
 
 /// Serial connection to a radio
-#[allow(dead_code)]
 pub struct RadioConnection {
     /// Radio handle
     handle: RadioHandle,
@@ -35,14 +34,12 @@ pub struct RadioConnection {
 }
 
 /// Boxed protocol codec
-#[allow(dead_code)]
 enum ProtocolCodecBox {
     Kenwood(KenwoodCodec),
     Icom(CivCodec),
     Yaesu(YaesuCodec),
 }
 
-#[allow(dead_code)]
 impl RadioConnection {
     /// Create a new radio connection
     pub fn new(
@@ -77,6 +74,11 @@ impl RadioConnection {
             buffer: vec![0; 256],
             civ_address: None,
         })
+    }
+
+    /// Get the radio handle
+    pub fn handle(&self) -> RadioHandle {
+        self.handle
     }
 
     /// Set the CI-V address for Icom radios
@@ -128,10 +130,12 @@ impl RadioConnection {
                 debug!("Read {} bytes from radio {:?}", n, self.handle);
 
                 // Send traffic notification
-                let _ = self.tx.send(BackgroundMessage::TrafficIn {
+                if let Err(e) = self.tx.send(BackgroundMessage::TrafficIn {
                     radio: self.handle,
                     data: data.to_vec(),
-                });
+                }) {
+                    warn!("Channel send failed for radio {:?}: {}", self.handle, e);
+                }
 
                 // Push to codec and try to parse
                 match &mut self.codec {
@@ -153,6 +157,11 @@ impl RadioConnection {
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => None,
             Err(e) => {
                 warn!("Error reading from radio {:?}: {}", self.handle, e);
+                // Report error to traffic monitor via IoError message
+                let _ = self.tx.send(BackgroundMessage::IoError {
+                    source: format!("Radio {:?}", self.handle),
+                    message: format!("Read error: {}", e),
+                });
                 None
             }
         }
@@ -194,9 +203,11 @@ impl AmplifierConnection {
         self.port.flush()?;
 
         // Send traffic notification
-        let _ = self.tx.send(BackgroundMessage::TrafficOut {
+        if let Err(e) = self.tx.send(BackgroundMessage::TrafficOut {
             data: data.to_vec(),
-        });
+        }) {
+            warn!("Amplifier channel send failed: {}", e);
+        }
 
         Ok(())
     }
@@ -208,10 +219,22 @@ impl AmplifierConnection {
         match self.port.read(&mut buffer) {
             Ok(n) if n > 0 => {
                 let data = buffer[..n].to_vec();
-                let _ = self.tx.send(BackgroundMessage::AmpTrafficIn { data });
+                if let Err(e) = self.tx.send(BackgroundMessage::AmpTrafficIn { data }) {
+                    warn!("Amplifier channel send failed: {}", e);
+                }
                 true
             }
-            _ => false,
+            Ok(_) => false,
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => false,
+            Err(e) => {
+                warn!("Amplifier read error: {}", e);
+                // Report error to traffic monitor via IoError message
+                let _ = self.tx.send(BackgroundMessage::IoError {
+                    source: "Amplifier".to_string(),
+                    message: format!("Read error: {}", e),
+                });
+                false
+            }
         }
     }
 }

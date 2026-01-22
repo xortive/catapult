@@ -58,19 +58,73 @@ impl TrafficSource {
     }
 }
 
+/// Severity level for diagnostic entries
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    /// Information or warning
+    Warning,
+    /// Error
+    Error,
+}
+
 /// A single traffic entry
 #[derive(Debug, Clone)]
-pub struct TrafficEntry {
-    /// Timestamp
-    pub timestamp: SystemTime,
-    /// Direction
-    pub direction: TrafficDirection,
-    /// Traffic source
-    pub source: TrafficSource,
-    /// Raw data
-    pub data: Vec<u8>,
-    /// Decoded representation (if available)
-    pub decoded: Option<AnnotatedFrame>,
+pub enum TrafficEntry {
+    /// Data entry (normal traffic)
+    Data {
+        /// Timestamp
+        timestamp: SystemTime,
+        /// Direction
+        direction: TrafficDirection,
+        /// Traffic source
+        source: TrafficSource,
+        /// Raw data
+        data: Vec<u8>,
+        /// Decoded representation (if available)
+        decoded: Option<AnnotatedFrame>,
+    },
+    /// Diagnostic entry (error or warning)
+    Diagnostic {
+        /// Timestamp
+        timestamp: SystemTime,
+        /// Source of the diagnostic
+        source: String,
+        /// Severity level
+        severity: DiagnosticSeverity,
+        /// Message
+        message: String,
+    },
+}
+
+impl TrafficEntry {
+    /// Get the timestamp
+    pub fn timestamp(&self) -> SystemTime {
+        match self {
+            TrafficEntry::Data { timestamp, .. } => *timestamp,
+            TrafficEntry::Diagnostic { timestamp, .. } => *timestamp,
+        }
+    }
+
+    /// Get the direction (None for diagnostics)
+    pub fn direction(&self) -> Option<TrafficDirection> {
+        match self {
+            TrafficEntry::Data { direction, .. } => Some(*direction),
+            TrafficEntry::Diagnostic { .. } => None,
+        }
+    }
+
+    /// Check if this is a simulated source
+    pub fn is_simulated(&self) -> bool {
+        match self {
+            TrafficEntry::Data { source, .. } => source.is_simulated(),
+            TrafficEntry::Diagnostic { .. } => false,
+        }
+    }
+
+    /// Check if this is a diagnostic entry
+    pub fn is_diagnostic(&self) -> bool {
+        matches!(self, TrafficEntry::Diagnostic { .. })
+    }
 }
 
 /// Traffic direction
@@ -128,7 +182,7 @@ impl TrafficMonitor {
             return;
         }
 
-        self.add_entry(TrafficEntry {
+        self.add_entry(TrafficEntry::Data {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Incoming,
             source: TrafficSource::RealRadio {
@@ -146,7 +200,7 @@ impl TrafficMonitor {
             return;
         }
 
-        self.add_entry(TrafficEntry {
+        self.add_entry(TrafficEntry::Data {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Incoming,
             source: TrafficSource::SimulatedRadio { id },
@@ -171,7 +225,7 @@ impl TrafficMonitor {
             return;
         }
 
-        self.add_entry(TrafficEntry {
+        self.add_entry(TrafficEntry::Data {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::RealAmplifier { port },
@@ -186,7 +240,7 @@ impl TrafficMonitor {
             return;
         }
 
-        self.add_entry(TrafficEntry {
+        self.add_entry(TrafficEntry::Data {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::SimulatedAmplifier,
@@ -201,7 +255,7 @@ impl TrafficMonitor {
             return;
         }
 
-        self.add_entry(TrafficEntry {
+        self.add_entry(TrafficEntry::Data {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::ToSimulatedRadio { id },
@@ -216,7 +270,7 @@ impl TrafficMonitor {
             return;
         }
 
-        self.add_entry(TrafficEntry {
+        self.add_entry(TrafficEntry::Data {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Incoming,
             source: TrafficSource::FromRealAmplifier { port },
@@ -232,12 +286,31 @@ impl TrafficMonitor {
             return;
         }
 
-        self.add_entry(TrafficEntry {
+        self.add_entry(TrafficEntry::Data {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Incoming,
             source: TrafficSource::FromSimulatedAmplifier,
             data: data.to_vec(),
             decoded: decode_and_annotate_with_hint(data, protocol),
+        });
+    }
+
+    /// Add a diagnostic entry (error or warning)
+    pub fn add_diagnostic(
+        &mut self,
+        source: String,
+        severity: DiagnosticSeverity,
+        message: String,
+    ) {
+        if self.paused {
+            return;
+        }
+
+        self.add_entry(TrafficEntry::Diagnostic {
+            timestamp: SystemTime::now(),
+            source,
+            severity,
+            message,
         });
     }
 
@@ -315,13 +388,14 @@ impl TrafficMonitor {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                // Direction filter
-                let direction_match = self
-                    .filter_direction
-                    .is_none_or(|filter| entry.direction == filter);
+                // Direction filter - diagnostics pass through when no filter or match
+                let direction_match = entry
+                    .direction()
+                    .map(|dir| self.filter_direction.is_none_or(|filter| dir == filter))
+                    .unwrap_or(true); // Diagnostics pass through
 
                 // Simulated filter
-                let sim_match = self.show_simulated || !entry.source.is_simulated();
+                let sim_match = self.show_simulated || !entry.is_simulated();
 
                 direction_match && sim_match
             })
@@ -356,6 +430,48 @@ impl TrafficMonitor {
         show_hex: bool,
         show_decoded: bool,
     ) {
+        match entry {
+            TrafficEntry::Data {
+                timestamp,
+                source,
+                data,
+                decoded,
+                ..
+            } => {
+                self.draw_data_entry(
+                    ui,
+                    entry_idx,
+                    timestamp,
+                    source,
+                    data,
+                    decoded.as_ref(),
+                    show_hex,
+                    show_decoded,
+                );
+            }
+            TrafficEntry::Diagnostic {
+                timestamp,
+                source,
+                severity,
+                message,
+            } => {
+                self.draw_diagnostic_entry(ui, timestamp, source, severity, message);
+            }
+        }
+    }
+
+    /// Draw a data traffic entry
+    fn draw_data_entry(
+        &self,
+        ui: &mut Ui,
+        entry_idx: usize,
+        timestamp: &SystemTime,
+        source: &TrafficSource,
+        data: &[u8],
+        decoded: Option<&AnnotatedFrame>,
+        show_hex: bool,
+        show_decoded: bool,
+    ) {
         ui.horizontal(|ui| {
             // Create a unique ID for this entry's hover state
             let hover_id = Id::new("traffic_hover").with(entry_idx);
@@ -367,8 +483,7 @@ impl TrafficMonitor {
             let mut new_hovered_range: Option<Range<usize>> = None;
 
             // Timestamp
-            let time = entry
-                .timestamp
+            let time = timestamp
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| {
                     let secs = d.as_secs() % 86400;
@@ -383,7 +498,7 @@ impl TrafficMonitor {
             ui.label(RichText::new(time).color(Color32::GRAY).monospace());
 
             // Simulated badge
-            if entry.source.is_simulated() {
+            if source.is_simulated() {
                 ui.label(
                     RichText::new("[SIM]")
                         .color(Color32::from_rgb(255, 165, 0)) // Orange
@@ -393,7 +508,7 @@ impl TrafficMonitor {
             }
 
             // Direction indicator with source info
-            match &entry.source {
+            match source {
                 TrafficSource::RealRadio { .. } => {
                     ui.label(
                         RichText::new("[Radio→]")
@@ -446,7 +561,7 @@ impl TrafficMonitor {
             }
 
             // Protocol badge
-            if let Some(decoded) = &entry.decoded {
+            if let Some(decoded) = decoded {
                 let protocol_color = match decoded.protocol {
                     "CI-V" => Color32::from_rgb(255, 180, 100),  // Orange
                     "Yaesu" => Color32::from_rgb(100, 200, 255), // Cyan (binary CAT)
@@ -466,7 +581,7 @@ impl TrafficMonitor {
 
             // Decoded summary with colored parts (shown first, after badges)
             if show_decoded {
-                if let Some(decoded) = &entry.decoded {
+                if let Some(decoded) = decoded {
                     let prev_spacing = ui.spacing().item_spacing.x;
                     ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -511,17 +626,16 @@ impl TrafficMonitor {
             // ASCII representation with highlighting
             if show_hex {
                 ui.add_space(8.0);
-                if let Some(decoded) = &entry.decoded {
+                if let Some(decoded) = decoded {
                     self.draw_ascii_with_segments(
                         ui,
-                        &entry.data,
+                        data,
                         &decoded.segments,
                         hovered_range.as_ref(),
                         &mut new_hovered_range,
                     );
                 } else {
-                    let ascii: String = entry
-                        .data
+                    let ascii: String = data
                         .iter()
                         .map(|&b| {
                             if b.is_ascii_graphic() || b == b' ' {
@@ -538,17 +652,16 @@ impl TrafficMonitor {
             // Color-coded hex data with segment annotations (shown last)
             if show_hex {
                 ui.add_space(8.0);
-                if let Some(decoded) = &entry.decoded {
+                if let Some(decoded) = decoded {
                     self.draw_colored_hex(
                         ui,
-                        &entry.data,
+                        data,
                         &decoded.segments,
                         hovered_range.as_ref(),
                         &mut new_hovered_range,
                     );
                 } else {
-                    let hex: String = entry
-                        .data
+                    let hex: String = data
                         .iter()
                         .map(|b| format!("{:02X}", b))
                         .collect::<Vec<_>>()
@@ -565,6 +678,48 @@ impl TrafficMonitor {
                     mem.data.remove::<Range<usize>>(hover_id);
                 }
             });
+        });
+    }
+
+    /// Draw a diagnostic entry (error or warning)
+    fn draw_diagnostic_entry(
+        &self,
+        ui: &mut Ui,
+        timestamp: &SystemTime,
+        source: &str,
+        severity: &DiagnosticSeverity,
+        message: &str,
+    ) {
+        ui.horizontal(|ui| {
+            // Timestamp
+            let time = timestamp
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| {
+                    let secs = d.as_secs() % 86400;
+                    let hours = secs / 3600;
+                    let mins = (secs % 3600) / 60;
+                    let secs = secs % 60;
+                    let millis = d.subsec_millis();
+                    format!("{:02}:{:02}:{:02}.{:03}", hours, mins, secs, millis)
+                })
+                .unwrap_or_default();
+
+            ui.label(RichText::new(time).color(Color32::GRAY).monospace());
+
+            // Severity badge and color
+            let (badge, color) = match severity {
+                DiagnosticSeverity::Warning => ("⚠", Color32::from_rgb(255, 200, 0)), // Yellow
+                DiagnosticSeverity::Error => ("✖", Color32::from_rgb(255, 80, 80)),   // Red
+            };
+
+            ui.label(RichText::new(badge).color(color).monospace());
+            ui.label(
+                RichText::new(format!("[{}]", source))
+                    .color(color)
+                    .strong()
+                    .monospace(),
+            );
+            ui.label(RichText::new(message).color(color).monospace());
         });
     }
 
