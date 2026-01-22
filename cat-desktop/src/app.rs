@@ -1903,12 +1903,15 @@ impl eframe::App for CatapultApp {
             });
         });
 
-        // Request repaint only when animations are active or virtual radios exist
+        // Request repaint when we have active connections that need polling
         let has_virtual_radios = self
             .radio_panels
             .iter()
             .any(|p| p.connection_type == RadioConnectionType::Virtual);
-        if self.scanning || has_virtual_radios {
+        let has_com_radios = !self.radio_connections.is_empty();
+        let has_amplifier = self.amp_connection.is_some();
+
+        if self.scanning || has_virtual_radios || has_com_radios || has_amplifier {
             ctx.request_repaint();
         }
     }
