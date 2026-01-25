@@ -4,9 +4,8 @@
 //! radios to the multiplexer. Both real (COM port) and virtual radios use
 //! these types.
 
-use cat_protocol::{Protocol, RadioCommand, RadioModel};
+use cat_protocol::{Protocol, RadioModel};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 /// Type of radio connection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,59 +81,6 @@ impl RadioChannelMeta {
     pub fn set_display_name(&mut self, name: String) {
         self.display_name = name;
     }
-}
-
-/// A radio's inbound channel to the multiplexer
-///
-/// This represents one "side" of the radio connection - the multiplexer
-/// receives commands from the radio through this channel.
-///
-/// **Deprecated**: Use `RadioChannelMeta` directly with `MuxActorCommand::RegisterRadio`.
-/// The command_rx field was never used.
-#[deprecated(
-    since = "0.7.0",
-    note = "Use RadioChannelMeta directly with MuxActorCommand::RegisterRadio"
-)]
-pub struct RadioChannel {
-    /// Metadata about this radio
-    pub meta: RadioChannelMeta,
-    /// Receiver for commands from this radio
-    pub command_rx: mpsc::Receiver<RadioCommand>,
-}
-
-impl std::fmt::Debug for RadioChannel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RadioChannel")
-            .field("meta", &self.meta)
-            .field("command_rx", &"<receiver>")
-            .finish()
-    }
-}
-
-impl RadioChannel {
-    /// Create a new radio channel with the given metadata and receiver
-    pub fn new(meta: RadioChannelMeta, command_rx: mpsc::Receiver<RadioCommand>) -> Self {
-        Self { meta, command_rx }
-    }
-}
-
-/// Create a channel pair for a radio connection
-///
-/// Returns (RadioChannel for mux, Sender for radio task to send commands)
-///
-/// **Deprecated**: Use `RadioChannelMeta` directly with `MuxActorCommand::RegisterRadio`.
-/// The RadioChannel type is no longer needed.
-#[deprecated(
-    since = "0.7.0",
-    note = "Use RadioChannelMeta directly with MuxActorCommand::RegisterRadio"
-)]
-#[allow(deprecated)]
-pub fn create_radio_channel(
-    meta: RadioChannelMeta,
-    buffer_size: usize,
-) -> (RadioChannel, mpsc::Sender<RadioCommand>) {
-    let (tx, rx) = mpsc::channel(buffer_size);
-    (RadioChannel::new(meta, rx), tx)
 }
 
 #[cfg(test)]

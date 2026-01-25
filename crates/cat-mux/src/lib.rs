@@ -16,7 +16,7 @@
 //! # Channel-Based Architecture
 //!
 //! The multiplexer uses a channel-based architecture where:
-//! - Each radio has a `RadioChannel` with metadata and a command receiver
+//! - Each radio has `RadioChannelMeta` describing its connection
 //! - The amplifier has an `AmplifierChannel` for bidirectional communication
 //! - All events (traffic, state changes) emit through a unified `MuxEvent` stream
 //!
@@ -55,7 +55,7 @@ pub use amplifier::{
     create_virtual_amp_channel, AmplifierChannel, AmplifierChannelMeta, AmplifierType,
     VirtualAmplifier,
 };
-pub use channel::{create_radio_channel, RadioChannel, RadioChannelMeta, RadioType};
+pub use channel::{RadioChannelMeta, RadioType};
 
 // Re-export event types
 pub use events::MuxEvent;
