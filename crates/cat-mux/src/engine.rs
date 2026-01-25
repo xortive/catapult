@@ -41,30 +41,6 @@ impl Default for MultiplexerConfig {
     }
 }
 
-/// Events emitted by the multiplexer
-#[derive(Debug, Clone)]
-pub enum MultiplexerEvent {
-    /// A radio was added
-    RadioAdded(RadioHandle),
-    /// A radio was removed
-    RadioRemoved(RadioHandle),
-    /// The active radio changed
-    ActiveRadioChanged {
-        from: Option<RadioHandle>,
-        to: RadioHandle,
-    },
-    /// Radio state updated
-    RadioStateUpdated(RadioHandle),
-    /// Command translated and ready for amplifier
-    AmplifierCommand(Vec<u8>),
-    /// Switching was blocked due to lockout
-    SwitchingBlocked {
-        requested: RadioHandle,
-        current: RadioHandle,
-        remaining_ms: u64,
-    },
-}
-
 /// The multiplexer engine
 pub struct Multiplexer {
     config: MultiplexerConfig,
@@ -73,7 +49,6 @@ pub struct Multiplexer {
     active_radio: Option<RadioHandle>,
     lockout_until: Option<Instant>,
     translator: ProtocolTranslator,
-    event_buffer: Vec<MultiplexerEvent>,
 }
 
 impl Multiplexer {
@@ -94,7 +69,6 @@ impl Multiplexer {
             active_radio: None,
             lockout_until: None,
             translator,
-            event_buffer: Vec::new(),
         }
     }
 
@@ -133,7 +107,6 @@ impl Multiplexer {
             self.active_radio = Some(handle);
         }
 
-        self.event_buffer.push(MultiplexerEvent::RadioAdded(handle));
         info!("Added radio: {} (handle {})", name, handle.0);
 
         handle
@@ -148,8 +121,6 @@ impl Multiplexer {
             self.active_radio = self.radios.keys().next().copied();
         }
 
-        self.event_buffer
-            .push(MultiplexerEvent::RadioRemoved(handle));
         Some(state)
     }
 
@@ -198,15 +169,14 @@ impl Multiplexer {
         // Check lockout
         if let Some(until) = self.lockout_until {
             if Instant::now() < until {
-                let remaining = until.duration_since(Instant::now()).as_millis() as u64;
+                let remaining_ms = until.duration_since(Instant::now()).as_millis() as u64;
                 if let Some(current) = self.active_radio {
-                    self.event_buffer.push(MultiplexerEvent::SwitchingBlocked {
+                    return Err(MuxError::SwitchingLocked {
                         requested: handle,
                         current,
-                        remaining_ms: remaining,
+                        remaining_ms,
                     });
                 }
-                return Err(MuxError::SwitchingLocked(remaining));
             }
         }
 
@@ -223,12 +193,6 @@ impl Multiplexer {
 
         self.active_radio = Some(handle);
         self.lockout_until = Some(Instant::now() + Duration::from_millis(self.config.lockout_ms));
-
-        self.event_buffer
-            .push(MultiplexerEvent::ActiveRadioChanged {
-                from: old,
-                to: handle,
-            });
 
         if let Some(radio) = self.radios.get(&handle) {
             info!("Switched to radio: {} ({})", radio.name, radio.port);
@@ -275,9 +239,6 @@ impl Multiplexer {
                     radio.touch();
                 }
             }
-
-            self.event_buffer
-                .push(MultiplexerEvent::RadioStateUpdated(handle));
         }
 
         // Check if we should switch radios
@@ -293,11 +254,7 @@ impl Multiplexer {
         let filtered = filter_for_amplifier(&cmd)?;
 
         match self.translator.translate(&filtered) {
-            Ok(bytes) => {
-                self.event_buffer
-                    .push(MultiplexerEvent::AmplifierCommand(bytes.clone()));
-                Some(bytes)
-            }
+            Ok(bytes) => Some(bytes),
             Err(e) => {
                 error!("Translation failed: {}", e);
                 None
@@ -350,11 +307,6 @@ impl Multiplexer {
             );
             self.switch_to(handle);
         }
-    }
-
-    /// Drain pending events
-    pub fn drain_events(&mut self) -> Vec<MultiplexerEvent> {
-        std::mem::take(&mut self.event_buffer)
     }
 
     /// Check if lockout is active

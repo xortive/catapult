@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::state::RadioHandle;
+
 /// Errors that can occur in the multiplexer
 #[derive(Debug, Error)]
 pub enum MuxError {
@@ -34,6 +36,13 @@ pub enum MuxError {
     ProtocolError(#[from] cat_protocol::ProtocolError),
 
     /// Switching blocked (lockout active)
-    #[error("switching blocked: lockout expires in {0}ms")]
-    SwitchingLocked(u64),
+    #[error("switching blocked: lockout expires in {remaining_ms}ms")]
+    SwitchingLocked {
+        /// Radio that requested to become active
+        requested: RadioHandle,
+        /// Currently active radio
+        current: RadioHandle,
+        /// Time remaining in lockout (milliseconds)
+        remaining_ms: u64,
+    },
 }

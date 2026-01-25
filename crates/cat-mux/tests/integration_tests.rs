@@ -4,10 +4,9 @@
 //! - Switching modes (manual, PTT-triggered, frequency-triggered, automatic)
 //! - Protocol translation between all protocol pairs
 //! - State tracking for multiple radios
-//! - Event emission for UI updates
 //! - Lockout behavior and edge cases
 
-use cat_mux::{Multiplexer, MultiplexerConfig, MultiplexerEvent, RadioHandle, SwitchingMode};
+use cat_mux::{Multiplexer, MultiplexerConfig, MuxError, SwitchingMode};
 use cat_protocol::{OperatingMode, Protocol, RadioCommand};
 
 // ============================================================================
@@ -34,48 +33,6 @@ mod helpers {
         };
         config.amplifier.protocol = protocol;
         Multiplexer::with_config(config)
-    }
-
-    /// Extract AmplifierCommand events as raw bytes
-    pub fn get_amp_commands(events: &[MultiplexerEvent]) -> Vec<Vec<u8>> {
-        events
-            .iter()
-            .filter_map(|e| match e {
-                MultiplexerEvent::AmplifierCommand(data) => Some(data.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Check if events contain an ActiveRadioChanged to a specific handle
-    pub fn has_switch_to(events: &[MultiplexerEvent], handle: RadioHandle) -> bool {
-        events.iter().any(|e| {
-            matches!(
-                e,
-                MultiplexerEvent::ActiveRadioChanged { to, .. } if *to == handle
-            )
-        })
-    }
-
-    /// Check if events contain a SwitchingBlocked event
-    pub fn has_switching_blocked(events: &[MultiplexerEvent]) -> bool {
-        events
-            .iter()
-            .any(|e| matches!(e, MultiplexerEvent::SwitchingBlocked { .. }))
-    }
-
-    /// Check if events contain a RadioAdded event for a handle
-    pub fn has_radio_added(events: &[MultiplexerEvent], handle: RadioHandle) -> bool {
-        events
-            .iter()
-            .any(|e| matches!(e, MultiplexerEvent::RadioAdded(h) if *h == handle))
-    }
-
-    /// Check if events contain a RadioRemoved event for a handle
-    pub fn has_radio_removed(events: &[MultiplexerEvent], handle: RadioHandle) -> bool {
-        events
-            .iter()
-            .any(|e| matches!(e, MultiplexerEvent::RadioRemoved(h) if *h == handle))
     }
 }
 
@@ -112,16 +69,12 @@ mod switching_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::IcomCIV);
-        mux.drain_events(); // Clear add events
 
         assert_eq!(mux.active_radio(), Some(h1));
 
         mux.select_radio(h2).unwrap();
 
         assert_eq!(mux.active_radio(), Some(h2));
-
-        let events = mux.drain_events();
-        assert!(helpers::has_switch_to(&events, h2));
     }
 
     #[test]
@@ -131,7 +84,6 @@ mod switching_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         // PTT from inactive radio should not switch
         mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
@@ -146,7 +98,6 @@ mod switching_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         assert_eq!(mux.active_radio(), Some(h1));
 
@@ -154,9 +105,6 @@ mod switching_tests {
         mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
 
         assert_eq!(mux.active_radio(), Some(h2));
-
-        let events = mux.drain_events();
-        assert!(helpers::has_switch_to(&events, h2));
     }
 
     #[test]
@@ -166,7 +114,6 @@ mod switching_tests {
 
         let _h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         // Frequency change from h2 should switch in automatic mode
         mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 14_250_000 });
@@ -185,7 +132,6 @@ mod switching_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         assert_eq!(mux.active_radio(), Some(h1), "Should start on first radio");
 
@@ -202,7 +148,6 @@ mod switching_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         // PTT from h2 should NOT switch
         mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
@@ -217,7 +162,6 @@ mod switching_tests {
 
         let _h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         // Command from inactive radio should return None (not forwarded to amp)
         let result = mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 14_250_000 });
@@ -231,7 +175,6 @@ mod switching_tests {
         mux.set_switching_mode(SwitchingMode::Manual);
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         let result = mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
 
@@ -258,7 +201,6 @@ mod lockout_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         // First switch should succeed
         mux.select_radio(h2).unwrap();
@@ -271,7 +213,7 @@ mod lockout_tests {
     }
 
     #[test]
-    fn lockout_emits_blocked_event() {
+    fn lockout_returns_error_with_details() {
         let config = MultiplexerConfig {
             lockout_ms: 1000,
             ..Default::default()
@@ -280,16 +222,24 @@ mod lockout_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         mux.select_radio(h2).unwrap();
-        mux.drain_events();
 
         // Try to switch back during lockout
-        let _ = mux.select_radio(h1);
+        let result = mux.select_radio(h1);
 
-        let events = mux.drain_events();
-        assert!(helpers::has_switching_blocked(&events));
+        match result {
+            Err(MuxError::SwitchingLocked {
+                requested,
+                current,
+                remaining_ms,
+            }) => {
+                assert_eq!(requested, h1);
+                assert_eq!(current, h2);
+                assert!(remaining_ms > 0);
+            }
+            _ => panic!("Expected SwitchingLocked error"),
+        }
     }
 
     #[test]
@@ -303,7 +253,6 @@ mod lockout_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         // PTT from h2 triggers switch
         mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
@@ -638,78 +587,56 @@ mod translation_tests {
 }
 
 // ============================================================================
-// Event Emission Tests
+// Radio Management Tests
 // ============================================================================
 
-mod event_tests {
+mod radio_management_tests {
     use super::*;
 
     #[test]
-    fn radio_added_event_emitted() {
+    fn radio_added_is_tracked() {
         let mut mux = helpers::mux_no_lockout();
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        let events = mux.drain_events();
-        assert!(helpers::has_radio_added(&events, h1));
+        assert!(mux.get_radio(h1).is_some());
+        assert_eq!(mux.radios().count(), 1);
     }
 
     #[test]
-    fn radio_removed_event_emitted() {
+    fn radio_removed_is_not_tracked() {
         let mut mux = helpers::mux_no_lockout();
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         mux.remove_radio(h1);
 
-        let events = mux.drain_events();
-        assert!(helpers::has_radio_removed(&events, h1));
+        assert!(mux.get_radio(h1).is_none());
+        assert_eq!(mux.radios().count(), 0);
     }
 
     #[test]
-    fn active_radio_changed_event_on_switch() {
-        let mut mux = helpers::mux_no_lockout();
-
-        let _h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
-        let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
-        mux.drain_events();
-
-        mux.select_radio(h2).unwrap();
-
-        let events = mux.drain_events();
-        assert!(helpers::has_switch_to(&events, h2));
-    }
-
-    #[test]
-    fn radio_state_updated_event_on_command() {
+    fn state_updated_after_command() {
         let mut mux = helpers::mux_no_lockout();
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
-        mux.drain_events();
 
         mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
 
-        let events = mux.drain_events();
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, MultiplexerEvent::RadioStateUpdated(h) if *h == h1)));
+        let state = mux.get_radio(h1).unwrap();
+        assert_eq!(state.frequency_hz, Some(14_250_000));
     }
 
     #[test]
-    fn amplifier_command_event_contains_translated_bytes() {
+    fn amplifier_command_returned_for_active_radio() {
         let mut mux = helpers::mux_with_amp_protocol(Protocol::Kenwood);
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
-        mux.drain_events();
 
-        mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        let result = mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
 
-        let events = mux.drain_events();
-        let amp_commands = helpers::get_amp_commands(&events);
-
-        assert_eq!(amp_commands.len(), 1);
-        assert!(amp_commands[0].ends_with(b";"));
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with(b";"));
     }
 }
 
@@ -780,13 +707,11 @@ mod edge_case_tests {
         let mut mux = helpers::mux_no_lockout();
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
-        mux.drain_events();
 
-        mux.select_radio(h1).unwrap();
-
-        let events = mux.drain_events();
-        // Should not emit ActiveRadioChanged when selecting already-active radio
-        assert!(!helpers::has_switch_to(&events, h1));
+        // Selecting the already-active radio should succeed without error
+        let result = mux.select_radio(h1);
+        assert!(result.is_ok());
+        assert_eq!(mux.active_radio(), Some(h1));
     }
 
     #[test]

@@ -39,6 +39,7 @@ use tracing::{debug, info, warn};
 use crate::amplifier::AmplifierChannel;
 use crate::channel::RadioChannelMeta;
 use crate::engine::Multiplexer;
+use crate::error::MuxError;
 use crate::events::MuxEvent;
 use crate::state::{AmplifierConfig, RadioHandle, SwitchingMode};
 
@@ -346,15 +347,27 @@ pub async fn run_mux_actor(
                         }
                     }
                 }
+            }
 
-                // Process multiplexer events (for errors and other notifications)
-                for event in state.multiplexer.drain_events() {
-                    if let crate::engine::MultiplexerEvent::SwitchingBlocked {
+            MuxActorCommand::SetActiveRadio { handle } => {
+                let old_active = state.multiplexer.active_radio();
+
+                match state.multiplexer.select_radio(handle) {
+                    Ok(()) => {
+                        if old_active != Some(handle) {
+                            let _ = event_tx
+                                .send(MuxEvent::ActiveRadioChanged {
+                                    from: old_active,
+                                    to: handle,
+                                })
+                                .await;
+                        }
+                    }
+                    Err(MuxError::SwitchingLocked {
                         requested,
                         current,
                         remaining_ms,
-                    } = event
-                    {
+                    }) => {
                         let _ = event_tx
                             .send(MuxEvent::SwitchingBlocked {
                                 requested,
@@ -363,27 +376,15 @@ pub async fn run_mux_actor(
                             })
                             .await;
                     }
-                }
-            }
-
-            MuxActorCommand::SetActiveRadio { handle } => {
-                let old_active = state.multiplexer.active_radio();
-
-                if let Err(e) = state.multiplexer.select_radio(handle) {
-                    warn!("Failed to select radio {}: {}", handle.0, e);
-                    let _ = event_tx
-                        .send(MuxEvent::Error {
-                            source: "Multiplexer".to_string(),
-                            message: format!("Select failed: {}", e),
-                        })
-                        .await;
-                } else if old_active != Some(handle) {
-                    let _ = event_tx
-                        .send(MuxEvent::ActiveRadioChanged {
-                            from: old_active,
-                            to: handle,
-                        })
-                        .await;
+                    Err(e) => {
+                        warn!("Failed to select radio {}: {}", handle.0, e);
+                        let _ = event_tx
+                            .send(MuxEvent::Error {
+                                source: "Multiplexer".to_string(),
+                                message: format!("Select failed: {}", e),
+                            })
+                            .await;
+                    }
                 }
             }
 

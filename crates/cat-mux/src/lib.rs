@@ -61,7 +61,7 @@ pub use channel::{RadioChannelMeta, RadioType};
 pub use events::MuxEvent;
 
 // Re-export engine types
-pub use engine::{Multiplexer, MultiplexerConfig, MultiplexerEvent};
+pub use engine::{Multiplexer, MultiplexerConfig};
 pub use error::MuxError;
 pub use state::{AmplifierConfig, RadioHandle, RadioState, SwitchingMode};
 pub use translation::{ProtocolTranslator, TranslationConfig};
