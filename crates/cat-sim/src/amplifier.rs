@@ -11,11 +11,18 @@ use std::task::{Context, Poll};
 
 use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tracing::error;
 
 /// Virtual amplifier for testing
 ///
 /// Tracks frequency/mode state and can echo or respond to commands.
 /// Useful for testing multiplexer logic without real hardware.
+///
+/// Implements `AsyncRead + AsyncWrite` so virtual amplifiers can use the same
+/// generic amp task as real serial ports:
+/// - `AsyncWrite::poll_write`: Pushes bytes through codec, processes complete
+///   commands via the virtual amplifier, and buffers any responses
+/// - `AsyncRead::poll_read`: Drains the response buffer
 pub struct VirtualAmplifier {
     protocol: Protocol,
     civ_address: Option<u8>,
@@ -23,6 +30,10 @@ pub struct VirtualAmplifier {
     mode: OperatingMode,
     /// Commands received (for test verification)
     received_commands: Vec<Vec<u8>>,
+    /// Codec for parsing incoming data
+    codec: Box<dyn RadioCodec>,
+    /// Buffer for responses to be read
+    response_buffer: VecDeque<u8>,
 }
 
 impl VirtualAmplifier {
@@ -34,6 +45,8 @@ impl VirtualAmplifier {
             frequency_hz: 14_250_000,
             mode: OperatingMode::Usb,
             received_commands: Vec::new(),
+            codec: create_radio_codec(protocol),
+            response_buffer: VecDeque::new(),
         }
     }
 
@@ -64,12 +77,15 @@ impl VirtualAmplifier {
     pub fn process_command(&mut self, data: &[u8]) -> Option<Vec<u8>> {
         self.received_commands.push(data.to_vec());
 
-        // Parse and update state based on protocol
-        // For now, just track what was received - parsing can be added as needed
+        // Parse and update state for frequency/mode commands
         match self.protocol {
             Protocol::Kenwood | Protocol::Elecraft => self.process_kenwood_command(data),
             Protocol::IcomCIV => self.process_icom_command(data),
-            _ => None,
+            // These protocols are not yet supported for amplifier simulation
+            Protocol::Yaesu | Protocol::YaesuAscii | Protocol::FlexRadio => {
+                error!("Virtual Amp doesn't support protocol: {:?}", self.protocol);
+                None
+            }
         }
     }
 
@@ -192,42 +208,7 @@ impl VirtualAmplifier {
     }
 }
 
-/// Async I/O wrapper around VirtualAmplifier
-///
-/// Implements `AsyncRead + AsyncWrite` so virtual amplifiers can use the same
-/// generic amp task as real serial ports.
-///
-/// - `AsyncWrite::poll_write`: Pushes bytes through codec, processes complete
-///   commands via the virtual amplifier, and buffers any responses
-/// - `AsyncRead::poll_read`: Drains the response buffer
-pub struct VirtualAmplifierIo {
-    amplifier: VirtualAmplifier,
-    codec: Box<dyn RadioCodec>,
-    response_buffer: VecDeque<u8>,
-}
-
-impl VirtualAmplifierIo {
-    /// Create a new VirtualAmplifierIo
-    pub fn new(protocol: Protocol, civ_address: Option<u8>) -> Self {
-        Self {
-            amplifier: VirtualAmplifier::new(protocol, civ_address),
-            codec: create_radio_codec(protocol),
-            response_buffer: VecDeque::new(),
-        }
-    }
-
-    /// Get a reference to the underlying VirtualAmplifier
-    pub fn amplifier(&self) -> &VirtualAmplifier {
-        &self.amplifier
-    }
-
-    /// Get a mutable reference to the underlying VirtualAmplifier
-    pub fn amplifier_mut(&mut self) -> &mut VirtualAmplifier {
-        &mut self.amplifier
-    }
-}
-
-impl AsyncRead for VirtualAmplifierIo {
+impl AsyncRead for VirtualAmplifier {
     fn poll_read(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -251,7 +232,7 @@ impl AsyncRead for VirtualAmplifierIo {
     }
 }
 
-impl AsyncWrite for VirtualAmplifierIo {
+impl AsyncWrite for VirtualAmplifier {
     fn poll_write(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -269,7 +250,7 @@ impl AsyncWrite for VirtualAmplifierIo {
         }
 
         // Process raw bytes directly through the virtual amplifier
-        if let Some(response) = self.amplifier.process_command(buf) {
+        if let Some(response) = self.process_command(buf) {
             self.response_buffer.extend(response);
         }
 
