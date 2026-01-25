@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::Instant;
 
 use cat_detect::{suggest_protocol_for_port, DetectedRadio, PortScanner, SerialPortInfo};
@@ -18,9 +19,7 @@ use tracing::Level;
 
 use crate::amp_task::{run_amp_task, run_virtual_amp_task};
 use crate::async_serial::{AsyncRadioConnection, RadioTaskCommand, VirtualRadioIo};
-use crate::diagnostics_layer::{
-    build_diagnostics_filter, DiagnosticEvent, DiagnosticsFilterHandle,
-};
+use crate::diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState};
 use crate::radio_panel::{RadioConnectionType, RadioPanel};
 use crate::settings::{AmplifierSettings, ConfiguredRadio, Settings};
 use crate::simulation_panel::SimulationPanel;
@@ -188,8 +187,8 @@ pub struct CatapultApp {
     last_state_sync: Instant,
     /// Tokio runtime (must be kept alive for async tasks)
     _runtime: Option<tokio::runtime::Runtime>,
-    /// Handle for dynamically updating the diagnostics tracing filter
-    diagnostics_filter_handle: DiagnosticsFilterHandle,
+    /// Shared state for dynamic diagnostics level filtering
+    diagnostic_level_state: Arc<DiagnosticLevelState>,
     /// Previous diagnostic level (for detecting changes)
     prev_diagnostic_level: Option<Level>,
 }
@@ -200,7 +199,7 @@ impl CatapultApp {
         _cc: &CreationContext<'_>,
         diag_rx: Receiver<DiagnosticEvent>,
         runtime: tokio::runtime::Runtime,
-        diagnostics_filter_handle: DiagnosticsFilterHandle,
+        diagnostic_level_state: Arc<DiagnosticLevelState>,
     ) -> Self {
         let rt_handle = runtime.handle().clone();
         let (bg_tx, bg_rx) = mpsc::channel();
@@ -269,7 +268,7 @@ impl CatapultApp {
             virtual_radio_channels: HashMap::new(),
             last_state_sync: Instant::now(),
             _runtime: Some(runtime),
-            diagnostics_filter_handle,
+            diagnostic_level_state,
             prev_diagnostic_level: initial_diagnostic_level,
         };
 
@@ -1899,11 +1898,8 @@ impl CatapultApp {
                 self.handle_save_error(e);
             }
 
-            // Update the tracing filter dynamically
-            let new_filter = build_diagnostics_filter(current_level);
-            if let Err(e) = self.diagnostics_filter_handle.reload(new_filter) {
-                tracing::error!("Failed to update diagnostics filter: {}", e);
-            }
+            // Update the tracing filter dynamically (atomic store, no parsing)
+            self.diagnostic_level_state.set_level(current_level);
 
             // Track the change
             self.prev_diagnostic_level = current_level;

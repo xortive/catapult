@@ -13,13 +13,13 @@ mod simulation_panel;
 mod traffic_monitor;
 
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use app::CatapultApp;
-use diagnostics_layer::{build_diagnostics_filter, DiagnosticEvent, DiagnosticsLayer};
+use diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState, DiagnosticsLayer, ProjectCrateFilter};
 use eframe::NativeOptions;
 use settings::Settings;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
@@ -30,20 +30,13 @@ fn main() -> eframe::Result<()> {
     // Create channel for diagnostic events (before tracing init so we can capture all logs)
     let (diag_tx, diag_rx) = mpsc::channel::<DiagnosticEvent>();
 
-    // Build initial filter based on saved diagnostic level
-    let initial_filter = build_diagnostics_filter(settings.diagnostic_level);
-
-    // Create reload layer for dynamic filter updates
-    // This filter controls what events reach the DiagnosticsLayer
-    let (diagnostics_filter, diagnostics_filter_handle) =
-        reload::Layer::<tracing_subscriber::filter::EnvFilter, _>::new(initial_filter);
+    // Create shared state for dynamic level filtering (atomic, no parsing overhead on changes)
+    let diagnostic_level_state = Arc::new(DiagnosticLevelState::new(settings.diagnostic_level));
+    let diagnostics_filter = ProjectCrateFilter::new(Arc::clone(&diagnostic_level_state));
 
     // Initialize logging with two separate filter chains:
-    // 1. Diagnostics layer - filtered by dynamic reload layer controlled by UI (attached first)
+    // 1. Diagnostics layer - filtered by ProjectCrateFilter with atomic level state
     // 2. Console output (fmt layer) - always shows debug level for our crates
-    //
-    // Order matters: diagnostics layer is attached to Registry first so the reload handle
-    // type matches DiagnosticsFilterHandle (Handle<EnvFilter, Registry>)
     tracing_subscriber::registry()
         .with(DiagnosticsLayer::new(diag_tx).with_filter(diagnostics_filter))
         .with(tracing_subscriber::fmt::layer().with_filter(
@@ -67,7 +60,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    // Pass runtime and filter handle to app (app stores them to keep alive and manage updates)
+    // Pass runtime and level state to app (app stores runtime to keep alive, state for level updates)
     eframe::run_native(
         "Catapult",
         options,
@@ -76,7 +69,7 @@ fn main() -> eframe::Result<()> {
                 cc,
                 diag_rx,
                 rt,
-                diagnostics_filter_handle,
+                diagnostic_level_state,
             )))
         }),
     )

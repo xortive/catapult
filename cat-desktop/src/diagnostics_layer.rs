@@ -1,43 +1,113 @@
 //! Custom tracing layer for sending log events to the diagnostics portal
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use tracing::field::{Field, Visit};
-use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::filter::EnvFilter;
+use tracing::subscriber::Interest;
+use tracing::{Event, Level, Metadata, Subscriber};
 use tracing_subscriber::layer::Context;
-use tracing_subscriber::reload;
 use tracing_subscriber::Layer;
 
-/// Type alias for the diagnostics filter reload handle
-pub type DiagnosticsFilterHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
+/// Crates that belong to this project (for filtering)
+const PROJECT_CRATES: &[&str] = &["catapult", "cat_protocol", "cat_detect", "cat_mux", "cat_sim"];
 
-/// Build an EnvFilter for project crates at the specified level
+/// Shared state for dynamic level filtering
 ///
-/// When level is Some, events at that level and above are captured.
-/// When level is None, no events are captured ("off").
-pub fn build_diagnostics_filter(level: Option<Level>) -> EnvFilter {
-    let level_str = match level {
-        Some(Level::DEBUG) | Some(Level::TRACE) => "debug",
-        Some(Level::INFO) => "info",
-        Some(Level::WARN) => "warn",
-        Some(Level::ERROR) => "error",
-        None => "off",
-    };
-    // Build filter for project crates at specified level
-    EnvFilter::new(format!(
-        "catapult={l},cat_protocol={l},cat_detect={l},cat_mux={l},cat_sim={l}",
-        l = level_str
-    ))
+/// Uses atomic operations for lock-free level changes.
+/// Level encoding: 0=off, 1=error, 2=warn, 3=info, 4=debug, 5=trace
+pub struct DiagnosticLevelState {
+    level: AtomicU8,
 }
 
-/// Crate prefixes to capture in the diagnostics layer
-const CRATE_PREFIXES: &[&str] = &[
-    "catapult",
-    "cat_protocol",
-    "cat_detect",
-    "cat_mux",
-    "cat_sim",
-];
+impl DiagnosticLevelState {
+    /// Create new state with the given initial level
+    pub fn new(level: Option<Level>) -> Self {
+        Self {
+            level: AtomicU8::new(Self::level_to_u8(level)),
+        }
+    }
+
+    /// Update the filter level (atomic store)
+    pub fn set_level(&self, level: Option<Level>) {
+        self.level.store(Self::level_to_u8(level), Ordering::Relaxed);
+    }
+
+    /// Get the current filter level (atomic load)
+    pub fn get_level(&self) -> Option<Level> {
+        Self::u8_to_level(self.level.load(Ordering::Relaxed))
+    }
+
+    fn level_to_u8(level: Option<Level>) -> u8 {
+        match level {
+            None => 0,
+            Some(Level::ERROR) => 1,
+            Some(Level::WARN) => 2,
+            Some(Level::INFO) => 3,
+            Some(Level::DEBUG) => 4,
+            Some(Level::TRACE) => 5,
+        }
+    }
+
+    fn u8_to_level(value: u8) -> Option<Level> {
+        match value {
+            0 => None,
+            1 => Some(Level::ERROR),
+            2 => Some(Level::WARN),
+            3 => Some(Level::INFO),
+            4 => Some(Level::DEBUG),
+            _ => Some(Level::TRACE),
+        }
+    }
+}
+
+/// Filter that checks project crate membership and dynamic level via atomic state
+pub struct ProjectCrateFilter {
+    state: Arc<DiagnosticLevelState>,
+}
+
+impl ProjectCrateFilter {
+    /// Create a new filter with shared state
+    pub fn new(state: Arc<DiagnosticLevelState>) -> Self {
+        Self { state }
+    }
+}
+
+impl<S> tracing_subscriber::layer::Filter<S> for ProjectCrateFilter {
+    fn enabled(&self, meta: &Metadata<'_>, _cx: &Context<'_, S>) -> bool {
+        // Check if this is from a project crate
+        let target = meta.target();
+        let is_project_crate = PROJECT_CRATES
+            .iter()
+            .any(|crate_name| target.starts_with(crate_name));
+
+        if !is_project_crate {
+            return false;
+        }
+
+        // Compare event level against current filter level
+        match self.state.get_level() {
+            None => false, // Filter is off
+            Some(filter_level) => *meta.level() <= filter_level,
+        }
+    }
+
+    fn callsite_enabled(&self, meta: &'static Metadata<'static>) -> Interest {
+        // Check project crate membership (static, won't change)
+        let target = meta.target();
+        let is_project_crate = PROJECT_CRATES
+            .iter()
+            .any(|crate_name| target.starts_with(crate_name));
+
+        if !is_project_crate {
+            // Non-project crates are never enabled
+            Interest::never()
+        } else {
+            // Project crates need per-event checks since level is dynamic
+            Interest::sometimes()
+        }
+    }
+}
 
 /// A diagnostic event captured from tracing
 #[derive(Debug, Clone)]
@@ -66,14 +136,7 @@ impl<S: Subscriber> Layer<S> for DiagnosticsLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let target = event.metadata().target();
 
-        // Only capture events from our crates
-        if !CRATE_PREFIXES
-            .iter()
-            .any(|prefix| target.starts_with(prefix))
-        {
-            return;
-        }
-
+        // Filtering is handled by the EnvFilter attached to this layer.
         // Extract message and optional source override from the event
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
@@ -145,34 +208,5 @@ mod tests {
         assert_eq!(simplify_target("cat_protocol::icom"), "Icom");
         assert_eq!(simplify_target("simple"), "Simple");
         assert_eq!(simplify_target("cat_mux::state"), "State");
-    }
-
-    #[test]
-    fn test_crate_filter() {
-        // Our crates should match
-        assert!(CRATE_PREFIXES
-            .iter()
-            .any(|p| "catapult::app".starts_with(p)));
-        assert!(CRATE_PREFIXES
-            .iter()
-            .any(|p| "cat_protocol::icom".starts_with(p)));
-        assert!(CRATE_PREFIXES
-            .iter()
-            .any(|p| "cat_detect::scanner".starts_with(p)));
-        assert!(CRATE_PREFIXES
-            .iter()
-            .any(|p| "cat_mux::state".starts_with(p)));
-        assert!(CRATE_PREFIXES
-            .iter()
-            .any(|p| "cat_sim::radio".starts_with(p)));
-
-        // Third-party crates should not match
-        assert!(!CRATE_PREFIXES
-            .iter()
-            .any(|p| "tokio::runtime".starts_with(p)));
-        assert!(!CRATE_PREFIXES
-            .iter()
-            .any(|p| "egui::widgets".starts_with(p)));
-        assert!(!CRATE_PREFIXES.iter().any(|p| "serialport".starts_with(p)));
     }
 }
