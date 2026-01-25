@@ -859,4 +859,402 @@ mod tests {
         cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
         actor_handle.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn test_amp_query_responds_with_cached_frequency() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+
+        // Drain the connected event
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier using the helper
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+
+        // Drain the amp connected event
+        let _ = event_rx.recv().await;
+
+        // Set frequency on the radio (this updates the emulated state)
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+
+        // Drain state change and amp data out events
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if matches!(event, MuxEvent::AmpDataOut { .. }) {
+                break;
+            }
+        }
+
+        // Drain the amp data
+        let _ = amp_rx.recv().await;
+
+        // Now send a frequency query from the amp (FA;)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"FA;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        // Should get AmpDataIn followed by AmpDataOut with response
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                // Should be a frequency report
+                let s = String::from_utf8_lossy(&data);
+                assert!(
+                    s.starts_with("FA") && s.contains("14250000"),
+                    "Expected frequency response, got: {}",
+                    s
+                );
+                break;
+            }
+        }
+
+        // Verify amp received the response
+        let amp_data = amp_rx.recv().await.unwrap();
+        let s = String::from_utf8_lossy(&amp_data);
+        assert!(s.contains("14250000"));
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_amp_query_no_response_when_no_state() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio but don't set any state
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+            })
+            .await
+            .unwrap();
+        let _ = resp_rx.await.unwrap();
+
+        // Drain the connected event
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier using the helper
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+
+        // Drain the amp connected event
+        let _ = event_rx.recv().await;
+
+        // Send a frequency query when no frequency is cached
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"FA;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        // Should get AmpDataIn but no AmpDataOut (no cached state)
+        let event = event_rx.recv().await.unwrap();
+        assert!(matches!(event, MuxEvent::AmpDataIn { .. }));
+
+        // Amp should not receive any data (use try_recv to check without blocking)
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        assert!(amp_rx.try_recv().is_err());
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_auto_info_sends_updates_on_state_change() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await; // Drain connected event
+
+        // Connect an amplifier using the helper
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await; // Drain amp connected event
+
+        // Enable auto-info mode (AI2; in Kenwood)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"AI2;".to_vec(),
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await; // Drain AmpDataIn
+
+        // Give it time to process
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Now change frequency - should trigger an unsolicited update
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 7_074_000 },
+            })
+            .await
+            .unwrap();
+
+        // Should get multiple events: state change, amp data out (for forwarding),
+        // and amp data out (for auto-info)
+        let mut found_auto_info_update = false;
+        for _ in 0..10 {
+            if let Ok(event) = tokio::time::timeout(
+                tokio::time::Duration::from_millis(100),
+                event_rx.recv(),
+            )
+            .await
+            {
+                if let Some(MuxEvent::AmpDataOut { data, .. }) = event {
+                    let s = String::from_utf8_lossy(&data);
+                    if s.contains("7074000") {
+                        found_auto_info_update = true;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        assert!(found_auto_info_update, "Expected auto-info frequency update");
+
+        // Verify amp received the update
+        let mut found_in_amp = false;
+        while let Ok(data) = amp_rx.try_recv() {
+            let s = String::from_utf8_lossy(&data);
+            if s.contains("7074000") {
+                found_in_amp = true;
+            }
+        }
+        assert!(found_in_amp, "Amp should have received frequency update");
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_no_unsolicited_updates_without_auto_info() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await; // Drain connected event
+
+        // Connect an amplifier - but do NOT send AI2; to enable auto-info
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await; // Drain amp connected event
+
+        // Set initial frequency - this will be forwarded to amp (normal behavior)
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+
+        // Drain the forwarded data
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while amp_rx.try_recv().is_ok() {}
+        while event_rx.try_recv().is_ok() {}
+
+        // Now change frequency again - without auto-info, this should still forward
+        // but should NOT send an additional unsolicited update
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 7_074_000 },
+            })
+            .await
+            .unwrap();
+
+        // Wait for processing
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Count messages received by amp - should be exactly 1 (the forwarded command)
+        let mut amp_messages = Vec::new();
+        while let Ok(data) = amp_rx.try_recv() {
+            amp_messages.push(data);
+        }
+
+        // Should have exactly 1 message (the forwarded frequency command)
+        // If auto-info were enabled, we'd have 2 (forward + unsolicited update)
+        assert_eq!(
+            amp_messages.len(),
+            1,
+            "Without auto-info, should only forward command, not send unsolicited update. Got {} messages",
+            amp_messages.len()
+        );
+
+        // Verify it's the forwarded frequency
+        let s = String::from_utf8_lossy(&amp_messages[0]);
+        assert!(
+            s.contains("7074000"),
+            "Forwarded message should contain new frequency"
+        );
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_resets_emulated_state() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier using the helper
+        let (amp_channel, _resp_tx, _amp_rx) =
+            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Set frequency to cache some state
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+
+        // Drain events
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while event_rx.try_recv().is_ok() {}
+
+        // Disconnect amplifier
+        cmd_tx
+            .send(MuxActorCommand::DisconnectAmplifier)
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await; // AmpDisconnected
+
+        // Reconnect with a new channel
+        let (amp_channel2, _resp_tx2, mut amp_rx2) =
+            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel2,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Query frequency - should have no cached state after disconnect/reconnect
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"FA;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        // Should not get a response (state was reset)
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        assert!(amp_rx2.try_recv().is_err(), "Should not have cached state after reconnect");
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
 }

@@ -646,8 +646,6 @@ name = "cat-detect"
 version = "0.8.0"
 dependencies = [
  "cat-protocol",
- "proptest",
- "serde",
  "serialport",
  "thiserror 2.0.17",
  "tokio",
