@@ -16,7 +16,7 @@ use egui::{Color32, RichText, Ui};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tracing::Level;
 
-use crate::amp_task::{run_amp_task, run_virtual_amp_task, AmpTaskCommand};
+use crate::amp_task::{run_amp_task, run_virtual_amp_task};
 use crate::async_serial::{AsyncRadioConnection, RadioTaskCommand, VirtualRadioIo};
 use crate::diagnostics_layer::{
     build_diagnostics_filter, DiagnosticEvent, DiagnosticsFilterHandle,
@@ -154,8 +154,8 @@ pub struct CatapultApp {
     amp_connection_type: AmplifierConnectionType,
     /// Amplifier data sender (for async amplifier task)
     amp_data_tx: Option<tokio_mpsc::Sender<Vec<u8>>>,
-    /// Amplifier command sender (for shutdown)
-    amp_cmd_tx: Option<tokio_mpsc::Sender<AmpTaskCommand>>,
+    /// Amplifier shutdown sender
+    amp_shutdown_tx: Option<oneshot::Sender<()>>,
     /// Maps simulation radio IDs to RadioHandle
     sim_radio_ids: HashMap<String, RadioHandle>,
     /// Selected port for adding a new COM radio
@@ -251,7 +251,7 @@ impl CatapultApp {
             amp_civ_address: settings.amplifier.civ_address,
             amp_connection_type,
             amp_data_tx: None,
-            amp_cmd_tx: None,
+            amp_shutdown_tx: None,
             sim_radio_ids: HashMap::new(),
             add_radio_port: String::new(),
             add_radio_protocol: Protocol::Kenwood,
@@ -597,22 +597,6 @@ impl CatapultApp {
         if let Err(e) = sender.try_send(cmd) {
             tracing::warn!(
                 source = "RadioTask",
-                "Failed to send {} command: {} (channel full or closed)",
-                context,
-                e
-            );
-        }
-    }
-
-    /// Send a command to the amp task, logging a warning if the channel is full
-    fn send_amp_task_command(
-        sender: &tokio_mpsc::Sender<AmpTaskCommand>,
-        cmd: AmpTaskCommand,
-        context: &str,
-    ) {
-        if let Err(e) = sender.try_send(cmd) {
-            tracing::warn!(
-                source = "AmpTask",
                 "Failed to send {} command: {} (channel full or closed)",
                 context,
                 e
@@ -1991,7 +1975,7 @@ impl CatapultApp {
 
         // Create channel for sending data to amp task
         let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
-        let (amp_cmd_tx, amp_cmd_rx) = tokio_mpsc::channel::<AmpTaskCommand>(8);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         // Create a dummy response channel (not used in current architecture)
         let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
@@ -2015,14 +1999,14 @@ impl CatapultApp {
 
         // Store senders
         self.amp_data_tx = Some(amp_data_tx);
-        self.amp_cmd_tx = Some(amp_cmd_tx);
+        self.amp_shutdown_tx = Some(shutdown_tx);
 
         // Spawn the async amp task
         let port_name = self.amp_port.clone();
         let baud_rate = self.amp_baud;
         let mux_tx = self.mux_cmd_tx.clone();
         self.rt_handle.spawn(async move {
-            run_amp_task(amp_cmd_rx, amp_data_rx, port_name, baud_rate, mux_tx).await;
+            run_amp_task(shutdown_rx, amp_data_rx, port_name, baud_rate, mux_tx).await;
         });
 
         self.set_status(format!(
@@ -2052,7 +2036,7 @@ impl CatapultApp {
 
         // Create channel for sending data to virtual amp task
         let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
-        let (amp_cmd_tx, amp_cmd_rx) = tokio_mpsc::channel::<AmpTaskCommand>(8);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         // Create a dummy response channel (not used in current architecture)
         let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
@@ -2071,13 +2055,13 @@ impl CatapultApp {
 
         // Store senders
         self.amp_data_tx = Some(amp_data_tx);
-        self.amp_cmd_tx = Some(amp_cmd_tx);
+        self.amp_shutdown_tx = Some(shutdown_tx);
 
         // Spawn the virtual amp task
         let protocol = self.amp_protocol;
         let mux_tx = self.mux_cmd_tx.clone();
         self.rt_handle.spawn(async move {
-            run_virtual_amp_task(amp_cmd_rx, amp_data_rx, protocol, civ_address, mux_tx).await;
+            run_virtual_amp_task(shutdown_rx, amp_data_rx, protocol, civ_address, mux_tx).await;
         });
 
         self.set_status(format!(
@@ -2092,8 +2076,8 @@ impl CatapultApp {
         self.send_mux_command(MuxActorCommand::DisconnectAmplifier, "DisconnectAmplifier");
 
         // Send shutdown to amp task
-        if let Some(tx) = self.amp_cmd_tx.take() {
-            Self::send_amp_task_command(&tx, AmpTaskCommand::Shutdown, "Shutdown");
+        if let Some(tx) = self.amp_shutdown_tx.take() {
+            let _ = tx.send(());
         }
 
         self.amp_data_tx = None;

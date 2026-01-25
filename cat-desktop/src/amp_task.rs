@@ -8,23 +8,16 @@ use std::time::Duration;
 use cat_mux::{MuxActorCommand, VirtualAmplifier};
 use cat_protocol::Protocol;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc as tokio_mpsc;
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tracing::{debug, error, info};
-
-/// Commands that can be sent to the amplifier task
-#[derive(Debug)]
-pub enum AmpTaskCommand {
-    /// Shutdown the task
-    Shutdown,
-}
 
 /// Run the async amplifier task
 ///
 /// This handles all async I/O with the amplifier serial port.
 /// Errors are reported through the mux actor via ReportError command.
 pub async fn run_amp_task(
-    cmd_rx: tokio_mpsc::Receiver<AmpTaskCommand>,
+    shutdown_rx: oneshot::Receiver<()>,
     data_rx: tokio_mpsc::Receiver<Vec<u8>>,
     port_name: String,
     baud_rate: u32,
@@ -46,7 +39,7 @@ pub async fn run_amp_task(
 
     info!("Amplifier connected on {}", port_name);
 
-    run_amp_loop(stream, cmd_rx, data_rx, mux_tx).await;
+    run_amp_loop(stream, shutdown_rx, data_rx, mux_tx).await;
 
     info!("Amplifier task shutting down");
 }
@@ -54,7 +47,7 @@ pub async fn run_amp_task(
 /// Inner loop for amplifier communication
 async fn run_amp_loop(
     mut stream: SerialStream,
-    mut cmd_rx: tokio_mpsc::Receiver<AmpTaskCommand>,
+    mut shutdown_rx: oneshot::Receiver<()>,
     mut data_rx: tokio_mpsc::Receiver<Vec<u8>>,
     mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
 ) {
@@ -62,13 +55,9 @@ async fn run_amp_loop(
 
     loop {
         tokio::select! {
-            // Check for commands (shutdown)
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(AmpTaskCommand::Shutdown) | None => {
-                        break;
-                    }
-                }
+            // Check for shutdown signal
+            _ = &mut shutdown_rx => {
+                break;
             }
 
             // Check for data to write (from mux actor)
@@ -116,7 +105,7 @@ async fn run_amp_loop(
 /// from the mux actor, processes them through VirtualAmplifier, and
 /// emits traffic events for monitoring.
 pub async fn run_virtual_amp_task(
-    mut cmd_rx: tokio_mpsc::Receiver<AmpTaskCommand>,
+    mut shutdown_rx: oneshot::Receiver<()>,
     mut data_rx: tokio_mpsc::Receiver<Vec<u8>>,
     protocol: Protocol,
     civ_address: Option<u8>,
@@ -128,13 +117,9 @@ pub async fn run_virtual_amp_task(
 
     loop {
         tokio::select! {
-            // Check for commands (shutdown)
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(AmpTaskCommand::Shutdown) | None => {
-                        break;
-                    }
-                }
+            // Check for shutdown signal
+            _ = &mut shutdown_rx => {
+                break;
             }
 
             // Check for data to process (from mux actor)
