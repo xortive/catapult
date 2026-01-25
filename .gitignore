@@ -27,3 +27,6 @@ Thumbs.db
 .project
 .classpath
 .settings/
+
+# Untracked notes
+notes/
