@@ -235,9 +235,13 @@ impl CivCodec {
                 }
             }
             0x03 => {
-                // Frequency response
-                let hz = bcd_to_frequency(data)?;
-                Ok(CivCommandType::FrequencyReport { hz })
+                // Frequency query (no data) or response (with BCD data)
+                if data.is_empty() {
+                    Ok(CivCommandType::GetFrequency)
+                } else {
+                    let hz = bcd_to_frequency(data)?;
+                    Ok(CivCommandType::FrequencyReport { hz })
+                }
             }
             0x01 | 0x06 => {
                 // Set mode
@@ -250,10 +254,14 @@ impl CivCodec {
                 }
             }
             0x04 => {
-                // Mode response
-                let mode = data.first().copied().unwrap_or(0);
-                let filter = data.get(1).copied().unwrap_or(0);
-                Ok(CivCommandType::ModeReport { mode, filter })
+                // Mode query (no data) or response (with mode/filter data)
+                if data.is_empty() {
+                    Ok(CivCommandType::GetMode)
+                } else {
+                    let mode = data.first().copied().unwrap_or(0);
+                    let filter = data.get(1).copied().unwrap_or(0);
+                    Ok(CivCommandType::ModeReport { mode, filter })
+                }
             }
             0x07 => {
                 // VFO select

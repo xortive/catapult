@@ -134,6 +134,7 @@ pub fn create_radio_codec(protocol: Protocol) -> Box<dyn RadioCodec> {
             Box::new(kenwood::KenwoodCodec::new())
         }
         Protocol::IcomCIV => Box::new(icom::CivCodec::new()),
-        Protocol::Yaesu | Protocol::YaesuAscii => Box::new(yaesu::YaesuCodec::new()),
+        Protocol::Yaesu => Box::new(yaesu::YaesuCodec::new()),
+        Protocol::YaesuAscii => Box::new(yaesu_ascii::YaesuAsciiCodec::new()),
     }
 }

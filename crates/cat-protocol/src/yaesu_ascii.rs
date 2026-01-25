@@ -15,7 +15,7 @@
 
 use crate::command::{OperatingMode, RadioCommand, Vfo};
 use crate::error::ParseError;
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
+use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCodec, ToRadioCommand};
 
 /// Maximum command length (reasonable limit to prevent buffer overflow)
 const MAX_COMMAND_LEN: usize = 64;
@@ -474,6 +474,20 @@ impl FromRadioCommand for YaesuAsciiCommand {
     }
 }
 
+impl RadioCodec for YaesuAsciiCodec {
+    fn push_bytes(&mut self, data: &[u8]) {
+        ProtocolCodec::push_bytes(self, data);
+    }
+
+    fn next_command(&mut self) -> Option<RadioCommand> {
+        ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_command())
+    }
+
+    fn clear(&mut self) {
+        ProtocolCodec::clear(self);
+    }
+}
+
 impl EncodeCommand for YaesuAsciiCommand {
     fn encode(&self) -> Vec<u8> {
         let cmd = match self {
@@ -648,7 +662,10 @@ pub fn is_known_yaesu_ascii_id(id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        is_known_yaesu_ascii_id, is_valid_id_response, YaesuAsciiCodec, YaesuAsciiCommand,
+    };
+    use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCommand, ToRadioCommand};
 
     #[test]
     fn test_parse_frequency() {
