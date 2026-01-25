@@ -1,0 +1,355 @@
+//! Amplifier connection and management
+
+use std::time::Duration;
+
+use cat_mux::{AmplifierChannel, AmplifierChannelMeta, AsyncAmpConnection, MuxActorCommand};
+use cat_protocol::Protocol;
+use cat_sim::VirtualAmplifier;
+use egui::{Color32, RichText, Ui};
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+use tokio_serial::SerialPortBuilderExt;
+
+use super::{AmplifierConnectionType, CatapultApp};
+
+impl CatapultApp {
+    /// Draw the amplifier configuration panel
+    pub(super) fn draw_amplifier_panel(&mut self, ui: &mut Ui) {
+        // Capture previous state for change detection
+        let prev_connection_type = self.amp_connection_type;
+        let prev_protocol = self.amp_protocol;
+        let prev_port = self.amp_port.clone();
+        let prev_baud = self.amp_baud;
+        let prev_civ = self.amp_civ_address;
+
+        egui::Grid::new("amp_config")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                // Connection type selector
+                ui.label("Connection:");
+                egui::ComboBox::from_id_salt("amp_connection_type")
+                    .selected_text(match self.amp_connection_type {
+                        AmplifierConnectionType::ComPort => "COM Port",
+                        AmplifierConnectionType::Simulated => "Simulated",
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_value(
+                                &mut self.amp_connection_type,
+                                AmplifierConnectionType::ComPort,
+                                "COM Port",
+                            )
+                            .changed()
+                        {
+                            // Disconnect when switching to COM port mode
+                            if self.amp_data_tx.is_some() {
+                                self.disconnect_amplifier();
+                            }
+                        }
+                        ui.selectable_value(
+                            &mut self.amp_connection_type,
+                            AmplifierConnectionType::Simulated,
+                            "Simulated",
+                        );
+                    });
+                ui.end_row();
+
+                ui.label("Protocol:");
+                egui::ComboBox::from_id_salt("amp_protocol")
+                    .selected_text(self.amp_protocol.name())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::Kenwood,
+                            Protocol::Kenwood.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::IcomCIV,
+                            Protocol::IcomCIV.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::Yaesu,
+                            Protocol::Yaesu.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::YaesuAscii,
+                            Protocol::YaesuAscii.name(),
+                        );
+                        ui.selectable_value(
+                            &mut self.amp_protocol,
+                            Protocol::Elecraft,
+                            Protocol::Elecraft.name(),
+                        );
+                    });
+                ui.end_row();
+
+                // Only show port/baud for COM port mode
+                if self.amp_connection_type == AmplifierConnectionType::ComPort {
+                    ui.label("Port:");
+                    // Get available ports (excludes ports used by radios)
+                    // Collect into owned data to avoid borrow conflicts
+                    let available_amp_ports: Vec<(String, String)> = self
+                        .available_amp_ports()
+                        .into_iter()
+                        .map(|p| (p.port.clone(), Self::format_port_label(p)))
+                        .collect();
+
+                    // Find the selected port's hint for display
+                    let selected_label = if self.amp_port.is_empty() {
+                        "Select port...".to_string()
+                    } else {
+                        available_amp_ports
+                            .iter()
+                            .find(|(port, _)| *port == self.amp_port)
+                            .map(|(_, label)| label.clone())
+                            .unwrap_or_else(|| self.amp_port.clone())
+                    };
+                    egui::ComboBox::from_id_salt("amp_port")
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            for (port, label) in &available_amp_ports {
+                                ui.selectable_value(&mut self.amp_port, port.clone(), label);
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label("Baud Rate:");
+                    egui::ComboBox::from_id_salt("amp_baud")
+                        .selected_text(format!("{}", self.amp_baud))
+                        .show_ui(ui, |ui| {
+                            // Common amplifier baud rates
+                            for &baud in &[4800u32, 9600, 19200, 38400, 57600, 115200, 230400] {
+                                ui.selectable_value(&mut self.amp_baud, baud, format!("{}", baud));
+                            }
+                        });
+                    ui.end_row();
+
+                    // Show CI-V address for Icom protocol
+                    if self.amp_protocol == Protocol::IcomCIV {
+                        ui.label("CI-V Address:");
+                        let mut addr_str = format!("{:02X}", self.amp_civ_address);
+                        if ui.text_edit_singleline(&mut addr_str).changed() {
+                            if let Ok(addr) =
+                                u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
+                            {
+                                self.amp_civ_address = addr;
+                            }
+                        }
+                        ui.end_row();
+                    }
+                }
+            });
+
+        // Status and controls based on connection type
+        match self.amp_connection_type {
+            AmplifierConnectionType::ComPort => {
+                ui.horizontal(|ui| {
+                    let is_connected = self.amp_data_tx.is_some();
+                    let can_connect = !self.amp_port.is_empty() && !is_connected;
+
+                    if ui
+                        .add_enabled(can_connect, egui::Button::new("Connect"))
+                        .clicked()
+                    {
+                        self.connect_amplifier();
+                    }
+
+                    if ui
+                        .add_enabled(is_connected, egui::Button::new("Disconnect"))
+                        .clicked()
+                    {
+                        self.disconnect_amplifier();
+                    }
+
+                    if is_connected {
+                        ui.label(RichText::new("Connected").color(Color32::GREEN));
+                    } else if !self.amp_port.is_empty() {
+                        ui.label(RichText::new("Disconnected").color(Color32::GRAY));
+                    }
+                });
+            }
+            AmplifierConnectionType::Simulated => {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Simulated").color(Color32::from_rgb(100, 180, 255)));
+                });
+                ui.label(
+                    RichText::new("Commands appear in Traffic Monitor")
+                        .color(Color32::GRAY)
+                        .small(),
+                );
+            }
+        }
+
+        // Save if any amplifier settings changed
+        if self.amp_connection_type != prev_connection_type
+            || self.amp_protocol != prev_protocol
+            || self.amp_port != prev_port
+            || self.amp_baud != prev_baud
+            || self.amp_civ_address != prev_civ
+        {
+            self.save_amplifier_settings();
+        }
+    }
+
+    /// Connect to the amplifier (dispatches to COM or virtual based on connection type)
+    pub(super) fn connect_amplifier(&mut self) {
+        match self.amp_connection_type {
+            AmplifierConnectionType::ComPort => self.connect_amplifier_com(),
+            AmplifierConnectionType::Simulated => self.connect_amplifier_virtual(),
+        }
+    }
+
+    /// Connect to a physical amplifier via COM port
+    fn connect_amplifier_com(&mut self) {
+        if self.amp_port.is_empty() {
+            self.set_status("No amplifier port selected".into());
+            return;
+        }
+
+        let civ_address = if self.amp_protocol == Protocol::IcomCIV {
+            Some(self.amp_civ_address)
+        } else {
+            None
+        };
+
+        // Open the serial port
+        let stream = match tokio_serial::new(&self.amp_port, self.amp_baud)
+            .timeout(Duration::from_millis(100))
+            .open_native_async()
+        {
+            Ok(s) => s,
+            Err(e) => {
+                self.set_status(format!("Failed to open {}: {}", self.amp_port, e));
+                return;
+            }
+        };
+
+        // Send config to mux actor
+        self.send_mux_command(
+            MuxActorCommand::SetAmplifierConfig {
+                port: self.amp_port.clone(),
+                protocol: self.amp_protocol,
+                baud_rate: self.amp_baud,
+                civ_address,
+            },
+            "SetAmplifierConfig",
+        );
+
+        // Create channel for sending data to amp task
+        let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        // Create a dummy response channel (not used in current architecture)
+        let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+
+        // Create amplifier channel metadata
+        let amp_meta = AmplifierChannelMeta::new_real(
+            self.amp_port.clone(),
+            self.amp_protocol,
+            self.amp_baud,
+            civ_address,
+        );
+
+        // Create AmplifierChannel and tell mux actor
+        let amp_channel = AmplifierChannel::new(amp_meta, amp_data_tx.clone(), response_rx);
+        self.send_mux_command(
+            MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            },
+            "ConnectAmplifier",
+        );
+
+        // Store senders
+        self.amp_data_tx = Some(amp_data_tx);
+        self.amp_shutdown_tx = Some(shutdown_tx);
+
+        // Spawn the async amp connection
+        let mux_tx = self.mux_cmd_tx.clone();
+        let event_tx = self.mux_event_tx.clone();
+        self.rt_handle.spawn(async move {
+            let conn = AsyncAmpConnection::new(stream, mux_tx, event_tx);
+            conn.run(shutdown_rx, amp_data_rx).await;
+        });
+
+        self.set_status(format!(
+            "Connected to amplifier on {} @ {} baud",
+            self.amp_port, self.amp_baud
+        ));
+    }
+
+    /// Connect to a virtual/simulated amplifier
+    fn connect_amplifier_virtual(&mut self) {
+        let civ_address = if self.amp_protocol == Protocol::IcomCIV {
+            Some(self.amp_civ_address)
+        } else {
+            None
+        };
+
+        // Create the virtual amplifier
+        let virtual_io = VirtualAmplifier::new(self.amp_protocol, civ_address);
+
+        // Send config to mux actor (use "[VIRTUAL]" as port name)
+        self.send_mux_command(
+            MuxActorCommand::SetAmplifierConfig {
+                port: "[VIRTUAL]".to_string(),
+                protocol: self.amp_protocol,
+                baud_rate: 0,
+                civ_address,
+            },
+            "SetAmplifierConfig (virtual)",
+        );
+
+        // Create channel for sending data to virtual amp task
+        let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        // Create a dummy response channel (not used in current architecture)
+        let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+
+        // Create amplifier channel metadata for virtual amp
+        let amp_meta = AmplifierChannelMeta::new_virtual(self.amp_protocol, civ_address);
+
+        // Create AmplifierChannel and tell mux actor
+        let amp_channel = AmplifierChannel::new(amp_meta, amp_data_tx.clone(), response_rx);
+        self.send_mux_command(
+            MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            },
+            "ConnectAmplifier (virtual)",
+        );
+
+        // Store senders
+        self.amp_data_tx = Some(amp_data_tx);
+        self.amp_shutdown_tx = Some(shutdown_tx);
+
+        // Spawn the amp connection with virtual I/O
+        let mux_tx = self.mux_cmd_tx.clone();
+        let event_tx = self.mux_event_tx.clone();
+        self.rt_handle.spawn(async move {
+            let conn = AsyncAmpConnection::new(virtual_io, mux_tx, event_tx);
+            conn.run(shutdown_rx, amp_data_rx).await;
+        });
+
+        self.set_status(format!(
+            "Connected to virtual amplifier (protocol: {})",
+            self.amp_protocol.name()
+        ));
+    }
+
+    /// Disconnect from the amplifier
+    pub(super) fn disconnect_amplifier(&mut self) {
+        // Tell mux actor to stop sending to amp
+        self.send_mux_command(MuxActorCommand::DisconnectAmplifier, "DisconnectAmplifier");
+
+        // Send shutdown to amp task
+        if let Some(tx) = self.amp_shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+
+        self.amp_data_tx = None;
+        self.set_status("Amplifier disconnected".into());
+    }
+}

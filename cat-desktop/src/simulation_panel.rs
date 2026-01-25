@@ -131,8 +131,10 @@ impl SimulationPanel {
         protocol: Protocol,
         cmd_tx: mpsc::Sender<VirtualRadioCommand>,
     ) {
-        self.radio_states
-            .insert(sim_id.clone(), VirtualRadioDisplayState::new(name, protocol));
+        self.radio_states.insert(
+            sim_id.clone(),
+            VirtualRadioDisplayState::new(name, protocol),
+        );
         self.radio_commands.insert(sim_id.clone(), cmd_tx);
         self.selected_radio = Some(sim_id);
     }
@@ -190,20 +192,22 @@ impl SimulationPanel {
     ///
     /// Returns an iterator of VirtualRadioConfig from the current display state.
     pub fn get_radio_configs(&self) -> impl Iterator<Item = cat_sim::VirtualRadioConfig> + '_ {
-        self.radio_states.iter().map(|(_, state)| cat_sim::VirtualRadioConfig {
-            id: state.name.clone(),
-            protocol: state.protocol,
-            model_name: state.model.as_ref().map(|m| m.model.clone()),
-            initial_frequency_hz: state.frequency_hz,
-            initial_mode: state.mode,
-            civ_address: state.model.as_ref().and_then(|m| {
-                if let ProtocolId::CivAddress(addr) = &m.protocol_id {
-                    Some(*addr)
-                } else {
-                    None
-                }
-            }),
-        })
+        self.radio_states
+            .values()
+            .map(|state| cat_sim::VirtualRadioConfig {
+                id: state.name.clone(),
+                protocol: state.protocol,
+                model_name: state.model.as_ref().map(|m| m.model.clone()),
+                initial_frequency_hz: state.frequency_hz,
+                initial_mode: state.mode,
+                civ_address: state.model.as_ref().and_then(|m| {
+                    if let ProtocolId::CivAddress(addr) = &m.protocol_id {
+                        Some(*addr)
+                    } else {
+                        None
+                    }
+                }),
+            })
     }
 
     /// Send a command to a virtual radio
