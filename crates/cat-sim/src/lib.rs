@@ -28,6 +28,8 @@
 
 pub mod amplifier;
 pub mod radio;
+pub mod radio_task;
 
-pub use amplifier::{VirtualAmplifier, VirtualAmplifierIo};
+pub use amplifier::VirtualAmplifier;
 pub use radio::{VirtualRadio, VirtualRadioConfig};
+pub use radio_task::{run_virtual_radio_task, VirtualRadioCommand};

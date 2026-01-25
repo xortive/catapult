@@ -1,7 +1,7 @@
 //! Virtual radio actor task
 //!
 //! This module provides a pure async task that owns a VirtualRadio and communicates
-//! via a `DuplexStream`. The task uses a select! loop to:
+//! via an async stream. The task uses a select! loop to:
 //! - Read CAT commands from the connection stream and process them
 //! - Handle UI commands from a channel for state changes
 //! - Write protocol-encoded responses back to the stream
@@ -9,10 +9,11 @@
 use std::io;
 
 use cat_protocol::{create_radio_codec, OperatingMode, RadioModel};
-use cat_sim::VirtualRadio;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+
+use crate::VirtualRadio;
 
 /// Commands that can be sent from the UI to a virtual radio actor
 #[derive(Debug)]
@@ -36,11 +37,14 @@ pub enum VirtualRadioCommand {
 /// 2. UI commands from the command channel (set frequency, mode, PTT from SimulationPanel)
 ///
 /// Responses are written back to the stream for AsyncRadioConnection to read.
-pub async fn run_virtual_radio_task(
-    mut stream: DuplexStream,
+pub async fn run_virtual_radio_task<S>(
+    mut stream: S,
     mut radio: VirtualRadio,
     mut cmd_rx: mpsc::Receiver<VirtualRadioCommand>,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut codec = create_radio_codec(radio.protocol());
     let mut buf = [0u8; 1024];
 

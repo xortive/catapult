@@ -12,7 +12,7 @@ use cat_mux::{
     RadioStateSummary, RadioTaskCommand, SwitchingMode,
 };
 use cat_protocol::{OperatingMode, Protocol};
-use cat_sim::{VirtualAmplifierIo, VirtualRadio};
+use cat_sim::{run_virtual_radio_task, VirtualAmplifier, VirtualRadio, VirtualRadioCommand};
 use eframe::CreationContext;
 use egui::{Color32, RichText, Ui};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
@@ -20,7 +20,6 @@ use tokio_serial::SerialPortBuilderExt;
 use tracing::Level;
 
 use crate::diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState};
-use crate::virtual_radio_task::{run_virtual_radio_task, VirtualRadioCommand};
 use crate::radio_panel::RadioPanel;
 use crate::settings::{AmplifierSettings, ConfiguredRadio, Settings};
 use crate::simulation_panel::{SimulationAction, SimulationPanel};
@@ -2152,8 +2151,8 @@ impl CatapultApp {
             None
         };
 
-        // Create the virtual amplifier I/O
-        let virtual_io = VirtualAmplifierIo::new(self.amp_protocol, civ_address);
+        // Create the virtual amplifier
+        let virtual_io = VirtualAmplifier::new(self.amp_protocol, civ_address);
 
         // Send config to mux actor (use "[VIRTUAL]" as port name)
         self.send_mux_command(

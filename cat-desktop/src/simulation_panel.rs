@@ -13,7 +13,7 @@ use cat_protocol::{OperatingMode, Protocol, ProtocolId, RadioDatabase, RadioMode
 use egui::{Color32, RichText, Ui};
 use tokio::sync::mpsc;
 
-use crate::virtual_radio_task::VirtualRadioCommand;
+use cat_sim::VirtualRadioCommand;
 
 /// Actions returned from SimulationPanel for App to execute
 #[derive(Debug, Clone)]
