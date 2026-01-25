@@ -32,17 +32,18 @@
 
 use std::collections::HashMap;
 
-use cat_protocol::{OperatingMode, Protocol, RadioCommand};
+use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec, RadioCommand};
+
+use crate::translation::ProtocolTranslator;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::amplifier::AmplifierChannel;
 use crate::channel::RadioChannelMeta;
-use crate::codec::ProtocolCodecBox;
 use crate::engine::Multiplexer;
 use crate::error::MuxError;
 use crate::events::MuxEvent;
-use crate::state::{AmplifierConfig, RadioHandle, SwitchingMode};
+use crate::state::{AmplifierConfig, AmplifierEmulatedState, RadioHandle, SwitchingMode};
 
 /// Summary of a radio's state for sync purposes
 ///
@@ -183,11 +184,15 @@ struct MuxActorState {
     /// Registered radio channels (keyed by handle)
     radio_channels: HashMap<RadioHandle, RadioChannelMeta>,
     /// Protocol codecs for parsing raw data (keyed by handle)
-    codecs: HashMap<RadioHandle, ProtocolCodecBox>,
+    codecs: HashMap<RadioHandle, Box<dyn RadioCodec>>,
     /// Amplifier data sender (for sending translated commands)
     amp_tx: Option<mpsc::Sender<Vec<u8>>>,
     /// Amplifier metadata
     amp_meta: Option<crate::amplifier::AmplifierChannelMeta>,
+    /// Codec for parsing amplifier data
+    amp_codec: Option<Box<dyn RadioCodec>>,
+    /// Emulated state that the amplifier believes the radio is in
+    amp_emulated: AmplifierEmulatedState,
 }
 
 impl MuxActorState {
@@ -198,6 +203,8 @@ impl MuxActorState {
             codecs: HashMap::new(),
             amp_tx: None,
             amp_meta: None,
+            amp_codec: None,
+            amp_emulated: AmplifierEmulatedState::default(),
         }
     }
 
@@ -275,6 +282,9 @@ async fn process_radio_command(
         }
     }
 
+    // Check if this radio is now the active radio (for auto-info updates)
+    let is_active = new_active == Some(handle);
+
     // Send to amplifier if there's data
     if let Some(data) = amp_data {
         let amp_protocol = state.multiplexer.amplifier_config().protocol;
@@ -299,6 +309,118 @@ async fn process_radio_command(
                     .await;
             }
         }
+
+        // Update emulated state to match what we sent to the amp
+        if let Some(hz) = new_freq {
+            state.amp_emulated.frequency_hz = Some(hz);
+        }
+        if let Some(mode) = new_mode {
+            state.amp_emulated.mode = Some(mode);
+        }
+        if let Some(ptt) = new_ptt {
+            state.amp_emulated.ptt = ptt;
+        }
+    }
+
+    // Send auto-info updates if enabled and this is the active radio
+    if is_active && state.amp_emulated.auto_info_enabled && state.amp_tx.is_some() {
+        // Send unsolicited updates for changed state
+        if freq_changed {
+            if let Some(hz) = new_freq {
+                // Only send if different from what amp already knows
+                if state.amp_emulated.frequency_hz != Some(hz) {
+                    state.amp_emulated.frequency_hz = Some(hz);
+                    send_to_amp(state, event_tx, RadioCommand::FrequencyReport { hz }).await;
+                }
+            }
+        }
+        if mode_changed {
+            if let Some(mode) = new_mode {
+                if state.amp_emulated.mode != Some(mode) {
+                    state.amp_emulated.mode = Some(mode);
+                    send_to_amp(state, event_tx, RadioCommand::ModeReport { mode }).await;
+                }
+            }
+        }
+        if ptt_changed {
+            if let Some(ptt) = new_ptt {
+                if state.amp_emulated.ptt != ptt {
+                    state.amp_emulated.ptt = ptt;
+                    send_to_amp(state, event_tx, RadioCommand::PttReport { active: ptt }).await;
+                }
+            }
+        }
+    }
+}
+
+/// Handle a query from the amplifier using cached emulated state
+///
+/// Returns `Some(RadioCommand)` with the response if we can answer,
+/// or `None` if we don't have the state to answer (amp should retry later).
+fn handle_amp_query(state: &MuxActorState, query: &RadioCommand) -> Option<RadioCommand> {
+    match query {
+        RadioCommand::GetFrequency => state
+            .amp_emulated
+            .frequency_hz
+            .map(|hz| RadioCommand::FrequencyReport { hz }),
+
+        RadioCommand::GetMode => state
+            .amp_emulated
+            .mode
+            .map(|mode| RadioCommand::ModeReport { mode }),
+
+        RadioCommand::GetPtt => Some(RadioCommand::PttReport {
+            active: state.amp_emulated.ptt,
+        }),
+
+        RadioCommand::GetAutoInfo => Some(RadioCommand::AutoInfoReport {
+            enabled: state.amp_emulated.auto_info_enabled,
+        }),
+
+        _ => None,
+    }
+}
+
+/// Send a RadioCommand to the amplifier
+///
+/// Translates the command to the amplifier's protocol and sends it.
+async fn send_to_amp(
+    state: &MuxActorState,
+    event_tx: &mpsc::Sender<MuxEvent>,
+    cmd: RadioCommand,
+) {
+    let Some(ref tx) = state.amp_tx else {
+        return;
+    };
+
+    let protocol = state.multiplexer.amplifier_config().protocol;
+    let translator = ProtocolTranslator::new(protocol);
+
+    let data = match translator.translate(&cmd) {
+        Ok(d) => d,
+        Err(e) => {
+            debug!("Cannot translate {:?} to {:?}: {}", cmd, protocol, e);
+            return;
+        }
+    };
+
+    // Emit traffic event
+    let _ = event_tx
+        .send(MuxEvent::AmpDataOut {
+            data: data.clone(),
+            protocol,
+        })
+        .await;
+
+    // Send to amplifier
+    if let Err(e) = tx.send(data).await {
+        warn!("Failed to send to amplifier: {}", e);
+        let _ = event_tx
+            .send(MuxEvent::Error {
+                source: "Amplifier".to_string(),
+                message: format!("Send failed: {}", e),
+            })
+            .await;
     }
 }
 
@@ -337,7 +459,7 @@ pub async fn run_mux_actor(
                 state.radio_channels.insert(handle, meta.clone());
 
                 // Create codec for parsing raw data
-                state.codecs.insert(handle, ProtocolCodecBox::new(protocol));
+                state.codecs.insert(handle, create_radio_codec(protocol));
 
                 // Send back the handle
                 let _ = response.send(handle);
@@ -382,6 +504,40 @@ pub async fn run_mux_actor(
                                     to: handle,
                                 })
                                 .await;
+
+                            // If auto-info is enabled, send new radio's state to amplifier
+                            if state.amp_emulated.auto_info_enabled && state.amp_tx.is_some() {
+                                if let Some(radio) = state.multiplexer.get_radio(handle) {
+                                    // Update and send frequency
+                                    if let Some(hz) = radio.frequency_hz {
+                                        state.amp_emulated.frequency_hz = Some(hz);
+                                        send_to_amp(
+                                            &state,
+                                            &event_tx,
+                                            RadioCommand::FrequencyReport { hz },
+                                        )
+                                        .await;
+                                    }
+                                    // Update and send mode
+                                    if let Some(mode) = radio.mode {
+                                        state.amp_emulated.mode = Some(mode);
+                                        send_to_amp(
+                                            &state,
+                                            &event_tx,
+                                            RadioCommand::ModeReport { mode },
+                                        )
+                                        .await;
+                                    }
+                                    // Update and send PTT
+                                    state.amp_emulated.ptt = radio.ptt;
+                                    send_to_amp(
+                                        &state,
+                                        &event_tx,
+                                        RadioCommand::PttReport { active: radio.ptt },
+                                    )
+                                    .await;
+                                }
+                            }
                         }
                     }
                     Err(MuxError::SwitchingLocked {
@@ -432,6 +588,9 @@ pub async fn run_mux_actor(
             MuxActorCommand::ConnectAmplifier { channel } => {
                 state.amp_tx = Some(channel.command_tx);
                 state.amp_meta = Some(channel.meta.clone());
+                // Reset codec and emulated state for new connection
+                state.amp_codec = None;
+                state.amp_emulated = AmplifierEmulatedState::default();
 
                 let _ = event_tx
                     .send(MuxEvent::AmpConnected { meta: channel.meta })
@@ -443,6 +602,8 @@ pub async fn run_mux_actor(
             MuxActorCommand::DisconnectAmplifier => {
                 state.amp_tx = None;
                 state.amp_meta = None;
+                state.amp_codec = None;
+                state.amp_emulated = AmplifierEmulatedState::default();
 
                 let _ = event_tx.send(MuxEvent::AmpDisconnected).await;
 
@@ -530,7 +691,60 @@ pub async fn run_mux_actor(
                 let protocol = state.multiplexer.amplifier_config().protocol;
 
                 // Emit traffic event
-                let _ = event_tx.send(MuxEvent::AmpDataIn { data, protocol }).await;
+                let _ = event_tx
+                    .send(MuxEvent::AmpDataIn {
+                        data: data.clone(),
+                        protocol,
+                    })
+                    .await;
+
+                // Create codec if not exists
+                if state.amp_codec.is_none() {
+                    state.amp_codec = Some(create_radio_codec(protocol));
+                }
+
+                // Parse commands from amplifier data
+                let commands: Vec<_> = if let Some(codec) = state.amp_codec.as_mut() {
+                    codec.push_bytes(&data);
+                    std::iter::from_fn(|| codec.next_command()).collect()
+                } else {
+                    Vec::new()
+                };
+
+                // Process each command from the amplifier
+                for cmd in commands {
+                    debug!("Amp sent command: {:?}", cmd);
+
+                    if cmd.is_query() {
+                        // Respond to queries from cached state
+                        if let Some(response) = handle_amp_query(&state, &cmd) {
+                            debug!("Responding to amp query {:?} with {:?}", cmd, response);
+                            send_to_amp(&state, &event_tx, response).await;
+                        } else {
+                            debug!("No cached state to respond to amp query {:?}", cmd);
+                        }
+                    } else if let RadioCommand::EnableAutoInfo { enabled } = cmd {
+                        // Handle auto-info enable/disable
+                        state.amp_emulated.auto_info_enabled = enabled;
+                        debug!("Amp auto-info mode set to {}", enabled);
+
+                        // If auto-info just enabled, send current state
+                        if enabled {
+                            if let Some(hz) = state.amp_emulated.frequency_hz {
+                                send_to_amp(
+                                    &state,
+                                    &event_tx,
+                                    RadioCommand::FrequencyReport { hz },
+                                )
+                                .await;
+                            }
+                            if let Some(mode) = state.amp_emulated.mode {
+                                send_to_amp(&state, &event_tx, RadioCommand::ModeReport { mode })
+                                    .await;
+                            }
+                        }
+                    }
+                }
             }
 
             MuxActorCommand::Shutdown => {

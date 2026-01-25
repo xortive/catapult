@@ -111,3 +111,29 @@ pub trait EncodeCommand {
     /// Encode this command to its wire format
     fn encode(&self) -> Vec<u8>;
 }
+
+/// Object-safe trait for codecs that parse raw bytes into [`RadioCommand`]s
+///
+/// Unlike [`ProtocolCodec`], this trait returns the normalized `RadioCommand`
+/// directly, making it object-safe and usable as `Box<dyn RadioCodec>`.
+pub trait RadioCodec: Send + Sync {
+    /// Push raw bytes into the codec's buffer
+    fn push_bytes(&mut self, data: &[u8]);
+
+    /// Try to extract the next complete command from the buffer
+    fn next_command(&mut self) -> Option<RadioCommand>;
+
+    /// Clear the internal buffer
+    fn clear(&mut self);
+}
+
+/// Create a codec for the given protocol
+pub fn create_radio_codec(protocol: Protocol) -> Box<dyn RadioCodec> {
+    match protocol {
+        Protocol::Kenwood | Protocol::Elecraft | Protocol::FlexRadio => {
+            Box::new(kenwood::KenwoodCodec::new())
+        }
+        Protocol::IcomCIV => Box::new(icom::CivCodec::new()),
+        Protocol::Yaesu | Protocol::YaesuAscii => Box::new(yaesu::YaesuCodec::new()),
+    }
+}

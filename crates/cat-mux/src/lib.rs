@@ -41,7 +41,6 @@
 pub mod actor;
 pub mod amplifier;
 pub mod channel;
-pub mod codec;
 pub mod engine;
 pub mod error;
 pub mod events;
@@ -58,14 +57,11 @@ pub use amplifier::{
 };
 pub use channel::{RadioChannelMeta, RadioType};
 
-// Re-export codec types
-pub use codec::ProtocolCodecBox;
-
 // Re-export event types
 pub use events::MuxEvent;
 
 // Re-export engine types
 pub use engine::{Multiplexer, MultiplexerConfig};
 pub use error::MuxError;
-pub use state::{AmplifierConfig, RadioHandle, RadioState, SwitchingMode};
+pub use state::{AmplifierConfig, AmplifierEmulatedState, RadioHandle, RadioState, SwitchingMode};
 pub use translation::{ProtocolTranslator, TranslationConfig};

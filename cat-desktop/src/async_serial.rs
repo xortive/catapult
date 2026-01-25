@@ -20,11 +20,11 @@ use std::sync::mpsc::Sender;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use cat_mux::{MuxActorCommand, ProtocolCodecBox, RadioHandle};
+use cat_mux::{MuxActorCommand, RadioHandle};
 use cat_protocol::{
-    elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
-    yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand, Protocol, RadioCommand,
-    RadioDatabase,
+    create_radio_codec, elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand,
+    kenwood::KenwoodCommand, yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand,
+    FromRadioCommand, Protocol, RadioCodec, RadioCommand, RadioDatabase,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::mpsc as tokio_mpsc;
@@ -137,10 +137,11 @@ where
             Protocol::IcomCIV => {
                 let addr = self.civ_address.unwrap_or(0x94);
                 CivCommand::from_radio_command(cmd).map(|c| {
-                    CivCommand::new(addr, cat_protocol::icom::CONTROLLER_ADDR, c.command).encode()
+                    CivCommand::new(cat_protocol::icom::CONTROLLER_ADDR, addr, c.command).encode()
                 })
             }
-            Protocol::Yaesu | Protocol::YaesuAscii => None,
+            Protocol::Yaesu => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::YaesuAscii => YaesuAsciiCommand::from_radio_command(cmd).map(|c| c.encode()),
         }
     }
 
@@ -330,12 +331,17 @@ where
                             if e.kind() == ErrorKind::WouldBlock {
                                 continue;
                             }
+                            // ConnectionAborted means the virtual radio channel was closed - expected behavior
+                            if e.kind() == ErrorKind::ConnectionAborted {
+                                debug!("Virtual radio channel closed for {:?}", self.handle);
+                                break;
+                            }
                             warn!("Read error on {:?}: {}", self.handle, e);
                             let _ = self.tx.send(BackgroundMessage::IoError {
                                 source: format!("Radio {:?}", self.handle),
                                 message: format!("Read error: {}", e),
                             });
-                            break; // Exit loop on error
+                            break;
                         }
                         Err(_) => {} // Timeout, continue
                     }
@@ -367,7 +373,7 @@ pub struct VirtualRadioIo {
     /// Sender for parsed commands going to simulation
     cmd_tx: tokio_mpsc::Sender<RadioCommand>,
     /// Protocol codec for parsing raw bytes into commands
-    codec: ProtocolCodecBox,
+    codec: Box<dyn RadioCodec>,
 }
 
 impl VirtualRadioIo {
@@ -390,7 +396,7 @@ impl VirtualRadioIo {
             read_buffer: VecDeque::new(),
             sim_rx,
             cmd_tx,
-            codec: ProtocolCodecBox::new(protocol),
+            codec: create_radio_codec(protocol),
         };
 
         (io, sim_tx, cmd_rx)

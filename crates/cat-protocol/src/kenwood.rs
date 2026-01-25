@@ -19,7 +19,7 @@
 
 use crate::command::{OperatingMode, RadioCommand, Vfo};
 use crate::error::ParseError;
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
+use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCodec, ToRadioCommand};
 
 /// Maximum command length (reasonable limit to prevent buffer overflow)
 const MAX_COMMAND_LEN: usize = 64;
@@ -462,9 +462,24 @@ pub fn is_valid_id_response(data: &[u8]) -> bool {
     }
 }
 
+impl RadioCodec for KenwoodCodec {
+    fn push_bytes(&mut self, data: &[u8]) {
+        ProtocolCodec::push_bytes(self, data);
+    }
+
+    fn next_command(&mut self) -> Option<RadioCommand> {
+        ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_command())
+    }
+
+    fn clear(&mut self) {
+        ProtocolCodec::clear(self);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{KenwoodCodec, KenwoodCommand};
+    use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCommand, ToRadioCommand};
 
     #[test]
     fn test_parse_frequency() {
