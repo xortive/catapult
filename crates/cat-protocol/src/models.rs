@@ -5,9 +5,9 @@
 
 use crate::{OperatingMode, Protocol};
 
-/// Capabilities of a specific radio model (static version for database)
+/// Capabilities of a specific radio model (internal static version for database)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RadioCapabilitiesStatic {
+struct RadioCapabilitiesStatic {
     /// Supported operating modes (as a slice)
     pub modes: &'static [OperatingMode],
     /// Minimum frequency in Hz
@@ -84,9 +84,9 @@ impl Default for RadioCapabilities {
     }
 }
 
-/// Information about a specific radio model (static version)
+/// Information about a specific radio model (internal static version)
 #[derive(Debug, Clone, Copy)]
-pub struct RadioModelStatic {
+struct RadioModelStatic {
     /// Manufacturer name
     pub manufacturer: &'static str,
     /// Model name/number
@@ -127,9 +127,9 @@ impl From<&RadioModelStatic> for RadioModel {
     }
 }
 
-/// Protocol-specific radio identifier (static version)
+/// Protocol-specific radio identifier (internal static version)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolIdStatic {
+enum ProtocolIdStatic {
     /// Icom CI-V address (0x00-0xFF)
     CivAddress(u8),
     /// Kenwood ID response code (e.g., "021" for TS-990S)

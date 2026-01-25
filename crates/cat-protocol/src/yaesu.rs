@@ -21,7 +21,7 @@
 
 use crate::command::{OperatingMode, RadioCommand, Vfo};
 use crate::error::ParseError;
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCodec, ToRadioCommand};
+use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
 
 /// Standard Yaesu command length
 pub const COMMAND_LEN: usize = 5;
@@ -457,19 +457,7 @@ pub fn probe_response_len() -> usize {
     5 // Frequency (4 bytes) + Mode (1 byte)
 }
 
-impl RadioCodec for YaesuCodec {
-    fn push_bytes(&mut self, data: &[u8]) {
-        ProtocolCodec::push_bytes(self, data);
-    }
-
-    fn next_command(&mut self) -> Option<RadioCommand> {
-        ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_command())
-    }
-
-    fn clear(&mut self) {
-        ProtocolCodec::clear(self);
-    }
-}
+crate::impl_radio_codec!(YaesuCodec);
 
 #[cfg(test)]
 mod tests {

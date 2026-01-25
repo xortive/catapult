@@ -15,7 +15,7 @@
 
 use crate::command::{OperatingMode, RadioCommand, Vfo};
 use crate::error::ParseError;
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCodec, ToRadioCommand};
+use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
 
 /// Maximum command length (reasonable limit to prevent buffer overflow)
 const MAX_COMMAND_LEN: usize = 64;
@@ -474,19 +474,7 @@ impl FromRadioCommand for YaesuAsciiCommand {
     }
 }
 
-impl RadioCodec for YaesuAsciiCodec {
-    fn push_bytes(&mut self, data: &[u8]) {
-        ProtocolCodec::push_bytes(self, data);
-    }
-
-    fn next_command(&mut self) -> Option<RadioCommand> {
-        ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_command())
-    }
-
-    fn clear(&mut self) {
-        ProtocolCodec::clear(self);
-    }
-}
+crate::impl_radio_codec!(YaesuAsciiCodec);
 
 impl EncodeCommand for YaesuAsciiCommand {
     fn encode(&self) -> Vec<u8> {

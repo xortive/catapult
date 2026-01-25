@@ -127,6 +127,27 @@ pub trait RadioCodec: Send + Sync {
     fn clear(&mut self);
 }
 
+/// Implements [`RadioCodec`] for a type that already implements [`ProtocolCodec`]
+/// with a command type implementing [`ToRadioCommand`].
+#[macro_export]
+macro_rules! impl_radio_codec {
+    ($codec:ty) => {
+        impl $crate::RadioCodec for $codec {
+            fn push_bytes(&mut self, data: &[u8]) {
+                $crate::ProtocolCodec::push_bytes(self, data);
+            }
+
+            fn next_command(&mut self) -> Option<$crate::RadioCommand> {
+                $crate::ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_command())
+            }
+
+            fn clear(&mut self) {
+                $crate::ProtocolCodec::clear(self);
+            }
+        }
+    };
+}
+
 /// Create a codec for the given protocol
 pub fn create_radio_codec(protocol: Protocol) -> Box<dyn RadioCodec> {
     match protocol {
