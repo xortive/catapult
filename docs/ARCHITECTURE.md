@@ -163,12 +163,6 @@ self.rt_handle.spawn(async move {
 
 **Purpose:** Waits for `RadioHandle` from mux actor via oneshot channel, then forwards to the app via `BackgroundMessage`.
 
-### 5. Port Scanner Task (On-demand)
-
-**Spawned in:** `detect_new_radios()`
-
-**Purpose:** Enumerates serial ports, probes for radios, returns `Vec<DetectedRadio>`.
-
 ---
 
 ## Channel Architecture

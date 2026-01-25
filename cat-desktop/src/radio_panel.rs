@@ -1,6 +1,5 @@
 //! Radio panel UI component
 
-use cat_detect::DetectedRadio;
 use cat_mux::RadioHandle;
 use cat_protocol::{OperatingMode, Protocol};
 
@@ -56,25 +55,6 @@ pub struct RadioPanel {
 }
 
 impl RadioPanel {
-    /// Create a new radio panel from a detected radio (COM port)
-    pub fn new(handle: Option<RadioHandle>, detected: &DetectedRadio) -> Self {
-        Self {
-            handle,
-            name: detected.model_name(),
-            port: detected.port.clone(),
-            protocol: detected.protocol,
-            baud_rate: detected.baud_rate,
-            civ_address: detected.civ_address,
-            expanded: false,
-            connection_type: RadioConnectionType::ComPort,
-            sim_radio_id: None,
-            unavailable: false,
-            frequency_hz: None,
-            mode: None,
-            ptt: false,
-        }
-    }
-
     /// Create a new radio panel from a saved configuration
     pub fn new_from_config(handle: Option<RadioHandle>, config: &ConfiguredRadio) -> Self {
         Self {

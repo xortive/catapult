@@ -96,8 +96,6 @@ mod level_serde {
 pub struct Settings {
     /// Lockout time in milliseconds
     pub lockout_ms: u64,
-    /// Auto-scan on startup
-    pub auto_scan: bool,
     /// Traffic monitor history size
     pub traffic_history_size: usize,
     /// Show hex in traffic monitor
@@ -129,7 +127,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             lockout_ms: 500,
-            auto_scan: false,
             traffic_history_size: 1000,
             show_hex: true,
             show_decoded: true,
@@ -212,11 +209,6 @@ impl Settings {
                 // Lockout time
                 ui.label("Lockout time (ms):");
                 ui.add(egui::DragValue::new(&mut self.lockout_ms).range(0..=5000));
-                ui.end_row();
-
-                // Auto-scan
-                ui.label("Auto-scan on startup:");
-                ui.checkbox(&mut self.auto_scan, "");
                 ui.end_row();
 
                 // Traffic history

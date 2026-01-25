@@ -1,19 +1,12 @@
 [package]
 name = "cat-detect"
-description = "Auto-detection and identification of CAT-capable amateur radio transceivers"
+description = "Serial port enumeration for CAT-capable amateur radio transceivers"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
-cat-protocol.workspace = true
-tokio.workspace = true
-tokio-serial.workspace = true
 serialport.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-serde = { workspace = true, features = ["derive"] }
-
-[dev-dependencies]
-proptest.workspace = true

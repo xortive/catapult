@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
-use cat_detect::{suggest_protocol_for_port, DetectedRadio, PortScanner, SerialPortInfo};
+use cat_detect::{PortScanner, SerialPortInfo};
 use cat_mux::{
     run_mux_actor, AmplifierChannel, AmplifierChannelMeta, MuxActorCommand, MuxEvent,
     RadioChannelMeta, RadioHandle, RadioStateSummary, SwitchingMode,
@@ -58,10 +58,6 @@ fn mode_name(mode: OperatingMode) -> &'static str {
 
 /// Messages from background tasks
 pub enum BackgroundMessage {
-    /// Scan completed
-    ScanComplete(Vec<DetectedRadio>),
-    /// Error occurred
-    Error(String),
     /// I/O error from radio or amplifier
     IoError { source: String, message: String },
     /// Radio registered with mux actor (handle assigned)
@@ -115,18 +111,12 @@ pub struct CatapultApp {
     scanner: PortScanner,
     /// Available serial ports
     available_ports: Vec<SerialPortInfo>,
-    /// Detected radios from last scan
-    detected_radios: Vec<DetectedRadio>,
     /// Radio panels for UI (unified list of COM and Virtual radios)
     radio_panels: Vec<RadioPanel>,
     /// Async radio task command senders (keyed by radio_id) -> (port_name, cmd_sender)
     radio_task_senders: HashMap<u32, (String, tokio_mpsc::Sender<RadioTaskCommand>)>,
     /// Traffic monitor
     traffic_monitor: TrafficMonitor,
-    /// Is scanning in progress
-    scanning: bool,
-    /// Last scan time
-    last_scan: Option<Instant>,
     /// Status message
     status_message: Option<(String, Instant)>,
     /// Show settings panel
@@ -232,11 +222,8 @@ impl CatapultApp {
             ),
             scanner: PortScanner::new(),
             available_ports: Vec::new(),
-            detected_radios: Vec::new(),
             radio_panels: Vec::new(),
             radio_task_senders: HashMap::new(),
-            scanning: false,
-            last_scan: None,
             status_message: None,
             show_settings: false,
             show_traffic_monitor: true,
@@ -286,19 +273,13 @@ impl CatapultApp {
         // Restore configured COM radios from settings
         app.restore_configured_radios();
 
-        // Auto-scan on startup if enabled
-        if app.settings.auto_scan {
-            app.detect_new_radios();
-        }
-
         app
     }
 
     /// Refresh available ports (sync version for initialization)
     fn refresh_ports(&mut self) {
         match self.scanner.enumerate_ports() {
-            Ok(mut ports) => {
-                PortScanner::sort_by_classification(&mut ports);
+            Ok(ports) => {
                 self.available_ports = ports;
                 self.validate_port_selections();
             }
@@ -679,10 +660,10 @@ impl CatapultApp {
             .collect()
     }
 
-    /// Format a port label with classification hint
+    /// Format a port label with product description
     fn format_port_label(port: &SerialPortInfo) -> String {
-        match &port.classification_hint {
-            Some(hint) => format!("{} ({})", port.port, hint),
+        match &port.product {
+            Some(product) => format!("{} ({})", port.port, product),
             None => port.port.clone(),
         }
     }
@@ -708,63 +689,6 @@ impl CatapultApp {
     fn process_messages(&mut self) {
         while let Ok(msg) = self.bg_rx.try_recv() {
             match msg {
-                BackgroundMessage::ScanComplete(radios) => {
-                    self.scanning = false;
-                    self.last_scan = Some(Instant::now());
-
-                    // Get existing ports to filter out duplicates
-                    let existing_ports: std::collections::HashSet<_> = self
-                        .radio_panels
-                        .iter()
-                        .filter(|p| p.connection_type == RadioConnectionType::ComPort)
-                        .map(|p| p.port.clone())
-                        .collect();
-
-                    // Only add radios on ports that aren't already configured
-                    let mut new_count = 0;
-                    for radio in &radios {
-                        if existing_ports.contains(&radio.port) {
-                            tracing::debug!(
-                                source = "Scanner",
-                                "Skipping {} on {} - already configured",
-                                radio.model_name(),
-                                radio.port
-                            );
-                            continue;
-                        }
-
-                        let config = ComRadioConfig {
-                            port: radio.port.clone(),
-                            protocol: radio.protocol,
-                            baud_rate: radio.baud_rate,
-                            civ_address: radio.civ_address,
-                            model_name: radio.model_name(),
-                            query_initial_state: false, // Scanner already detected state
-                        };
-
-                        // Create RadioPanel with no handle (will be updated when handle arrives)
-                        self.radio_panels.push(RadioPanel::new(None, radio));
-                        let panel_index = self.radio_panels.len() - 1;
-
-                        // Register with mux actor (handle will arrive via RadioRegistered)
-                        let _correlation_id = self.register_com_radio(config, panel_index);
-                        new_count += 1;
-                    }
-
-                    self.detected_radios = radios;
-
-                    // Save newly detected radios to config and report summary
-                    if new_count > 0 {
-                        self.save_configured_radios();
-                        self.set_status(format!("Found {} new radio(s)", new_count));
-                    } else {
-                        self.set_status("No new radios found".into());
-                    }
-                }
-                BackgroundMessage::Error(e) => {
-                    self.scanning = false;
-                    self.report_err("System", e);
-                }
                 // Note: Traffic is now handled via MuxEvent in process_mux_events()
                 BackgroundMessage::IoError { source, message } => {
                     self.report_err(&source, message);
@@ -1018,12 +942,6 @@ impl CatapultApp {
                 self.show_settings = !self.show_settings;
             }
 
-            if self.scanning {
-                ui.separator();
-                ui.spinner();
-                ui.label("Scanning...");
-            }
-
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Active radio indicator
                 let has_active = self.active_radio.is_some();
@@ -1169,33 +1087,18 @@ impl CatapultApp {
                                 .unwrap_or_else(|| self.add_radio_port.clone())
                         };
 
-                        // Track if we should suggest a protocol after the dropdown
-                        let mut suggest_for_port: Option<(Option<u16>, String)> = None;
-
                         egui::ComboBox::from_id_salt("add_radio_port")
                             .selected_text(&selected_label)
                             .width(160.0)
                             .show_ui(ui, |ui| {
-                                for (port_name, label, vid) in &available_ports {
-                                    if ui
-                                        .selectable_value(
-                                            &mut self.add_radio_port,
-                                            port_name.clone(),
-                                            label,
-                                        )
-                                        .changed()
-                                    {
-                                        suggest_for_port = Some((*vid, port_name.clone()));
-                                    }
+                                for (port_name, label, _vid) in &available_ports {
+                                    ui.selectable_value(
+                                        &mut self.add_radio_port,
+                                        port_name.clone(),
+                                        label,
+                                    );
                                 }
                             });
-
-                        // Auto-suggest protocol after dropdown closes (outside closure)
-                        if let Some((vid, port_name)) = suggest_for_port {
-                            if let Some(protocol) = suggest_protocol_for_port(vid, &port_name) {
-                                self.add_radio_protocol = protocol;
-                            }
-                        }
 
                         // Protocol dropdown
                         ui.horizontal(|ui| {
@@ -1285,18 +1188,11 @@ impl CatapultApp {
                         }
                     }
                 });
-
-                // Scan for radios button
-                if self.scanning {
-                    ui.spinner();
-                } else if ui.button("↻").on_hover_text("Scan for radios").clicked() {
-                    self.detect_new_radios();
-                }
             });
         });
 
         if self.radio_panels.is_empty() {
-            ui.label("No radios. Click '+' to add or '↻' to scan for radios.");
+            ui.label("No radios. Click '+' to add a radio.");
             return;
         }
 
@@ -1906,37 +1802,6 @@ impl CatapultApp {
         }
     }
 
-    /// Detect new radios (without clearing existing configured radios)
-    fn detect_new_radios(&mut self) {
-        self.scanning = true;
-        self.set_status("Scanning for radios...".into());
-
-        // Spawn background thread for async scanning
-        let tx = self.bg_tx.clone();
-        std::thread::spawn(move || {
-            // Create a tokio runtime for the async scan
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let _ = tx.send(BackgroundMessage::Error(format!(
-                        "Failed to create runtime: {}",
-                        e
-                    )));
-                    return;
-                }
-            };
-
-            // Run the scan
-            let result = rt.block_on(async {
-                let mut scanner = PortScanner::new();
-                scanner.scan().await
-            });
-
-            // Send results back
-            let _ = tx.send(BackgroundMessage::ScanComplete(result));
-        });
-    }
-
     /// Connect to the amplifier (dispatches to COM or virtual based on connection type)
     fn connect_amplifier(&mut self) {
         match self.amp_connection_type {
@@ -2392,7 +2257,7 @@ impl eframe::App for CatapultApp {
         let has_com_radios = !self.radio_task_senders.is_empty();
         let has_amplifier = self.amp_data_tx.is_some();
 
-        if self.scanning || has_virtual_radios || has_com_radios || has_amplifier {
+        if has_virtual_radios || has_com_radios || has_amplifier {
             ctx.request_repaint();
         }
     }

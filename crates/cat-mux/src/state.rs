@@ -82,13 +82,6 @@ impl RadioState {
         }
     }
 
-    /// Update from a detected radio
-    pub fn update_from_detection(&mut self, detected: &cat_detect::DetectedRadio) {
-        self.protocol = detected.protocol;
-        self.model = detected.model.clone();
-        self.civ_address = detected.civ_address;
-    }
-
     /// Update activity timestamp
     pub fn touch(&mut self) {
         self.last_activity = Instant::now();
@@ -189,4 +182,21 @@ impl Default for AmplifierConfig {
             civ_address: None,
         }
     }
+}
+
+/// State the amplifier believes the radio is in
+///
+/// This tracks what the mux has told the amplifier, allowing us to:
+/// - Respond to amplifier queries from cached state
+/// - Send unsolicited updates when auto-info is enabled
+#[derive(Debug, Clone, Default)]
+pub struct AmplifierEmulatedState {
+    /// Frequency in Hz that amp believes radio is on
+    pub frequency_hz: Option<u64>,
+    /// Operating mode that amp believes radio is in
+    pub mode: Option<OperatingMode>,
+    /// PTT state that amp believes radio is in
+    pub ptt: bool,
+    /// Whether auto-info mode is enabled (amp wants unsolicited updates)
+    pub auto_info_enabled: bool,
 }
