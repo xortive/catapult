@@ -9,24 +9,20 @@
 //!
 //! ## Virtual Radio Support
 //!
-//! Virtual radios use `VirtualRadioIo` which implements `AsyncRead + AsyncWrite`:
-//! - `AsyncRead` receives data from simulation (SimulationEvent::RadioOutput)
-//! - `AsyncWrite` parses raw bytes back to RadioCommand and sends to simulation
+//! Virtual radios use `DuplexStream` from `tokio::io::duplex()` connected to
+//! a virtual radio actor task. See `virtual_radio_task.rs` for the actor.
 
-use std::collections::VecDeque;
-use std::io::{self, ErrorKind};
-use std::pin::Pin;
+use std::io::ErrorKind;
 use std::sync::mpsc::Sender;
-use std::task::{Context, Poll};
 use std::time::Duration;
 
 use cat_mux::{MuxActorCommand, RadioHandle};
 use cat_protocol::{
-    create_radio_codec, elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand,
-    kenwood::KenwoodCommand, yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand,
-    FromRadioCommand, Protocol, RadioCodec, RadioCommand, RadioDatabase,
+    elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
+    yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand, Protocol,
+    RadioCommand, RadioDatabase,
 };
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tracing::{debug, info, warn};
@@ -43,6 +39,7 @@ pub enum RadioTaskCommand {
 /// Async radio connection that runs in a spawned task
 ///
 /// Generic over the I/O type to support both real serial ports and virtual radios.
+/// For virtual radios, use `DuplexStream` from `tokio::io::duplex()`.
 pub struct AsyncRadioConnection<T> {
     handle: RadioHandle,
     port_name: String,
@@ -86,6 +83,8 @@ where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
     /// Create a new async radio connection with a custom I/O type
+    ///
+    /// For virtual radios, use `DuplexStream` from `tokio::io::duplex()`.
     pub fn new(
         handle: RadioHandle,
         name: String,
@@ -353,136 +352,5 @@ where
         let _ = self.tx.send(BackgroundMessage::RadioDisconnected {
             handle: self.handle,
         });
-    }
-}
-
-// ============================================================================
-// Virtual Radio I/O
-// ============================================================================
-
-/// I/O adapter for virtual radios
-///
-/// This struct bridges the simulation to `AsyncRadioConnection`:
-/// - Implements `AsyncRead` to receive data from simulation (RadioOutput events)
-/// - Implements `AsyncWrite` to parse raw bytes and send commands to simulation
-pub struct VirtualRadioIo {
-    /// Buffer for incoming data from simulation (read by AsyncRadioConnection)
-    read_buffer: VecDeque<u8>,
-    /// Receiver for simulation output data
-    sim_rx: tokio_mpsc::Receiver<Vec<u8>>,
-    /// Sender for parsed commands going to simulation
-    cmd_tx: tokio_mpsc::Sender<RadioCommand>,
-    /// Protocol codec for parsing raw bytes into commands
-    codec: Box<dyn RadioCodec>,
-}
-
-impl VirtualRadioIo {
-    /// Create a new VirtualRadioIo
-    ///
-    /// Returns (VirtualRadioIo, sim_tx, cmd_rx) where:
-    /// - sim_tx: Send simulation output (RadioOutput data) to be read by AsyncRadioConnection
-    /// - cmd_rx: Receive parsed commands to forward to simulation
-    pub fn new(
-        protocol: Protocol,
-    ) -> (
-        Self,
-        tokio_mpsc::Sender<Vec<u8>>,
-        tokio_mpsc::Receiver<RadioCommand>,
-    ) {
-        let (sim_tx, sim_rx) = tokio_mpsc::channel(64);
-        let (cmd_tx, cmd_rx) = tokio_mpsc::channel(64);
-
-        let io = Self {
-            read_buffer: VecDeque::new(),
-            sim_rx,
-            cmd_tx,
-            codec: create_radio_codec(protocol),
-        };
-
-        (io, sim_tx, cmd_rx)
-    }
-}
-
-impl AsyncRead for VirtualRadioIo {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        // First, try to drain from our internal buffer
-        if !self.read_buffer.is_empty() {
-            let to_read = buf.remaining().min(self.read_buffer.len());
-            for _ in 0..to_read {
-                if let Some(byte) = self.read_buffer.pop_front() {
-                    buf.put_slice(&[byte]);
-                }
-            }
-            return Poll::Ready(Ok(()));
-        }
-
-        // Try to receive more data from simulation
-        match self.sim_rx.poll_recv(cx) {
-            Poll::Ready(Some(data)) => {
-                // Add to our buffer
-                self.read_buffer.extend(data);
-
-                // Now read as much as we can
-                let to_read = buf.remaining().min(self.read_buffer.len());
-                for _ in 0..to_read {
-                    if let Some(byte) = self.read_buffer.pop_front() {
-                        buf.put_slice(&[byte]);
-                    }
-                }
-                Poll::Ready(Ok(()))
-            }
-            Poll::Ready(None) => {
-                // Channel closed
-                Poll::Ready(Err(io::Error::new(
-                    ErrorKind::ConnectionAborted,
-                    "simulation channel closed",
-                )))
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl AsyncWrite for VirtualRadioIo {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        // Parse the raw bytes into commands using the codec
-        self.codec.push_bytes(buf);
-
-        // Extract all parsed commands and send to simulation
-        while let Some(cmd) = self.codec.next_command() {
-            // Try to send the command (non-blocking)
-            match self.cmd_tx.try_send(cmd) {
-                Ok(()) => {}
-                Err(tokio_mpsc::error::TrySendError::Full(_)) => {
-                    // Channel is full - command is lost but we continue
-                    // This is a rare edge case and shouldn't happen with proper sizing
-                    tracing::warn!("Virtual radio command channel full, dropping command");
-                }
-                Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
-                    return Poll::Ready(Err(io::Error::new(
-                        ErrorKind::ConnectionAborted,
-                        "command channel closed",
-                    )));
-                }
-            }
-        }
-
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
     }
 }

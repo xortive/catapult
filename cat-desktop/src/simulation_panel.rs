@@ -1,13 +1,20 @@
 //! Simulation panel for testing without physical hardware
 //!
 //! Provides UI controls to manage multiple virtual radios.
+//! After a radio is added, it is taken by the virtual radio actor task.
+//! State updates come from mux events, and commands are sent via channels.
 
-// Allow unused code - panel UI is implemented but not yet wired into the main app
+// Allow dead_code - UI code is not yet fully wired into main app
 #![allow(dead_code)]
 
-use cat_protocol::{OperatingMode, Protocol, RadioDatabase};
+use std::collections::HashMap;
+
+use cat_protocol::{OperatingMode, Protocol, ProtocolId, RadioDatabase, RadioModel};
 use cat_sim::{SimulationContext, SimulationEvent};
 use egui::{Color32, RichText, Ui};
+use tokio::sync::mpsc;
+
+use crate::virtual_radio_task::VirtualRadioCommand;
 
 /// Common amateur radio band presets (in Hz)
 const BAND_PRESETS: &[(&str, u64)] = &[
@@ -36,9 +43,40 @@ const MODES: &[OperatingMode] = &[
     OperatingMode::Rtty,
 ];
 
+/// State of a virtual radio for display purposes
+#[derive(Debug, Clone)]
+pub struct VirtualRadioDisplayState {
+    /// Display name
+    pub name: String,
+    /// Protocol used
+    pub protocol: Protocol,
+    /// Radio model (if known)
+    pub model: Option<RadioModel>,
+    /// Current frequency in Hz
+    pub frequency_hz: u64,
+    /// Current operating mode
+    pub mode: OperatingMode,
+    /// PTT active state
+    pub ptt: bool,
+}
+
+impl VirtualRadioDisplayState {
+    /// Create a new display state with default values
+    pub fn new(name: String, protocol: Protocol) -> Self {
+        Self {
+            name,
+            protocol,
+            model: RadioDatabase::default_for_protocol(protocol),
+            frequency_hz: 14_250_000, // 20m default
+            mode: OperatingMode::Usb,
+            ptt: false,
+        }
+    }
+}
+
 /// Simulation panel state
 pub struct SimulationPanel {
-    /// Simulation context managing virtual radios
+    /// Simulation context for lifecycle management (add/remove)
     context: SimulationContext,
     /// UI state for the new radio form
     new_radio_name: String,
@@ -50,6 +88,10 @@ pub struct SimulationPanel {
     frequency_input: String,
     /// Whether the panel is expanded
     expanded: bool,
+    /// Display state for each virtual radio (keyed by sim_id)
+    radio_states: HashMap<String, VirtualRadioDisplayState>,
+    /// Command senders for each virtual radio (keyed by sim_id)
+    radio_commands: HashMap<String, mpsc::Sender<VirtualRadioCommand>>,
 }
 
 impl Default for SimulationPanel {
@@ -68,6 +110,8 @@ impl SimulationPanel {
             selected_radio: None,
             frequency_input: String::new(),
             expanded: true,
+            radio_states: HashMap::new(),
+            radio_commands: HashMap::new(),
         }
     }
 
@@ -84,6 +128,99 @@ impl SimulationPanel {
     /// Drain all pending simulation events
     pub fn drain_events(&mut self) -> Vec<SimulationEvent> {
         self.context.drain_events()
+    }
+
+    /// Register a virtual radio after it has been taken from context
+    ///
+    /// Called by app.rs after handling RadioAdded event.
+    pub fn register_radio(
+        &mut self,
+        sim_id: String,
+        name: String,
+        protocol: Protocol,
+        cmd_tx: mpsc::Sender<VirtualRadioCommand>,
+    ) {
+        self.radio_states
+            .insert(sim_id.clone(), VirtualRadioDisplayState::new(name, protocol));
+        self.radio_commands.insert(sim_id, cmd_tx);
+    }
+
+    /// Unregister a virtual radio
+    ///
+    /// Called by app.rs after handling RadioRemoved event.
+    pub fn unregister_radio(&mut self, sim_id: &str) {
+        self.radio_states.remove(sim_id);
+        self.radio_commands.remove(sim_id);
+        if self.selected_radio.as_deref() == Some(sim_id) {
+            self.selected_radio = None;
+        }
+    }
+
+    /// Update a radio's display state from mux events
+    pub fn update_radio_state(
+        &mut self,
+        sim_id: &str,
+        frequency_hz: Option<u64>,
+        mode: Option<OperatingMode>,
+        ptt: Option<bool>,
+    ) {
+        if let Some(state) = self.radio_states.get_mut(sim_id) {
+            if let Some(hz) = frequency_hz {
+                state.frequency_hz = hz;
+            }
+            if let Some(m) = mode {
+                state.mode = m;
+            }
+            if let Some(p) = ptt {
+                state.ptt = p;
+            }
+        }
+    }
+
+    /// Update a radio's model
+    pub fn update_radio_model(&mut self, sim_id: &str, model: Option<RadioModel>) {
+        if let Some(state) = self.radio_states.get_mut(sim_id) {
+            state.model = model;
+        }
+    }
+
+    /// Get the number of registered virtual radios
+    pub fn radio_count(&self) -> usize {
+        self.radio_states.len()
+    }
+
+    /// Check if a sim_id is a registered virtual radio
+    pub fn has_radio(&self, sim_id: &str) -> bool {
+        self.radio_states.contains_key(sim_id)
+    }
+
+    /// Get radio configurations for saving to settings
+    ///
+    /// Returns an iterator of VirtualRadioConfig from the current display state.
+    pub fn get_radio_configs(&self) -> impl Iterator<Item = cat_sim::VirtualRadioConfig> + '_ {
+        self.radio_states.iter().map(|(_, state)| cat_sim::VirtualRadioConfig {
+            id: state.name.clone(),
+            protocol: state.protocol,
+            model_name: state.model.as_ref().map(|m| m.model.clone()),
+            initial_frequency_hz: state.frequency_hz,
+            initial_mode: state.mode,
+            civ_address: state.model.as_ref().and_then(|m| {
+                if let ProtocolId::CivAddress(addr) = &m.protocol_id {
+                    Some(*addr)
+                } else {
+                    None
+                }
+            }),
+        })
+    }
+
+    /// Send a command to a virtual radio
+    ///
+    /// This can be called from app.rs for the radio panel UI controls.
+    pub fn send_command(&self, sim_id: &str, cmd: VirtualRadioCommand) {
+        if let Some(tx) = self.radio_commands.get(sim_id) {
+            let _ = tx.try_send(cmd);
+        }
     }
 
     /// Draw the simulation panel UI
@@ -104,7 +241,7 @@ impl SimulationPanel {
 
         if !self.expanded {
             // Show compact summary when collapsed
-            ui.label(format!("{} radios", self.context.radio_count()));
+            ui.label(format!("{} radios", self.radio_count()));
             return;
         }
 
@@ -146,7 +283,7 @@ impl SimulationPanel {
 
             if ui.button("+ Add").clicked() {
                 let name = if self.new_radio_name.is_empty() {
-                    format!("Radio {}", self.context.radio_count() + 1)
+                    format!("Radio {}", self.radio_count() + 1)
                 } else {
                     self.new_radio_name.clone()
                 };
@@ -161,7 +298,7 @@ impl SimulationPanel {
     fn draw_radios_section(&mut self, ui: &mut Ui) {
         ui.heading("Virtual Radios");
 
-        if self.context.radio_count() == 0 {
+        if self.radio_states.is_empty() {
             ui.label(
                 RichText::new("No virtual radios. Add one above.")
                     .color(Color32::GRAY)
@@ -172,17 +309,17 @@ impl SimulationPanel {
 
         // Collect radio info to avoid borrow issues
         let radio_infos: Vec<_> = self
-            .context
-            .radios()
-            .map(|(id, radio)| {
+            .radio_states
+            .iter()
+            .map(|(id, state)| {
                 (
                     id.clone(),
-                    radio.id().to_string(),
-                    radio.protocol(),
-                    radio.model().cloned(),
-                    radio.frequency_hz(),
-                    radio.mode(),
-                    radio.ptt(),
+                    state.name.clone(),
+                    state.protocol,
+                    state.model.clone(),
+                    state.frequency_hz,
+                    state.mode,
+                    state.ptt,
                 )
             })
             .collect();
@@ -252,7 +389,14 @@ impl SimulationPanel {
                                         )
                                         .clicked()
                                     {
-                                        self.context.set_radio_model(&id, Some(m.clone()));
+                                        self.send_command(
+                                            &id,
+                                            VirtualRadioCommand::SetModel(Some(m.clone())),
+                                        );
+                                        // Update local state immediately for responsive UI
+                                        if let Some(state) = self.radio_states.get_mut(&id) {
+                                            state.model = Some(m.clone());
+                                        }
                                     }
                                 }
                             });
@@ -262,7 +406,7 @@ impl SimulationPanel {
                     ui.horizontal_wrapped(|ui| {
                         for (band_name, freq) in BAND_PRESETS {
                             if ui.small_button(*band_name).clicked() {
-                                self.context.set_radio_frequency(&id, *freq);
+                                self.send_command(&id, VirtualRadioCommand::SetFrequency(*freq));
                                 self.frequency_input = format_frequency(*freq);
                             }
                         }
@@ -274,12 +418,12 @@ impl SimulationPanel {
                         let response = ui.text_edit_singleline(&mut self.frequency_input);
                         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             if let Some(hz) = parse_frequency(&self.frequency_input) {
-                                self.context.set_radio_frequency(&id, hz);
+                                self.send_command(&id, VirtualRadioCommand::SetFrequency(hz));
                             }
                         }
                         if ui.button("Set").clicked() {
                             if let Some(hz) = parse_frequency(&self.frequency_input) {
-                                self.context.set_radio_frequency(&id, hz);
+                                self.send_command(&id, VirtualRadioCommand::SetFrequency(hz));
                             }
                         }
                     });
@@ -296,7 +440,7 @@ impl SimulationPanel {
                         ] {
                             if ui.small_button(label).clicked() {
                                 let new_freq = (freq_hz as i64 + delta).max(0) as u64;
-                                self.context.set_radio_frequency(&id, new_freq);
+                                self.send_command(&id, VirtualRadioCommand::SetFrequency(new_freq));
                                 self.frequency_input = format_frequency(new_freq);
                             }
                         }
@@ -312,7 +456,7 @@ impl SimulationPanel {
                                 Color32::from_rgb(40, 40, 40)
                             });
                             if ui.add(button).clicked() {
-                                self.context.set_radio_mode(&id, m);
+                                self.send_command(&id, VirtualRadioCommand::SetMode(m));
                             }
                         }
                     });
@@ -326,7 +470,7 @@ impl SimulationPanel {
                                 Color32::from_rgb(50, 50, 50)
                             });
                         if ui.add(ptt_button).clicked() {
-                            self.context.set_radio_ptt(&id, !ptt);
+                            self.send_command(&id, VirtualRadioCommand::SetPtt(!ptt));
                         }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

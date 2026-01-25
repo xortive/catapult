@@ -11,6 +11,7 @@ mod radio_panel;
 mod settings;
 mod simulation_panel;
 mod traffic_monitor;
+mod virtual_radio_task;
 
 use std::sync::mpsc;
 use std::sync::Arc;
