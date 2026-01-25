@@ -1,8 +1,8 @@
 //! Async serial I/O handling for radio connections
 //!
 //! This module provides non-blocking async serial communication using tokio_serial.
-//! Each radio connection runs in its own spawned task, communicating with the UI
-//! thread via channels.
+//! Each radio connection runs in its own spawned task, communicating with the
+//! multiplexer via channels.
 //!
 //! Radio commands are sent directly to the multiplexer actor through mux_tx,
 //! ensuring that both real and virtual radios use the same code path.
@@ -10,13 +10,11 @@
 //! ## Virtual Radio Support
 //!
 //! Virtual radios use `DuplexStream` from `tokio::io::duplex()` connected to
-//! a virtual radio actor task. See `virtual_radio_task.rs` for the actor.
+//! a virtual radio actor task.
 
 use std::io::ErrorKind;
-use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-use cat_mux::{MuxActorCommand, RadioHandle};
 use cat_protocol::{
     elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
     yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand, Protocol,
@@ -27,7 +25,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tracing::{debug, info, warn};
 
-use crate::app::BackgroundMessage;
+use crate::{MuxActorCommand, MuxEvent, RadioHandle};
 
 /// Commands that can be sent to an async radio connection task
 #[derive(Debug)]
@@ -45,7 +43,7 @@ pub struct AsyncRadioConnection<T> {
     port_name: String,
     io: T,
     protocol: Protocol,
-    tx: Sender<BackgroundMessage>,
+    event_tx: tokio_mpsc::Sender<MuxEvent>,
     mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
     buffer: Vec<u8>,
     civ_address: Option<u8>,
@@ -58,7 +56,7 @@ impl AsyncRadioConnection<SerialStream> {
         port_name: &str,
         baud_rate: u32,
         protocol: Protocol,
-        tx: Sender<BackgroundMessage>,
+        event_tx: tokio_mpsc::Sender<MuxEvent>,
         mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
     ) -> Result<Self, tokio_serial::Error> {
         let stream = tokio_serial::new(port_name, baud_rate)
@@ -70,7 +68,7 @@ impl AsyncRadioConnection<SerialStream> {
             port_name: port_name.to_string(),
             io: stream,
             protocol,
-            tx,
+            event_tx,
             mux_tx,
             buffer: vec![0u8; 1024],
             civ_address: None,
@@ -90,7 +88,7 @@ where
         name: String,
         io: T,
         protocol: Protocol,
-        tx: Sender<BackgroundMessage>,
+        event_tx: tokio_mpsc::Sender<MuxEvent>,
         mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
     ) -> Self {
         Self {
@@ -98,7 +96,7 @@ where
             port_name: name,
             io,
             protocol,
-            tx,
+            event_tx,
             mux_tx,
             buffer: vec![0u8; 1024],
             civ_address: None,
@@ -336,10 +334,10 @@ where
                                 break;
                             }
                             warn!("Read error on {:?}: {}", self.handle, e);
-                            let _ = self.tx.send(BackgroundMessage::IoError {
+                            let _ = self.event_tx.send(MuxEvent::Error {
                                 source: format!("Radio {:?}", self.handle),
                                 message: format!("Read error: {}", e),
-                            });
+                            }).await;
                             break;
                         }
                         Err(_) => {} // Timeout, continue
@@ -349,8 +347,8 @@ where
         }
 
         info!("Read loop ended for radio {:?}", self.handle);
-        let _ = self.tx.send(BackgroundMessage::RadioDisconnected {
+        let _ = self.event_tx.send(MuxEvent::RadioDisconnected {
             handle: self.handle,
-        });
+        }).await;
     }
 }

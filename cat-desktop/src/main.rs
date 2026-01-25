@@ -3,9 +3,7 @@
 //! A desktop application for managing multiple amateur radio transceivers
 //! connected to a single amplifier via CAT protocol translation.
 
-mod amp_task;
 mod app;
-mod async_serial;
 mod diagnostics_layer;
 mod radio_panel;
 mod settings;

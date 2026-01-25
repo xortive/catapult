@@ -4,6 +4,7 @@
 //! without physical radio hardware. It includes:
 //!
 //! - **VirtualRadio**: Simulates a radio with protocol-accurate encoding
+//! - **VirtualAmplifier**: Simulates an amplifier that tracks frequency/mode state
 //!
 //! # Example
 //!
@@ -25,6 +26,8 @@
 //! }
 //! ```
 
+pub mod amplifier;
 pub mod radio;
 
+pub use amplifier::{VirtualAmplifier, VirtualAmplifierIo};
 pub use radio::{VirtualRadio, VirtualRadioConfig};

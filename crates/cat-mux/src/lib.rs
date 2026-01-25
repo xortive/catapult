@@ -40,6 +40,8 @@
 
 pub mod actor;
 pub mod amplifier;
+pub mod async_amp;
+pub mod async_radio;
 pub mod channel;
 pub mod engine;
 pub mod error;
@@ -51,16 +53,17 @@ pub mod translation;
 pub use actor::{run_mux_actor, MuxActorCommand, RadioStateSummary};
 
 // Re-export channel types
-pub use amplifier::{
-    create_virtual_amp_channel, AmplifierChannel, AmplifierChannelMeta, AmplifierType,
-    VirtualAmplifier, VirtualAmplifierIo,
-};
+pub use amplifier::{AmplifierChannel, AmplifierChannelMeta, AmplifierType};
 pub use channel::{
     is_virtual_port, sim_id_from_port, virtual_port_name, RadioChannelMeta, VIRTUAL_PORT_PREFIX,
 };
 
 // Re-export event types
 pub use events::MuxEvent;
+
+// Re-export async connection types
+pub use async_amp::AsyncAmpConnection;
+pub use async_radio::{AsyncRadioConnection, RadioTaskCommand};
 
 // Re-export engine types
 pub use engine::{Multiplexer, MultiplexerConfig};

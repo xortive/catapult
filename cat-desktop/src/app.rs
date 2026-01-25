@@ -7,19 +7,18 @@ use std::time::{Duration, Instant};
 
 use cat_detect::{probe_port, PortScanner, ProbeResult, SerialPortInfo};
 use cat_mux::{
-    run_mux_actor, AmplifierChannel, AmplifierChannelMeta, MuxActorCommand, MuxEvent,
-    RadioChannelMeta, RadioHandle, RadioStateSummary, SwitchingMode, VirtualAmplifierIo,
+    run_mux_actor, AmplifierChannel, AmplifierChannelMeta, AsyncAmpConnection,
+    AsyncRadioConnection, MuxActorCommand, MuxEvent, RadioChannelMeta, RadioHandle,
+    RadioStateSummary, RadioTaskCommand, SwitchingMode,
 };
 use cat_protocol::{OperatingMode, Protocol};
-use cat_sim::VirtualRadio;
+use cat_sim::{VirtualAmplifierIo, VirtualRadio};
 use eframe::CreationContext;
 use egui::{Color32, RichText, Ui};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tokio_serial::SerialPortBuilderExt;
 use tracing::Level;
 
-use crate::amp_task::run_amp_task;
-use crate::async_serial::{AsyncRadioConnection, RadioTaskCommand};
 use crate::diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState};
 use crate::virtual_radio_task::{run_virtual_radio_task, VirtualRadioCommand};
 use crate::radio_panel::RadioPanel;
@@ -60,8 +59,6 @@ fn mode_name(mode: OperatingMode) -> &'static str {
 
 /// Messages from background tasks
 pub enum BackgroundMessage {
-    /// I/O error from radio or amplifier
-    IoError { source: String, message: String },
     /// Probe completed (from manual probe button)
     ProbeComplete {
         port: String,
@@ -79,8 +76,6 @@ pub enum BackgroundMessage {
         model: String,
         port: String,
     },
-    /// Radio disconnected (async task ended)
-    RadioDisconnected { handle: RadioHandle },
     /// Radio state sync response from mux actor
     RadioStateSync {
         handle: RadioHandle,
@@ -161,6 +156,8 @@ pub struct CatapultApp {
     next_correlation_id: u64,
     /// Mux command sender (for sending commands to mux actor)
     mux_cmd_tx: tokio_mpsc::Sender<MuxActorCommand>,
+    /// Mux event sender (for async connection tasks to send events)
+    mux_event_tx: tokio_mpsc::Sender<MuxEvent>,
     /// Mux event receiver (for receiving events from mux actor)
     mux_event_rx: tokio_mpsc::Receiver<MuxEvent>,
     /// Pending registrations: correlation_id -> panel index
@@ -208,9 +205,12 @@ impl CatapultApp {
         let (mux_cmd_tx, mux_cmd_rx) = tokio_mpsc::channel::<MuxActorCommand>(256);
         let (mux_event_tx, mux_event_rx) = tokio_mpsc::channel::<MuxEvent>(256);
 
+        // Clone mux_event_tx for async connection tasks (they'll send events on the same channel)
+        let mux_event_tx_for_actor = mux_event_tx.clone();
+
         // Spawn the mux actor (from cat-mux crate)
         rt_handle.spawn(async move {
-            run_mux_actor(mux_cmd_rx, mux_event_tx).await;
+            run_mux_actor(mux_cmd_rx, mux_event_tx_for_actor).await;
             tracing::error!("Mux actor exited unexpectedly");
         });
 
@@ -251,6 +251,7 @@ impl CatapultApp {
             settings,
             next_correlation_id: 1,
             mux_cmd_tx,
+            mux_event_tx,
             mux_event_rx,
             pending_registrations: HashMap::new(),
             active_radio: None,
@@ -412,8 +413,9 @@ impl CatapultApp {
         model_name: String,
         query_initial_state: bool,
     ) {
-        let tx = self.bg_tx.clone();
+        let bg_tx = self.bg_tx.clone();
         let mux_tx = self.mux_cmd_tx.clone();
+        let event_tx = self.mux_event_tx.clone();
         let rt = self.rt_handle.clone();
 
         // Create channel for sending commands to the task
@@ -430,7 +432,7 @@ impl CatapultApp {
                 &port,
                 baud_rate,
                 protocol,
-                tx.clone(),
+                event_tx.clone(),
                 mux_tx,
             ) {
                 Ok(mut conn) => {
@@ -455,15 +457,15 @@ impl CatapultApp {
                     // Try to enable auto-info mode
                     if let Err(e) = conn.enable_auto_info().await {
                         tracing::warn!("Failed to enable auto-info on {}: {}", port, e);
-                        let _ = tx.send(BackgroundMessage::IoError {
+                        let _ = event_tx.send(MuxEvent::Error {
                             source: format!("Radio {}", port),
                             message: "Auto-info not enabled - radio won't send automatic updates"
                                 .to_string(),
-                        });
+                        }).await;
                     }
 
                     // Notify UI of successful connection
-                    let _ = tx.send(BackgroundMessage::RadioConnected {
+                    let _ = bg_tx.send(BackgroundMessage::RadioConnected {
                         handle,
                         model: actual_model_name,
                         port: port.clone(),
@@ -473,11 +475,11 @@ impl CatapultApp {
                     conn.run_read_loop(cmd_rx).await;
                 }
                 Err(e) => {
-                    let _ = tx.send(BackgroundMessage::IoError {
+                    let _ = event_tx.send(MuxEvent::Error {
                         source: format!("Radio {}", port),
                         message: format!("Connection failed: {}", e),
-                    });
-                    let _ = tx.send(BackgroundMessage::RadioDisconnected { handle });
+                    }).await;
+                    let _ = event_tx.send(MuxEvent::RadioDisconnected { handle }).await;
                 }
             }
         });
@@ -686,10 +688,6 @@ impl CatapultApp {
     fn process_messages(&mut self) {
         while let Ok(msg) = self.bg_rx.try_recv() {
             match msg {
-                // Note: Traffic is now handled via MuxEvent in process_mux_events()
-                BackgroundMessage::IoError { source, message } => {
-                    self.report_err(&source, message);
-                }
                 BackgroundMessage::ProbeComplete {
                     port,
                     baud_rate,
@@ -772,11 +770,6 @@ impl CatapultApp {
 
                     self.report_info("Radio", format!("Connected {} on {}", model, port));
                 }
-                BackgroundMessage::RadioDisconnected { handle } => {
-                    // Remove the task sender
-                    self.radio_task_senders.remove(&handle.0);
-                    tracing::debug!("Radio {:?} disconnected", handle);
-                }
                 BackgroundMessage::RadioStateSync { handle, state } => {
                     // Update RadioPanel from authoritative mux actor state
                     if let Some(panel) = self
@@ -847,6 +840,8 @@ impl CatapultApp {
                     );
                 }
                 MuxEvent::RadioDisconnected { handle } => {
+                    // Remove the task sender
+                    self.radio_task_senders.remove(&handle.0);
                     tracing::debug!("MuxEvent::RadioDisconnected: handle={}", handle.0);
                 }
                 MuxEvent::Error { source, message } => {
@@ -1105,6 +1100,7 @@ impl CatapultApp {
         // Spawn a task to await the handle and run AsyncRadioConnection
         let bg_tx = self.bg_tx.clone();
         let mux_tx = self.mux_cmd_tx.clone();
+        let event_tx = self.mux_event_tx.clone();
         let sim_id_clone = sim_id.clone();
         self.rt_handle.spawn(async move {
             if let Ok(handle) = resp_rx.await {
@@ -1120,7 +1116,7 @@ impl CatapultApp {
                     sim_id_clone.clone(),
                     connection_stream,
                     protocol,
-                    bg_tx.clone(),
+                    event_tx,
                     mux_tx,
                 );
 
@@ -2134,10 +2130,12 @@ impl CatapultApp {
         self.amp_data_tx = Some(amp_data_tx);
         self.amp_shutdown_tx = Some(shutdown_tx);
 
-        // Spawn the async amp task
+        // Spawn the async amp connection
         let mux_tx = self.mux_cmd_tx.clone();
+        let event_tx = self.mux_event_tx.clone();
         self.rt_handle.spawn(async move {
-            run_amp_task(shutdown_rx, amp_data_rx, stream, mux_tx).await;
+            let conn = AsyncAmpConnection::new(stream, mux_tx, event_tx);
+            conn.run(shutdown_rx, amp_data_rx).await;
         });
 
         self.set_status(format!(
@@ -2191,10 +2189,12 @@ impl CatapultApp {
         self.amp_data_tx = Some(amp_data_tx);
         self.amp_shutdown_tx = Some(shutdown_tx);
 
-        // Spawn the amp task with virtual I/O
+        // Spawn the amp connection with virtual I/O
         let mux_tx = self.mux_cmd_tx.clone();
+        let event_tx = self.mux_event_tx.clone();
         self.rt_handle.spawn(async move {
-            run_amp_task(shutdown_rx, amp_data_rx, virtual_io, mux_tx).await;
+            let conn = AsyncAmpConnection::new(virtual_io, mux_tx, event_tx);
+            conn.run(shutdown_rx, amp_data_rx).await;
         });
 
         self.set_status(format!(
