@@ -10,7 +10,13 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
 /// Crates that belong to this project (for filtering)
-const PROJECT_CRATES: &[&str] = &["catapult", "cat_protocol", "cat_detect", "cat_mux", "cat_sim"];
+const PROJECT_CRATES: &[&str] = &[
+    "catapult",
+    "cat_protocol",
+    "cat_detect",
+    "cat_mux",
+    "cat_sim",
+];
 
 /// Shared state for dynamic level filtering
 ///
@@ -30,7 +36,8 @@ impl DiagnosticLevelState {
 
     /// Update the filter level (atomic store)
     pub fn set_level(&self, level: Option<Level>) {
-        self.level.store(Self::level_to_u8(level), Ordering::Relaxed);
+        self.level
+            .store(Self::level_to_u8(level), Ordering::Relaxed);
     }
 
     /// Get the current filter level (atomic load)

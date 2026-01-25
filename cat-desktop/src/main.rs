@@ -14,7 +14,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 use app::CatapultApp;
-use diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState, DiagnosticsLayer, ProjectCrateFilter};
+use diagnostics_layer::{
+    DiagnosticEvent, DiagnosticLevelState, DiagnosticsLayer, ProjectCrateFilter,
+};
 use eframe::NativeOptions;
 use settings::Settings;
 use tracing_subscriber::layer::SubscriberExt;
