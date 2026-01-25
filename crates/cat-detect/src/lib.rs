@@ -1,7 +1,7 @@
 //! CAT Serial Port Detection Library
 //!
-//! This crate provides serial port enumeration for CAT-capable
-//! amateur radio transceivers.
+//! This crate provides serial port enumeration and manual probing for
+//! CAT-capable amateur radio transceivers.
 //!
 //! # Example
 //!
@@ -17,7 +17,9 @@
 //! ```
 
 pub mod error;
+pub mod probe;
 pub mod scanner;
 
 pub use error::DetectError;
+pub use probe::{probe_port, ProbeResult, RadioProber};
 pub use scanner::{PortScanner, SerialPortInfo};

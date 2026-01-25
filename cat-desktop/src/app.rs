@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
-use cat_detect::{PortScanner, SerialPortInfo};
+use cat_detect::{probe_port, PortScanner, ProbeResult, SerialPortInfo};
 use cat_mux::{
     run_mux_actor, AmplifierChannel, AmplifierChannelMeta, MuxActorCommand, MuxEvent,
     RadioChannelMeta, RadioHandle, RadioStateSummary, SwitchingMode,
@@ -60,6 +60,12 @@ fn mode_name(mode: OperatingMode) -> &'static str {
 pub enum BackgroundMessage {
     /// I/O error from radio or amplifier
     IoError { source: String, message: String },
+    /// Probe completed (from manual probe button)
+    ProbeComplete {
+        port: String,
+        baud_rate: u32,
+        result: Option<ProbeResult>,
+    },
     /// Radio registered with mux actor (handle assigned)
     RadioRegistered {
         correlation_id: u64,
@@ -155,6 +161,10 @@ pub struct CatapultApp {
     add_radio_baud: u32,
     /// CI-V address for new Icom COM radio
     add_radio_civ_address: u8,
+    /// Model name for new radio (from probe or manual entry)
+    add_radio_model: String,
+    /// Is probing in progress
+    probing: bool,
     /// Diagnostic event receiver (from tracing layer)
     diag_rx: Receiver<DiagnosticEvent>,
     /// Next correlation_id to assign for pending registrations
@@ -243,6 +253,8 @@ impl CatapultApp {
             add_radio_protocol: Protocol::Kenwood,
             add_radio_baud: 9600,
             add_radio_civ_address: 0x00,
+            add_radio_model: String::new(),
+            probing: false,
             diag_rx,
             settings,
             next_correlation_id: 1,
@@ -693,6 +705,34 @@ impl CatapultApp {
                 BackgroundMessage::IoError { source, message } => {
                     self.report_err(&source, message);
                 }
+                BackgroundMessage::ProbeComplete {
+                    port,
+                    baud_rate,
+                    result,
+                } => {
+                    self.probing = false;
+                    if port == self.add_radio_port {
+                        if let Some(probe_result) = result {
+                            // Update UI fields with probe result
+                            self.add_radio_protocol = probe_result.protocol;
+                            self.add_radio_baud = baud_rate;
+                            if let Some(addr) = probe_result.address {
+                                self.add_radio_civ_address = addr;
+                            }
+                            // Set model name from detected model
+                            self.add_radio_model = probe_result
+                                .model
+                                .map(|m| format!("{} {}", m.manufacturer, m.model))
+                                .unwrap_or_else(|| format!("{} radio", probe_result.protocol.name()));
+                            self.set_status(format!(
+                                "Detected {} on {}",
+                                self.add_radio_model, port
+                            ));
+                        } else {
+                            self.set_status(format!("No radio detected on {}", port));
+                        }
+                    }
+                }
                 BackgroundMessage::RadioRegistered {
                     correlation_id,
                     handle,
@@ -996,6 +1036,30 @@ impl CatapultApp {
         self.set_status(format!("Adding virtual radio: {}", name));
     }
 
+    /// Probe the selected port for radio detection
+    fn probe_selected_port(&mut self) {
+        if self.add_radio_port.is_empty() || self.probing {
+            return;
+        }
+
+        self.probing = true;
+        self.set_status(format!("Probing {}...", self.add_radio_port));
+
+        let port = self.add_radio_port.clone();
+        let baud_rate = self.add_radio_baud;
+        let tx = self.bg_tx.clone();
+        let rt_handle = self.rt_handle.clone();
+
+        std::thread::spawn(move || {
+            let result = rt_handle.block_on(async { probe_port(&port, baud_rate).await });
+            let _ = tx.send(BackgroundMessage::ProbeComplete {
+                port,
+                baud_rate,
+                result,
+            });
+        });
+    }
+
     /// Add a new COM radio with the current add_radio_* settings
     fn add_com_radio(&mut self) {
         if self.add_radio_port.is_empty() {
@@ -1007,7 +1071,12 @@ impl CatapultApp {
         } else {
             None
         };
-        let model_name = format!("{} Radio", self.add_radio_protocol.name());
+        // Use detected model name if available, otherwise generate from protocol
+        let model_name = if self.add_radio_model.is_empty() {
+            format!("{} Radio", self.add_radio_protocol.name())
+        } else {
+            self.add_radio_model.clone()
+        };
 
         let config = ComRadioConfig {
             port: self.add_radio_port.clone(),
@@ -1087,6 +1156,7 @@ impl CatapultApp {
                                 .unwrap_or_else(|| self.add_radio_port.clone())
                         };
 
+                        let prev_port = self.add_radio_port.clone();
                         egui::ComboBox::from_id_salt("add_radio_port")
                             .selected_text(&selected_label)
                             .width(160.0)
@@ -1099,6 +1169,10 @@ impl CatapultApp {
                                     );
                                 }
                             });
+                        // Clear model when port changes
+                        if self.add_radio_port != prev_port {
+                            self.add_radio_model.clear();
+                        }
 
                         // Protocol dropdown
                         ui.horizontal(|ui| {
@@ -1159,14 +1233,37 @@ impl CatapultApp {
                             });
                         }
 
+                        // Probe button and detected model display
+                        ui.horizontal(|ui| {
+                            let can_probe = !self.add_radio_port.is_empty() && !self.probing;
+                            if self.probing {
+                                ui.spinner();
+                            } else if ui
+                                .add_enabled(can_probe, egui::Button::new("Probe"))
+                                .on_hover_text("Detect radio protocol and model")
+                                .clicked()
+                            {
+                                self.probe_selected_port();
+                            }
+                            if !self.add_radio_model.is_empty() {
+                                ui.label(
+                                    RichText::new(&self.add_radio_model)
+                                        .small()
+                                        .color(Color32::GREEN),
+                                );
+                            }
+                        });
+
                         // Add Radio button
-                        let can_add = !self.add_radio_port.is_empty();
+                        let can_add = !self.add_radio_port.is_empty() && !self.probing;
                         if ui
-                            .add_enabled(can_add, egui::Button::new("+"))
+                            .add_enabled(can_add, egui::Button::new("Add"))
                             .on_hover_text("Add radio")
                             .clicked()
                         {
                             self.add_com_radio();
+                            // Reset the model field after adding
+                            self.add_radio_model.clear();
                             ui.close_menu();
                         }
                     }
