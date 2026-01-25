@@ -1,7 +1,7 @@
 //! Simulation panel for testing without physical hardware
 //!
 //! Provides UI controls to manage multiple virtual radios.
-//! After a radio is added, it is taken by the virtual radio actor task.
+//! Returns SimulationAction for App to handle lifecycle (add/remove).
 //! State updates come from mux events, and commands are sent via channels.
 
 // Allow dead_code - UI code is not yet fully wired into main app
@@ -10,11 +10,19 @@
 use std::collections::HashMap;
 
 use cat_protocol::{OperatingMode, Protocol, ProtocolId, RadioDatabase, RadioModel};
-use cat_sim::{SimulationContext, SimulationEvent};
 use egui::{Color32, RichText, Ui};
 use tokio::sync::mpsc;
 
 use crate::virtual_radio_task::VirtualRadioCommand;
+
+/// Actions returned from SimulationPanel for App to execute
+#[derive(Debug, Clone)]
+pub enum SimulationAction {
+    /// Add a new virtual radio
+    AddRadio { name: String, protocol: Protocol },
+    /// Remove an existing virtual radio
+    RemoveRadio { sim_id: String },
+}
 
 /// Common amateur radio band presets (in Hz)
 const BAND_PRESETS: &[(&str, u64)] = &[
@@ -76,8 +84,6 @@ impl VirtualRadioDisplayState {
 
 /// Simulation panel state
 pub struct SimulationPanel {
-    /// Simulation context for lifecycle management (add/remove)
-    context: SimulationContext,
     /// UI state for the new radio form
     new_radio_name: String,
     /// Protocol for new radio
@@ -104,7 +110,6 @@ impl SimulationPanel {
     /// Create a new simulation panel
     pub fn new() -> Self {
         Self {
-            context: SimulationContext::new(),
             new_radio_name: String::new(),
             new_radio_protocol: Protocol::Kenwood,
             selected_radio: None,
@@ -115,24 +120,10 @@ impl SimulationPanel {
         }
     }
 
-    /// Get a reference to the simulation context
-    pub fn context(&self) -> &SimulationContext {
-        &self.context
-    }
-
-    /// Get a mutable reference to the simulation context
-    pub fn context_mut(&mut self) -> &mut SimulationContext {
-        &mut self.context
-    }
-
-    /// Drain all pending simulation events
-    pub fn drain_events(&mut self) -> Vec<SimulationEvent> {
-        self.context.drain_events()
-    }
-
-    /// Register a virtual radio after it has been taken from context
+    /// Register a virtual radio after it has been added by App
     ///
-    /// Called by app.rs after handling RadioAdded event.
+    /// Called by App::add_virtual_radio() after spawning the actor.
+    /// Also selects the new radio for editing.
     pub fn register_radio(
         &mut self,
         sim_id: String,
@@ -142,12 +133,13 @@ impl SimulationPanel {
     ) {
         self.radio_states
             .insert(sim_id.clone(), VirtualRadioDisplayState::new(name, protocol));
-        self.radio_commands.insert(sim_id, cmd_tx);
+        self.radio_commands.insert(sim_id.clone(), cmd_tx);
+        self.selected_radio = Some(sim_id);
     }
 
     /// Unregister a virtual radio
     ///
-    /// Called by app.rs after handling RadioRemoved event.
+    /// Called by App::remove_virtual_radio().
     pub fn unregister_radio(&mut self, sim_id: &str) {
         self.radio_states.remove(sim_id);
         self.radio_commands.remove(sim_id);
@@ -223,8 +215,8 @@ impl SimulationPanel {
         }
     }
 
-    /// Draw the simulation panel UI
-    pub fn draw(&mut self, ui: &mut Ui) {
+    /// Render UI and return any actions to execute
+    pub fn ui(&mut self, ui: &mut Ui) -> Option<SimulationAction> {
         ui.horizontal(|ui| {
             ui.heading("Simulation");
             ui.label(RichText::new("DEBUG MODE").color(Color32::YELLOW).strong());
@@ -242,24 +234,29 @@ impl SimulationPanel {
         if !self.expanded {
             // Show compact summary when collapsed
             ui.label(format!("{} radios", self.radio_count()));
-            return;
+            return None;
         }
 
         ui.add_space(8.0);
         ui.separator();
 
         // Add new radio section
-        self.draw_add_radio_section(ui);
+        let add_action = self.draw_add_radio_section(ui);
 
         ui.add_space(8.0);
         ui.separator();
 
         // Virtual radios list
-        self.draw_radios_section(ui);
+        let remove_action = self.draw_radios_section(ui);
+
+        // Return the first action (add takes precedence)
+        add_action.or(remove_action)
     }
 
-    /// Draw the add radio section
-    fn draw_add_radio_section(&mut self, ui: &mut Ui) {
+    /// Draw the add radio section, returning AddRadio action if button clicked
+    fn draw_add_radio_section(&mut self, ui: &mut Ui) -> Option<SimulationAction> {
+        let mut action = None;
+
         ui.horizontal(|ui| {
             ui.label("Add Radio:");
             ui.text_edit_singleline(&mut self.new_radio_name)
@@ -287,15 +284,19 @@ impl SimulationPanel {
                 } else {
                     self.new_radio_name.clone()
                 };
-                let id = self.context.add_radio(&name, self.new_radio_protocol);
-                self.selected_radio = Some(id);
+                action = Some(SimulationAction::AddRadio {
+                    name,
+                    protocol: self.new_radio_protocol,
+                });
                 self.new_radio_name.clear();
             }
         });
+
+        action
     }
 
-    /// Draw the radios list section
-    fn draw_radios_section(&mut self, ui: &mut Ui) {
+    /// Draw the radios list section, returning RemoveRadio action if button clicked
+    fn draw_radios_section(&mut self, ui: &mut Ui) -> Option<SimulationAction> {
         ui.heading("Virtual Radios");
 
         if self.radio_states.is_empty() {
@@ -304,8 +305,11 @@ impl SimulationPanel {
                     .color(Color32::GRAY)
                     .italics(),
             );
-            return;
+            return None;
         }
+
+        // Track which radio to remove (if any)
+        let mut remove_id: Option<String> = None;
 
         // Collect radio info to avoid borrow issues
         let radio_infos: Vec<_> = self
@@ -475,14 +479,19 @@ impl SimulationPanel {
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Remove").clicked() {
-                                self.context.remove_radio(&id);
-                                self.selected_radio = None;
+                                remove_id = Some(id.clone());
                             }
                         });
                     });
                 }
             });
         }
+
+        // Return remove action if button was clicked
+        remove_id.map(|sim_id| {
+            self.selected_radio = None;
+            SimulationAction::RemoveRadio { sim_id }
+        })
     }
 }
 
