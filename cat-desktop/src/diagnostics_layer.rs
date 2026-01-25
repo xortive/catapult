@@ -3,8 +3,32 @@
 use std::sync::mpsc::Sender;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
+use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::layer::Context;
+use tracing_subscriber::reload;
 use tracing_subscriber::Layer;
+
+/// Type alias for the diagnostics filter reload handle
+pub type DiagnosticsFilterHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
+
+/// Build an EnvFilter for project crates at the specified level
+///
+/// When level is Some, events at that level and above are captured.
+/// When level is None, no events are captured ("off").
+pub fn build_diagnostics_filter(level: Option<Level>) -> EnvFilter {
+    let level_str = match level {
+        Some(Level::DEBUG) | Some(Level::TRACE) => "debug",
+        Some(Level::INFO) => "info",
+        Some(Level::WARN) => "warn",
+        Some(Level::ERROR) => "error",
+        None => "off",
+    };
+    // Build filter for project crates at specified level
+    EnvFilter::new(format!(
+        "catapult={l},cat_protocol={l},cat_detect={l},cat_mux={l},cat_sim={l}",
+        l = level_str
+    ))
+}
 
 /// Crate prefixes to capture in the diagnostics layer
 const CRATE_PREFIXES: &[&str] = &[

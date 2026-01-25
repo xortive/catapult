@@ -6,6 +6,7 @@ use cat_protocol::Protocol;
 use cat_sim::VirtualRadioConfig;
 use egui::Ui;
 use serde::{Deserialize, Serialize};
+use tracing::Level;
 
 /// Saved COM port radio configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,6 +58,39 @@ impl Default for AmplifierSettings {
     }
 }
 
+/// Helper for serializing tracing::Level as a string
+mod level_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use tracing::Level;
+
+    pub fn serialize<S>(level: &Option<Level>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match level {
+            Some(Level::DEBUG) | Some(Level::TRACE) => serializer.serialize_str("debug"),
+            Some(Level::INFO) => serializer.serialize_str("info"),
+            Some(Level::WARN) => serializer.serialize_str("warn"),
+            Some(Level::ERROR) => serializer.serialize_str("error"),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Level>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<String> = Option::deserialize(deserializer)?;
+        Ok(match opt.as_deref() {
+            Some("debug") | Some("trace") => Some(Level::DEBUG),
+            Some("info") => Some(Level::INFO),
+            Some("warn") | Some("warning") => Some(Level::WARN),
+            Some("error") => Some(Level::ERROR),
+            _ => None,
+        })
+    }
+}
+
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
@@ -70,21 +104,10 @@ pub struct Settings {
     pub show_hex: bool,
     /// Show decoded in traffic monitor
     pub show_decoded: bool,
-    /// Show diagnostic entries in traffic monitor (master toggle)
-    #[serde(default)]
-    pub show_diagnostics: bool,
-    /// Show Debug-level diagnostics
-    #[serde(default)]
-    pub show_diagnostic_debug: bool,
-    /// Show Info-level diagnostics
-    #[serde(default = "default_true")]
-    pub show_diagnostic_info: bool,
-    /// Show Warning-level diagnostics
-    #[serde(default = "default_true")]
-    pub show_diagnostic_warning: bool,
-    /// Show Error-level diagnostics
-    #[serde(default = "default_true")]
-    pub show_diagnostic_error: bool,
+    /// Minimum diagnostic level to capture (None = off, Some(Level::DEBUG) = all)
+    /// When set, events at this level and above are captured (e.g., INFO captures INFO, WARN, ERROR)
+    #[serde(default = "default_diagnostic_level", with = "level_serde")]
+    pub diagnostic_level: Option<Level>,
     /// Default baud rates to try
     pub baud_rates: Vec<u32>,
     /// Virtual radios to restore on startup
@@ -98,8 +121,8 @@ pub struct Settings {
     pub amplifier: AmplifierSettings,
 }
 
-fn default_true() -> bool {
-    true
+fn default_diagnostic_level() -> Option<Level> {
+    Some(Level::INFO)
 }
 
 impl Default for Settings {
@@ -110,11 +133,7 @@ impl Default for Settings {
             traffic_history_size: 1000,
             show_hex: true,
             show_decoded: true,
-            show_diagnostics: true,
-            show_diagnostic_debug: false,
-            show_diagnostic_info: true,
-            show_diagnostic_warning: true,
-            show_diagnostic_error: true,
+            diagnostic_level: Some(Level::INFO),
             baud_rates: vec![38400, 19200, 9600, 4800, 115200],
             virtual_radios: Vec::new(),
             configured_radios: Vec::new(),

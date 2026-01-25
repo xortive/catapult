@@ -444,7 +444,7 @@ impl AsyncRead for VirtualRadioIo {
 impl AsyncWrite for VirtualRadioIo {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         // Parse the raw bytes into commands using the codec
@@ -452,20 +452,19 @@ impl AsyncWrite for VirtualRadioIo {
 
         // Extract all parsed commands and send to simulation
         while let Some(cmd) = self.codec.next_command() {
-            // Try to send the command
-            match self.cmd_tx.poll_reserve(cx) {
-                Poll::Ready(Ok(())) => {
-                    let _ = self.cmd_tx.send_item(cmd);
+            // Try to send the command (non-blocking)
+            match self.cmd_tx.try_send(cmd) {
+                Ok(()) => {}
+                Err(tokio_mpsc::error::TrySendError::Full(_)) => {
+                    // Channel is full - command is lost but we continue
+                    // This is a rare edge case and shouldn't happen with proper sizing
+                    tracing::warn!("Virtual radio command channel full, dropping command");
                 }
-                Poll::Ready(Err(_)) => {
+                Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
                     return Poll::Ready(Err(io::Error::new(
                         ErrorKind::ConnectionAborted,
                         "command channel closed",
                     )));
-                }
-                Poll::Pending => {
-                    // Channel is full, but we've already consumed the bytes
-                    // This is a rare edge case - just continue
                 }
             }
         }

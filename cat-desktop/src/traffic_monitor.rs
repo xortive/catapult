@@ -11,6 +11,7 @@ use cat_protocol::display::{
 };
 use cat_protocol::Protocol;
 use egui::{Color32, Id, RichText, Ui};
+use tracing::Level;
 
 /// Maximum number of entries in the annotation cache
 const ANNOTATION_CACHE_MAX_SIZE: usize = 1000;
@@ -190,16 +191,9 @@ pub struct TrafficMonitor {
     show_simulated: bool,
     /// Pause monitoring
     paused: bool,
-    /// Show diagnostic entries (master toggle)
-    show_diagnostics: bool,
-    /// Show Debug-level diagnostics
-    show_diagnostic_debug: bool,
-    /// Show Info-level diagnostics
-    show_diagnostic_info: bool,
-    /// Show Warning-level diagnostics
-    show_diagnostic_warning: bool,
-    /// Show Error-level diagnostics
-    show_diagnostic_error: bool,
+    /// Minimum diagnostic level to show (None = off, Some(Level::DEBUG) = all)
+    /// Events at this level and above are shown (filtering happens at tracing layer)
+    diagnostic_level: Option<Level>,
     /// Cache for AnnotatedFrame results to avoid redundant parsing
     annotation_cache: HashMap<AnnotationCacheKey, Option<AnnotatedFrame>>,
     /// Keys in insertion order for LRU-style eviction
@@ -208,14 +202,14 @@ pub struct TrafficMonitor {
 
 impl TrafficMonitor {
     /// Create a new traffic monitor
-    pub fn new(
-        max_entries: usize,
-        show_diagnostics: bool,
-        show_diagnostic_debug: bool,
-        show_diagnostic_info: bool,
-        show_diagnostic_warning: bool,
-        show_diagnostic_error: bool,
-    ) -> Self {
+    ///
+    /// `diagnostic_level` controls which diagnostic events are shown:
+    /// - `None` = off (no diagnostics shown)
+    /// - `Some(Level::ERROR)` = only errors
+    /// - `Some(Level::WARN)` = warnings and errors
+    /// - `Some(Level::INFO)` = info, warnings, and errors
+    /// - `Some(Level::DEBUG)` = all diagnostics
+    pub fn new(max_entries: usize, diagnostic_level: Option<Level>) -> Self {
         Self {
             entries: VecDeque::with_capacity(max_entries),
             max_entries,
@@ -223,11 +217,7 @@ impl TrafficMonitor {
             filter_direction: None,
             show_simulated: true,
             paused: false,
-            show_diagnostics,
-            show_diagnostic_debug,
-            show_diagnostic_info,
-            show_diagnostic_warning,
-            show_diagnostic_error,
+            diagnostic_level,
             annotation_cache: HashMap::with_capacity(ANNOTATION_CACHE_MAX_SIZE),
             cache_order: VecDeque::with_capacity(ANNOTATION_CACHE_MAX_SIZE),
         }
@@ -263,49 +253,19 @@ impl TrafficMonitor {
         result
     }
 
-    /// Get mutable access to diagnostic filter settings for persisting changes
-    pub fn diagnostic_settings_mut(
-        &mut self,
-    ) -> (&mut bool, &mut bool, &mut bool, &mut bool, &mut bool) {
-        (
-            &mut self.show_diagnostics,
-            &mut self.show_diagnostic_debug,
-            &mut self.show_diagnostic_info,
-            &mut self.show_diagnostic_warning,
-            &mut self.show_diagnostic_error,
-        )
+    /// Get the current diagnostic level
+    pub fn diagnostic_level(&self) -> Option<Level> {
+        self.diagnostic_level
     }
 
     /// Check if an entry passes the current filters
     fn entry_passes_filter(&self, entry: &TrafficEntry) -> bool {
-        // Diagnostic filtering
-        if let TrafficEntry::Diagnostic { severity, .. } = entry {
-            if !self.show_diagnostics {
-                return false;
-            }
-            match severity {
-                DiagnosticSeverity::Debug => {
-                    if !self.show_diagnostic_debug {
-                        return false;
-                    }
-                }
-                DiagnosticSeverity::Info => {
-                    if !self.show_diagnostic_info {
-                        return false;
-                    }
-                }
-                DiagnosticSeverity::Warning => {
-                    if !self.show_diagnostic_warning {
-                        return false;
-                    }
-                }
-                DiagnosticSeverity::Error => {
-                    if !self.show_diagnostic_error {
-                        return false;
-                    }
-                }
-            }
-            return true;
+        // Diagnostic filtering - events are pre-filtered by tracing layer,
+        // but we still need to check the master toggle
+        if let TrafficEntry::Diagnostic { .. } = entry {
+            // If diagnostic_level is None (off), hide all diagnostics
+            // Otherwise, all diagnostics that arrive have already passed the tracing filter
+            return self.diagnostic_level.is_some();
         }
 
         // Direction filter for data entries
@@ -909,27 +869,64 @@ impl TrafficMonitor {
 
             ui.separator();
 
-            // Diagnostic filter controls with popout menu
+            // Diagnostic level selector with dropdown menu
+            let level_label = match self.diagnostic_level {
+                Some(Level::DEBUG) | Some(Level::TRACE) => "Logs: Debug",
+                Some(Level::INFO) => "Logs: Info",
+                Some(Level::WARN) => "Logs: Warn",
+                Some(Level::ERROR) => "Logs: Error",
+                None => "Logs: Off",
+            };
             ui.menu_button(
-                RichText::new(if self.show_diagnostics {
-                    "Logs ▾"
-                } else {
-                    "Logs"
-                })
-                .color(if self.show_diagnostics {
-                    Color32::WHITE
-                } else {
-                    Color32::GRAY
-                }),
+                RichText::new(format!("{} ▾", level_label)).color(
+                    if self.diagnostic_level.is_some() {
+                        Color32::WHITE
+                    } else {
+                        Color32::GRAY
+                    },
+                ),
                 |ui| {
-                    ui.checkbox(&mut self.show_diagnostics, "Show Logs");
-                    ui.separator();
-                    ui.add_enabled_ui(self.show_diagnostics, |ui| {
-                        ui.checkbox(&mut self.show_diagnostic_debug, "Debug");
-                        ui.checkbox(&mut self.show_diagnostic_info, "Info");
-                        ui.checkbox(&mut self.show_diagnostic_warning, "Warning");
-                        ui.checkbox(&mut self.show_diagnostic_error, "Error");
-                    });
+                    if ui
+                        .selectable_label(self.diagnostic_level.is_none(), "Off")
+                        .clicked()
+                    {
+                        self.diagnostic_level = None;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(self.diagnostic_level == Some(Level::ERROR), "Error")
+                        .clicked()
+                    {
+                        self.diagnostic_level = Some(Level::ERROR);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(self.diagnostic_level == Some(Level::WARN), "Warning")
+                        .clicked()
+                    {
+                        self.diagnostic_level = Some(Level::WARN);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(self.diagnostic_level == Some(Level::INFO), "Info")
+                        .clicked()
+                    {
+                        self.diagnostic_level = Some(Level::INFO);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(
+                            matches!(
+                                self.diagnostic_level,
+                                Some(Level::DEBUG) | Some(Level::TRACE)
+                            ),
+                            "Debug",
+                        )
+                        .clicked()
+                    {
+                        self.diagnostic_level = Some(Level::DEBUG);
+                        ui.close_menu();
+                    }
                 },
             );
         });
