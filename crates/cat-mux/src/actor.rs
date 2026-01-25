@@ -285,32 +285,35 @@ async fn process_radio_command(
     // Check if this radio is now the active radio (for auto-info updates)
     let is_active = new_active == Some(handle);
 
-    // Send to amplifier if there's data
+    // Send to amplifier if there's data and auto-info is enabled
     if let Some(data) = amp_data {
-        let amp_protocol = state.multiplexer.amplifier_config().protocol;
+        // Only send if auto-info is enabled (amp requested updates via AI2)
+        if state.amp_emulated.auto_info_enabled {
+            let amp_protocol = state.multiplexer.amplifier_config().protocol;
 
-        // Emit traffic event for data going to amplifier
-        let _ = event_tx
-            .send(MuxEvent::AmpDataOut {
-                data: data.clone(),
-                protocol: amp_protocol,
-            })
-            .await;
+            // Emit traffic event for data going to amplifier
+            let _ = event_tx
+                .send(MuxEvent::AmpDataOut {
+                    data: data.clone(),
+                    protocol: amp_protocol,
+                })
+                .await;
 
-        // Send to amplifier if connected
-        if let Some(ref tx) = state.amp_tx {
-            if let Err(e) = tx.send(data).await {
-                warn!("Failed to send to amplifier: {}", e);
-                let _ = event_tx
-                    .send(MuxEvent::Error {
-                        source: "Amplifier".to_string(),
-                        message: format!("Send failed: {}", e),
-                    })
-                    .await;
+            // Send to amplifier if connected
+            if let Some(ref tx) = state.amp_tx {
+                if let Err(e) = tx.send(data).await {
+                    warn!("Failed to send to amplifier: {}", e);
+                    let _ = event_tx
+                        .send(MuxEvent::Error {
+                            source: "Amplifier".to_string(),
+                            message: format!("Send failed: {}", e),
+                        })
+                        .await;
+                }
             }
         }
 
-        // Update emulated state to match what we sent to the amp
+        // Always update emulated state so we can respond to amp queries
         if let Some(hz) = new_freq {
             state.amp_emulated.frequency_hz = Some(hz);
         }
@@ -896,7 +899,7 @@ mod tests {
         // Drain the amp connected event
         let _ = event_rx.recv().await;
 
-        // Set frequency on the radio (this updates the emulated state)
+        // Set frequency on the radio (this updates the emulated state for queries)
         cmd_tx
             .send(MuxActorCommand::RadioCommand {
                 handle,
@@ -905,16 +908,13 @@ mod tests {
             .await
             .unwrap();
 
-        // Drain state change and amp data out events
+        // Wait for state change event (no AmpDataOut without auto-info enabled)
         loop {
             let event = event_rx.recv().await.unwrap();
-            if matches!(event, MuxEvent::AmpDataOut { .. }) {
+            if matches!(event, MuxEvent::RadioStateChanged { .. }) {
                 break;
             }
         }
-
-        // Drain the amp data
-        let _ = amp_rx.recv().await;
 
         // Now send a frequency query from the amp (FA;)
         cmd_tx
@@ -1126,7 +1126,7 @@ mod tests {
             .unwrap();
         let _ = event_rx.recv().await; // Drain amp connected event
 
-        // Set initial frequency - this will be forwarded to amp (normal behavior)
+        // Set frequency - without auto-info, nothing should be sent to amp
         cmd_tx
             .send(MuxActorCommand::RadioCommand {
                 handle,
@@ -1135,44 +1135,21 @@ mod tests {
             .await
             .unwrap();
 
-        // Drain the forwarded data
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        while amp_rx.try_recv().is_ok() {}
-        while event_rx.try_recv().is_ok() {}
-
-        // Now change frequency again - without auto-info, this should still forward
-        // but should NOT send an additional unsolicited update
-        cmd_tx
-            .send(MuxActorCommand::RadioCommand {
-                handle,
-                command: RadioCommand::SetFrequency { hz: 7_074_000 },
-            })
-            .await
-            .unwrap();
-
         // Wait for processing
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
-        // Count messages received by amp - should be exactly 1 (the forwarded command)
+        // Count messages received by amp - should be 0 without auto-info
         let mut amp_messages = Vec::new();
         while let Ok(data) = amp_rx.try_recv() {
             amp_messages.push(data);
         }
 
-        // Should have exactly 1 message (the forwarded frequency command)
-        // If auto-info were enabled, we'd have 2 (forward + unsolicited update)
+        // Should have no messages - amp must send AI2 to enable auto-info first
         assert_eq!(
             amp_messages.len(),
-            1,
-            "Without auto-info, should only forward command, not send unsolicited update. Got {} messages",
+            0,
+            "Without auto-info enabled, amp should receive no messages. Got {} messages",
             amp_messages.len()
-        );
-
-        // Verify it's the forwarded frequency
-        let s = String::from_utf8_lossy(&amp_messages[0]);
-        assert!(
-            s.contains("7074000"),
-            "Forwarded message should contain new frequency"
         );
 
         cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
