@@ -767,7 +767,25 @@ pub async fn run_mux_actor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::amplifier::{AmplifierChannel, AmplifierChannelMeta};
     use crate::channel::RadioChannelMeta;
+
+    /// Create a channel pair for a virtual amplifier (test helper)
+    fn create_virtual_amp_channel(
+        protocol: Protocol,
+        civ_address: Option<u8>,
+        buffer_size: usize,
+    ) -> (
+        AmplifierChannel,
+        mpsc::Sender<Vec<u8>>,
+        mpsc::Receiver<Vec<u8>>,
+    ) {
+        let (cmd_tx, cmd_rx) = mpsc::channel(buffer_size);
+        let (resp_tx, resp_rx) = mpsc::channel(buffer_size);
+        let meta = AmplifierChannelMeta::new_virtual(protocol, civ_address);
+        let channel = AmplifierChannel::new(meta, cmd_tx, resp_rx);
+        (channel, resp_tx, cmd_rx)
+    }
 
     #[tokio::test]
     async fn test_register_radio() {
@@ -888,7 +906,7 @@ mod tests {
 
         // Connect an amplifier using the helper
         let (amp_channel, _resp_tx, mut amp_rx) =
-            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
         cmd_tx
             .send(MuxActorCommand::ConnectAmplifier {
                 channel: amp_channel,
@@ -973,7 +991,7 @@ mod tests {
 
         // Connect an amplifier using the helper
         let (amp_channel, _resp_tx, mut amp_rx) =
-            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
         cmd_tx
             .send(MuxActorCommand::ConnectAmplifier {
                 channel: amp_channel,
@@ -1027,7 +1045,7 @@ mod tests {
 
         // Connect an amplifier using the helper
         let (amp_channel, _resp_tx, mut amp_rx) =
-            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
         cmd_tx
             .send(MuxActorCommand::ConnectAmplifier {
                 channel: amp_channel,
@@ -1117,7 +1135,7 @@ mod tests {
 
         // Connect an amplifier - but do NOT send AI2; to enable auto-info
         let (amp_channel, _resp_tx, mut amp_rx) =
-            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
         cmd_tx
             .send(MuxActorCommand::ConnectAmplifier {
                 channel: amp_channel,
@@ -1179,7 +1197,7 @@ mod tests {
 
         // Connect an amplifier using the helper
         let (amp_channel, _resp_tx, _amp_rx) =
-            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
         cmd_tx
             .send(MuxActorCommand::ConnectAmplifier {
                 channel: amp_channel,
@@ -1210,7 +1228,7 @@ mod tests {
 
         // Reconnect with a new channel
         let (amp_channel2, _resp_tx2, mut amp_rx2) =
-            crate::amplifier::create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
         cmd_tx
             .send(MuxActorCommand::ConnectAmplifier {
                 channel: amp_channel2,

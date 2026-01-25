@@ -104,27 +104,6 @@ impl AmplifierChannel {
     }
 }
 
-/// Create a channel pair for a virtual amplifier
-///
-/// Returns (AmplifierChannel for mux, Sender for sending responses, Receiver for getting commands)
-pub(crate) fn create_virtual_amp_channel(
-    protocol: Protocol,
-    civ_address: Option<u8>,
-    buffer_size: usize,
-) -> (
-    AmplifierChannel,
-    mpsc::Sender<Vec<u8>>,
-    mpsc::Receiver<Vec<u8>>,
-) {
-    let (cmd_tx, cmd_rx) = mpsc::channel(buffer_size);
-    let (resp_tx, resp_rx) = mpsc::channel(buffer_size);
-
-    let meta = AmplifierChannelMeta::new_virtual(protocol, civ_address);
-    let channel = AmplifierChannel::new(meta, cmd_tx, resp_rx);
-
-    (channel, resp_tx, cmd_rx)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
