@@ -2109,27 +2109,6 @@ impl CatapultApp {
                         }
                     }
                 }
-                SimulationEvent::RadioCommandSent { radio_id, data } => {
-                    // Route through async task if available
-                    if let Some(sender) = self.virtual_radio_senders.get(&radio_id) {
-                        let _ = sender.try_send(VirtualRadioCommand::CommandSent(data));
-                    } else {
-                        // Fallback: process inline
-                        // Find the panel by sim_radio_id to get its handle
-                        if let Some(panel) = self
-                            .radio_panels
-                            .iter()
-                            .find(|p| p.sim_radio_id.as_ref() == Some(&radio_id))
-                        {
-                            if let Some(handle) = panel.handle {
-                                self.send_mux_command(
-                                    MuxActorCommand::RadioRawDataOut { handle, data },
-                                    "RadioRawDataOut",
-                                );
-                            }
-                        }
-                    }
-                }
                 SimulationEvent::RadioAdded { radio_id: sim_id } => {
                     // Register the simulated radio with the mux actor
                     if let Some(radio) = self.simulation_panel.context().get_radio(&sim_id) {
@@ -2197,17 +2176,35 @@ impl CatapultApp {
                         });
 
                         // Enable auto-info mode on the radio
-                        self.simulation_panel
+                        if let Some(data) = self
+                            .simulation_panel
                             .context_mut()
-                            .send_command(&sim_id, &RadioCommand::EnableAutoInfo { enabled: true });
+                            .send_command(&sim_id, &RadioCommand::EnableAutoInfo { enabled: true })
+                        {
+                            if let Some(sender) = self.virtual_radio_senders.get(&sim_id) {
+                                let _ = sender.try_send(VirtualRadioCommand::CommandSent(data));
+                            }
+                        }
 
                         // Query initial state (frequency and mode)
-                        self.simulation_panel
+                        if let Some(data) = self
+                            .simulation_panel
                             .context_mut()
-                            .send_command(&sim_id, &RadioCommand::GetFrequency);
-                        self.simulation_panel
+                            .send_command(&sim_id, &RadioCommand::GetFrequency)
+                        {
+                            if let Some(sender) = self.virtual_radio_senders.get(&sim_id) {
+                                let _ = sender.try_send(VirtualRadioCommand::CommandSent(data));
+                            }
+                        }
+                        if let Some(data) = self
+                            .simulation_panel
                             .context_mut()
-                            .send_command(&sim_id, &RadioCommand::GetMode);
+                            .send_command(&sim_id, &RadioCommand::GetMode)
+                        {
+                            if let Some(sender) = self.virtual_radio_senders.get(&sim_id) {
+                                let _ = sender.try_send(VirtualRadioCommand::CommandSent(data));
+                            }
+                        }
                     }
                     self.set_status(format!("Virtual radio added: {}", sim_id));
                     self.save_virtual_radios();
@@ -2240,43 +2237,6 @@ impl CatapultApp {
                         .retain(|p| p.sim_radio_id.as_ref() != Some(&sim_id));
                     self.set_status(format!("Virtual radio removed: {}", sim_id));
                     self.save_virtual_radios();
-                }
-                SimulationEvent::RadioStateChanged {
-                    radio_id: sim_id,
-                    frequency_hz,
-                    mode,
-                    ptt,
-                } => {
-                    if let Some(&handle) = self.sim_radio_ids.get(&sim_id) {
-                        // Always update local RadioPanel state directly (for immediate UI update)
-                        // Update local RadioPanel state directly for immediate UI feedback.
-                        // The mux actor will also receive the state change via the RadioOutput
-                        // path, so we don't need to send RadioCommand here (that would be duplicate).
-                        if let Some(panel) = self
-                            .radio_panels
-                            .iter_mut()
-                            .find(|p| p.handle == Some(handle))
-                        {
-                            if let Some(hz) = frequency_hz {
-                                panel.frequency_hz = Some(hz);
-                            }
-                            if let Some(m) = mode {
-                                panel.mode = Some(m);
-                            }
-                            if let Some(active) = ptt {
-                                panel.ptt = active;
-                            }
-                        }
-                    } else {
-                        tracing::warn!(
-                            "No handle mapping for sim_id {} in RadioStateChanged",
-                            sim_id
-                        );
-                    }
-                    // Save frequency/mode changes (but not PTT which is transient)
-                    if frequency_hz.is_some() || mode.is_some() {
-                        self.save_virtual_radios();
-                    }
                 }
             }
         }

@@ -13,19 +13,10 @@ use crate::radio::{VirtualRadio, VirtualRadioConfig};
 pub enum SimulationEvent {
     /// A radio generated output bytes (response from radio)
     RadioOutput { radio_id: String, data: Vec<u8> },
-    /// A command was sent to a radio (for traffic monitor)
-    RadioCommandSent { radio_id: String, data: Vec<u8> },
     /// A radio was added
     RadioAdded { radio_id: String },
     /// A radio was removed
     RadioRemoved { radio_id: String },
-    /// Radio state changed
-    RadioStateChanged {
-        radio_id: String,
-        frequency_hz: Option<u64>,
-        mode: Option<OperatingMode>,
-        ptt: Option<bool>,
-    },
 }
 
 /// Manages the simulation of virtual radios
@@ -181,25 +172,22 @@ impl SimulationContext {
         }
     }
 
-    /// Send a command to a radio and generate events for traffic monitor
+    /// Send a command to a radio and return the encoded command bytes
     ///
     /// This simulates sending a CAT command to the radio. It:
-    /// 1. Encodes the command to protocol bytes
-    /// 2. Generates a RadioCommandSent event (for outgoing traffic display)
-    /// 3. Has the radio process the command
-    /// 4. Generates RadioOutput events for any response
-    pub fn send_command(&mut self, id: &str, cmd: &RadioCommand) -> bool {
+    /// 1. Encodes the command to protocol bytes (returned to caller for routing)
+    /// 2. Has the radio process the command
+    /// 3. Generates RadioOutput events for any response
+    ///
+    /// The caller is responsible for routing the returned bytes to the mux
+    /// for traffic monitoring.
+    pub fn send_command(&mut self, id: &str, cmd: &RadioCommand) -> Option<Vec<u8>> {
         if let Some(radio) = self.radios.get_mut(id) {
-            // Encode the command to protocol bytes for traffic display
-            if let Some(encoded) = radio.encode_command(cmd) {
-                self.events.push(SimulationEvent::RadioCommandSent {
-                    radio_id: id.to_string(),
-                    data: encoded,
-                });
-            }
+            // Encode the command to protocol bytes (caller will route to mux)
+            let encoded = radio.encode_command(cmd);
 
             // Have the radio process the command
-            let handled = radio.handle_command(cmd);
+            radio.handle_command(cmd);
 
             // Collect any output (response) from the radio
             while let Some(data) = radio.take_output() {
@@ -209,9 +197,9 @@ impl SimulationContext {
                 });
             }
 
-            handled
+            encoded
         } else {
-            false
+            None
         }
     }
 
@@ -220,20 +208,11 @@ impl SimulationContext {
         if let Some(radio) = self.radios.get_mut(id) {
             // Collect all pending output (radio-encoded bytes for traffic monitor)
             while let Some(data) = radio.take_output() {
-                // Generate radio output event
                 self.events.push(SimulationEvent::RadioOutput {
                     radio_id: id.to_string(),
                     data,
                 });
             }
-
-            // Generate state change event
-            self.events.push(SimulationEvent::RadioStateChanged {
-                radio_id: id.to_string(),
-                frequency_hz: Some(radio.frequency_hz()),
-                mode: Some(radio.mode()),
-                ptt: Some(radio.ptt()),
-            });
         }
     }
 
@@ -320,15 +299,11 @@ mod tests {
         let events = ctx.drain_events();
         assert!(!events.is_empty());
 
-        // Should have radio output and state change events
+        // Should have radio output event (auto_info generates protocol bytes)
         let has_output = events
             .iter()
             .any(|e| matches!(e, SimulationEvent::RadioOutput { .. }));
-        let has_state = events
-            .iter()
-            .any(|e| matches!(e, SimulationEvent::RadioStateChanged { .. }));
         assert!(has_output);
-        assert!(has_state);
     }
 
     #[test]
