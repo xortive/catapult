@@ -41,6 +41,7 @@
 pub mod actor;
 pub mod amplifier;
 pub mod channel;
+pub mod codec;
 pub mod engine;
 pub mod error;
 pub mod events;
@@ -56,6 +57,9 @@ pub use amplifier::{
     VirtualAmplifier,
 };
 pub use channel::{RadioChannelMeta, RadioType};
+
+// Re-export codec types
+pub use codec::ProtocolCodecBox;
 
 // Re-export event types
 pub use events::MuxEvent;

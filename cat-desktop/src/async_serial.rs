@@ -6,61 +6,32 @@
 //!
 //! Radio commands are sent directly to the multiplexer actor through mux_tx,
 //! ensuring that both real and virtual radios use the same code path.
+//!
+//! ## Virtual Radio Support
+//!
+//! Virtual radios use `VirtualRadioIo` which implements `AsyncRead + AsyncWrite`:
+//! - `AsyncRead` receives data from simulation (SimulationEvent::RadioOutput)
+//! - `AsyncWrite` parses raw bytes back to RadioCommand and sends to simulation
 
+use std::collections::VecDeque;
+use std::io::{self, ErrorKind};
+use std::pin::Pin;
 use std::sync::mpsc::Sender;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
+use cat_mux::{MuxActorCommand, ProtocolCodecBox, RadioHandle};
 use cat_protocol::{
-    elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCodec, icom::CivCommand,
-    kenwood::KenwoodCodec, kenwood::KenwoodCommand, yaesu::YaesuCodec,
-    yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand, Protocol, ProtocolCodec,
-    RadioCommand, RadioDatabase, ToRadioCommand,
+    elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
+    yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand, Protocol, RadioCommand,
+    RadioDatabase,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tracing::{debug, info, warn};
 
-use cat_mux::{MuxActorCommand, RadioHandle};
-
 use crate::app::BackgroundMessage;
-
-/// Boxed protocol codec for async operations
-enum ProtocolCodecBox {
-    Kenwood(KenwoodCodec),
-    Icom(CivCodec),
-    Yaesu(YaesuCodec),
-}
-
-impl ProtocolCodecBox {
-    fn new(protocol: Protocol) -> Self {
-        match protocol {
-            Protocol::Kenwood | Protocol::Elecraft => Self::Kenwood(KenwoodCodec::new()),
-            Protocol::IcomCIV => Self::Icom(CivCodec::new()),
-            Protocol::Yaesu | Protocol::YaesuAscii => Self::Yaesu(YaesuCodec::new()),
-            Protocol::FlexRadio => {
-                // FlexRadio uses Ethernet/TCP, not serial - use Kenwood as fallback
-                Self::Kenwood(KenwoodCodec::new())
-            }
-        }
-    }
-
-    fn push_bytes(&mut self, data: &[u8]) {
-        match self {
-            Self::Kenwood(c) => c.push_bytes(data),
-            Self::Icom(c) => c.push_bytes(data),
-            Self::Yaesu(c) => c.push_bytes(data),
-        }
-    }
-
-    fn next_command(&mut self) -> Option<RadioCommand> {
-        match self {
-            Self::Kenwood(c) => c.next_command().map(|cmd| cmd.to_radio_command()),
-            Self::Icom(c) => c.next_command().map(|cmd| cmd.to_radio_command()),
-            Self::Yaesu(c) => c.next_command().map(|cmd| cmd.to_radio_command()),
-        }
-    }
-}
 
 /// Commands that can be sent to an async radio connection task
 #[derive(Debug)]
@@ -70,20 +41,21 @@ pub enum RadioTaskCommand {
 }
 
 /// Async radio connection that runs in a spawned task
-pub struct AsyncRadioConnection {
+///
+/// Generic over the I/O type to support both real serial ports and virtual radios.
+pub struct AsyncRadioConnection<T> {
     handle: RadioHandle,
     port_name: String,
-    stream: SerialStream,
+    io: T,
     protocol: Protocol,
-    codec: ProtocolCodecBox,
     tx: Sender<BackgroundMessage>,
     mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
     buffer: Vec<u8>,
     civ_address: Option<u8>,
 }
 
-impl AsyncRadioConnection {
-    /// Create a new async radio connection
+impl AsyncRadioConnection<SerialStream> {
+    /// Create a new async radio connection to a serial port
     pub fn connect(
         handle: RadioHandle,
         port_name: &str,
@@ -96,19 +68,42 @@ impl AsyncRadioConnection {
             .timeout(Duration::from_millis(100))
             .open_native_async()?;
 
-        let codec = ProtocolCodecBox::new(protocol);
-
         Ok(Self {
             handle,
             port_name: port_name.to_string(),
-            stream,
+            io: stream,
             protocol,
-            codec,
             tx,
             mux_tx,
             buffer: vec![0u8; 1024],
             civ_address: None,
         })
+    }
+}
+
+impl<T> AsyncRadioConnection<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    /// Create a new async radio connection with a custom I/O type
+    pub fn new(
+        handle: RadioHandle,
+        name: String,
+        io: T,
+        protocol: Protocol,
+        tx: Sender<BackgroundMessage>,
+        mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
+    ) -> Self {
+        Self {
+            handle,
+            port_name: name,
+            io,
+            protocol,
+            tx,
+            mux_tx,
+            buffer: vec![0u8; 1024],
+            civ_address: None,
+        }
     }
 
     /// Set the CI-V address for Icom radios
@@ -217,7 +212,7 @@ impl AsyncRadioConnection {
         let mut response = Vec::new();
 
         loop {
-            match tokio::time::timeout(timeout, self.stream.read(&mut self.buffer)).await {
+            match tokio::time::timeout(timeout, self.io.read(&mut self.buffer)).await {
                 Ok(Ok(n)) if n > 0 => {
                     let data = &self.buffer[..n];
                     // Send raw data to mux actor for traffic monitoring
@@ -279,8 +274,8 @@ impl AsyncRadioConnection {
 
     /// Write data to the radio
     pub async fn write(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
-        self.stream.write_all(data).await?;
-        self.stream.flush().await?;
+        self.io.write_all(data).await?;
+        self.io.flush().await?;
 
         // Send traffic notification to mux actor
         let _ = self
@@ -313,34 +308,28 @@ impl AsyncRadioConnection {
                     }
                 }
 
-                // Read from serial port with timeout
+                // Read from I/O with timeout
                 result = tokio::time::timeout(
                     Duration::from_millis(100),
-                    self.stream.read(&mut self.buffer)
+                    self.io.read(&mut self.buffer)
                 ) => {
                     match result {
                         Ok(Ok(n)) if n > 0 => {
                             let data = &self.buffer[..n];
                             debug!("Read {} bytes from {:?}: {:02X?}", n, self.handle, data);
 
-                            // Send raw data to mux actor for traffic monitoring
+                            // Send raw data to mux actor for parsing and processing
                             let _ = self.mux_tx.send(MuxActorCommand::RadioRawData {
                                 handle: self.handle,
                                 data: data.to_vec(),
                             }).await;
-
-                            // Parse commands and send directly to mux actor
-                            self.codec.push_bytes(data);
-                            while let Some(cmd) = self.codec.next_command() {
-                                // Send directly to mux actor (same path as virtual radios)
-                                let _ = self.mux_tx.send(MuxActorCommand::RadioCommand {
-                                    handle: self.handle,
-                                    command: cmd,
-                                }).await;
-                            }
                         }
                         Ok(Ok(_)) => {} // 0 bytes
                         Ok(Err(e)) => {
+                            // For virtual radios, WouldBlock just means no data available
+                            if e.kind() == ErrorKind::WouldBlock {
+                                continue;
+                            }
                             warn!("Read error on {:?}: {}", self.handle, e);
                             let _ = self.tx.send(BackgroundMessage::IoError {
                                 source: format!("Radio {:?}", self.handle),
@@ -358,5 +347,137 @@ impl AsyncRadioConnection {
         let _ = self.tx.send(BackgroundMessage::RadioDisconnected {
             handle: self.handle,
         });
+    }
+}
+
+// ============================================================================
+// Virtual Radio I/O
+// ============================================================================
+
+/// I/O adapter for virtual radios
+///
+/// This struct bridges the simulation to `AsyncRadioConnection`:
+/// - Implements `AsyncRead` to receive data from simulation (RadioOutput events)
+/// - Implements `AsyncWrite` to parse raw bytes and send commands to simulation
+pub struct VirtualRadioIo {
+    /// Buffer for incoming data from simulation (read by AsyncRadioConnection)
+    read_buffer: VecDeque<u8>,
+    /// Receiver for simulation output data
+    sim_rx: tokio_mpsc::Receiver<Vec<u8>>,
+    /// Sender for parsed commands going to simulation
+    cmd_tx: tokio_mpsc::Sender<RadioCommand>,
+    /// Protocol codec for parsing raw bytes into commands
+    codec: ProtocolCodecBox,
+}
+
+impl VirtualRadioIo {
+    /// Create a new VirtualRadioIo
+    ///
+    /// Returns (VirtualRadioIo, sim_tx, cmd_rx) where:
+    /// - sim_tx: Send simulation output (RadioOutput data) to be read by AsyncRadioConnection
+    /// - cmd_rx: Receive parsed commands to forward to simulation
+    pub fn new(
+        protocol: Protocol,
+    ) -> (
+        Self,
+        tokio_mpsc::Sender<Vec<u8>>,
+        tokio_mpsc::Receiver<RadioCommand>,
+    ) {
+        let (sim_tx, sim_rx) = tokio_mpsc::channel(64);
+        let (cmd_tx, cmd_rx) = tokio_mpsc::channel(64);
+
+        let io = Self {
+            read_buffer: VecDeque::new(),
+            sim_rx,
+            cmd_tx,
+            codec: ProtocolCodecBox::new(protocol),
+        };
+
+        (io, sim_tx, cmd_rx)
+    }
+}
+
+impl AsyncRead for VirtualRadioIo {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        // First, try to drain from our internal buffer
+        if !self.read_buffer.is_empty() {
+            let to_read = buf.remaining().min(self.read_buffer.len());
+            for _ in 0..to_read {
+                if let Some(byte) = self.read_buffer.pop_front() {
+                    buf.put_slice(&[byte]);
+                }
+            }
+            return Poll::Ready(Ok(()));
+        }
+
+        // Try to receive more data from simulation
+        match self.sim_rx.poll_recv(cx) {
+            Poll::Ready(Some(data)) => {
+                // Add to our buffer
+                self.read_buffer.extend(data);
+
+                // Now read as much as we can
+                let to_read = buf.remaining().min(self.read_buffer.len());
+                for _ in 0..to_read {
+                    if let Some(byte) = self.read_buffer.pop_front() {
+                        buf.put_slice(&[byte]);
+                    }
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(None) => {
+                // Channel closed
+                Poll::Ready(Err(io::Error::new(
+                    ErrorKind::ConnectionAborted,
+                    "simulation channel closed",
+                )))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl AsyncWrite for VirtualRadioIo {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        // Parse the raw bytes into commands using the codec
+        self.codec.push_bytes(buf);
+
+        // Extract all parsed commands and send to simulation
+        while let Some(cmd) = self.codec.next_command() {
+            // Try to send the command
+            match self.cmd_tx.poll_reserve(cx) {
+                Poll::Ready(Ok(())) => {
+                    let _ = self.cmd_tx.send_item(cmd);
+                }
+                Poll::Ready(Err(_)) => {
+                    return Poll::Ready(Err(io::Error::new(
+                        ErrorKind::ConnectionAborted,
+                        "command channel closed",
+                    )));
+                }
+                Poll::Pending => {
+                    // Channel is full, but we've already consumed the bytes
+                    // This is a rare edge case - just continue
+                }
+            }
+        }
+
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }

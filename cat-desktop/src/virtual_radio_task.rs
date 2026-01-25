@@ -7,10 +7,7 @@
 use std::sync::mpsc::Sender;
 
 use cat_mux::{MuxActorCommand, RadioHandle};
-use cat_protocol::{
-    icom::CivCodec, kenwood::KenwoodCodec, yaesu::YaesuCodec, Protocol, ProtocolCodec,
-    RadioCommand, ToRadioCommand,
-};
+use cat_protocol::Protocol;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::info;
 
@@ -49,23 +46,10 @@ pub async fn run_virtual_radio_task(
     loop {
         match cmd_rx.recv().await {
             Some(VirtualRadioCommand::SimulationOutput(data)) => {
-                // Send raw data to mux actor for traffic monitoring
+                // Send raw data to mux actor (which now handles parsing)
                 let _ = mux_tx
-                    .send(MuxActorCommand::RadioRawData {
-                        handle,
-                        data: data.clone(),
-                    })
+                    .send(MuxActorCommand::RadioRawData { handle, data })
                     .await;
-
-                // Parse and send commands to mux actor
-                for cmd in parse_radio_data(&data, protocol) {
-                    let _ = mux_tx
-                        .send(MuxActorCommand::RadioCommand {
-                            handle,
-                            command: cmd,
-                        })
-                        .await;
-                }
             }
 
             Some(VirtualRadioCommand::CommandSent(data)) => {
@@ -85,41 +69,4 @@ pub async fn run_virtual_radio_task(
         "Virtual radio task shutting down for {} (handle {})",
         sim_id, handle.0
     );
-}
-
-/// Parse raw radio data into RadioCommands (moved from app.rs)
-fn parse_radio_data(data: &[u8], protocol: Protocol) -> Vec<RadioCommand> {
-    let mut commands = Vec::new();
-    match protocol {
-        Protocol::Kenwood | Protocol::Elecraft => {
-            let mut codec = KenwoodCodec::new();
-            codec.push_bytes(data);
-            while let Some(cmd) = codec.next_command() {
-                commands.push(cmd.to_radio_command());
-            }
-        }
-        Protocol::IcomCIV => {
-            let mut codec = CivCodec::new();
-            codec.push_bytes(data);
-            while let Some(cmd) = codec.next_command() {
-                commands.push(cmd.to_radio_command());
-            }
-        }
-        Protocol::Yaesu | Protocol::YaesuAscii => {
-            let mut codec = YaesuCodec::new();
-            codec.push_bytes(data);
-            while let Some(cmd) = codec.next_command() {
-                commands.push(cmd.to_radio_command());
-            }
-        }
-        Protocol::FlexRadio => {
-            // FlexRadio uses Kenwood-style commands
-            let mut codec = KenwoodCodec::new();
-            codec.push_bytes(data);
-            while let Some(cmd) = codec.next_command() {
-                commands.push(cmd.to_radio_command());
-            }
-        }
-    }
-    commands
 }

@@ -38,6 +38,7 @@ use tracing::{debug, info, warn};
 
 use crate::amplifier::AmplifierChannel;
 use crate::channel::RadioChannelMeta;
+use crate::codec::ProtocolCodecBox;
 use crate::engine::Multiplexer;
 use crate::error::MuxError;
 use crate::events::MuxEvent;
@@ -181,6 +182,8 @@ struct MuxActorState {
     multiplexer: Multiplexer,
     /// Registered radio channels (keyed by handle)
     radio_channels: HashMap<RadioHandle, RadioChannelMeta>,
+    /// Protocol codecs for parsing raw data (keyed by handle)
+    codecs: HashMap<RadioHandle, ProtocolCodecBox>,
     /// Amplifier data sender (for sending translated commands)
     amp_tx: Option<mpsc::Sender<Vec<u8>>>,
     /// Amplifier metadata
@@ -192,6 +195,7 @@ impl MuxActorState {
         Self {
             multiplexer: Multiplexer::new(),
             radio_channels: HashMap::new(),
+            codecs: HashMap::new(),
             amp_tx: None,
             amp_meta: None,
         }
@@ -199,6 +203,102 @@ impl MuxActorState {
 
     fn get_radio_meta(&self, handle: RadioHandle) -> Option<&RadioChannelMeta> {
         self.radio_channels.get(&handle)
+    }
+}
+
+/// Process a radio command through the multiplexer and emit events
+///
+/// This helper is used by both the RadioCommand handler (for direct command injection)
+/// and the RadioRawData handler (after parsing commands from raw bytes).
+async fn process_radio_command(
+    state: &mut MuxActorState,
+    event_tx: &mpsc::Sender<MuxEvent>,
+    handle: RadioHandle,
+    command: RadioCommand,
+) {
+    let Some(meta) = state.get_radio_meta(handle) else {
+        warn!("Unknown radio handle {} in process_radio_command", handle.0);
+        return;
+    };
+
+    debug!(
+        "Processing command from radio {} (handle {}): {:?}",
+        meta.display_name, handle.0, command
+    );
+
+    // Track state changes for event emission
+    let old_freq = state
+        .multiplexer
+        .get_radio(handle)
+        .and_then(|r| r.frequency_hz);
+    let old_mode = state.multiplexer.get_radio(handle).and_then(|r| r.mode);
+    let old_ptt = state.multiplexer.get_radio(handle).map(|r| r.ptt);
+    let old_active = state.multiplexer.active_radio();
+
+    // Process through multiplexer
+    let amp_data = state.multiplexer.process_radio_command(handle, command);
+
+    // Check for state changes
+    let new_freq = state
+        .multiplexer
+        .get_radio(handle)
+        .and_then(|r| r.frequency_hz);
+    let new_mode = state.multiplexer.get_radio(handle).and_then(|r| r.mode);
+    let new_ptt = state.multiplexer.get_radio(handle).map(|r| r.ptt);
+    let new_active = state.multiplexer.active_radio();
+
+    // Emit state change event if anything changed
+    let freq_changed = old_freq != new_freq;
+    let mode_changed = old_mode != new_mode;
+    let ptt_changed = old_ptt != new_ptt;
+
+    if freq_changed || mode_changed || ptt_changed {
+        let _ = event_tx
+            .send(MuxEvent::RadioStateChanged {
+                handle,
+                freq: if freq_changed { new_freq } else { None },
+                mode: if mode_changed { new_mode } else { None },
+                ptt: if ptt_changed { new_ptt } else { None },
+            })
+            .await;
+    }
+
+    // Emit active radio change event if needed
+    if old_active != new_active {
+        if let Some(to) = new_active {
+            let _ = event_tx
+                .send(MuxEvent::ActiveRadioChanged {
+                    from: old_active,
+                    to,
+                })
+                .await;
+        }
+    }
+
+    // Send to amplifier if there's data
+    if let Some(data) = amp_data {
+        let amp_protocol = state.multiplexer.amplifier_config().protocol;
+
+        // Emit traffic event for data going to amplifier
+        let _ = event_tx
+            .send(MuxEvent::AmpDataOut {
+                data: data.clone(),
+                protocol: amp_protocol,
+            })
+            .await;
+
+        // Send to amplifier if connected
+        if let Some(ref tx) = state.amp_tx {
+            if let Err(e) = tx.send(data).await {
+                warn!("Failed to send to amplifier: {}", e);
+                let _ = event_tx
+                    .send(MuxEvent::Error {
+                        source: "Amplifier".to_string(),
+                        message: format!("Send failed: {}", e),
+                    })
+                    .await;
+            }
+        }
     }
 }
 
@@ -236,6 +336,9 @@ pub async fn run_mux_actor(
                 // Store the channel metadata
                 state.radio_channels.insert(handle, meta.clone());
 
+                // Create codec for parsing raw data
+                state.codecs.insert(handle, ProtocolCodecBox::new(protocol));
+
                 // Send back the handle
                 let _ = response.send(handle);
 
@@ -250,6 +353,7 @@ pub async fn run_mux_actor(
             MuxActorCommand::UnregisterRadio { handle } => {
                 if let Some(meta) = state.radio_channels.remove(&handle) {
                     state.multiplexer.remove_radio(handle);
+                    state.codecs.remove(&handle);
 
                     // Emit event
                     let _ = event_tx.send(MuxEvent::RadioDisconnected { handle }).await;
@@ -262,91 +366,8 @@ pub async fn run_mux_actor(
             }
 
             MuxActorCommand::RadioCommand { handle, command } => {
-                let Some(meta) = state.get_radio_meta(handle) else {
-                    warn!("Unknown radio handle {} in RadioCommand", handle.0);
-                    continue;
-                };
-                let _protocol = meta.protocol;
-
-                debug!(
-                    "Processing command from radio {} (handle {}): {:?}",
-                    meta.display_name, handle.0, command
-                );
-
-                // Track state changes for event emission
-                let old_freq = state
-                    .multiplexer
-                    .get_radio(handle)
-                    .and_then(|r| r.frequency_hz);
-                let old_mode = state.multiplexer.get_radio(handle).and_then(|r| r.mode);
-                let old_ptt = state.multiplexer.get_radio(handle).map(|r| r.ptt);
-                let old_active = state.multiplexer.active_radio();
-
-                // Process through multiplexer
-                let amp_data = state.multiplexer.process_radio_command(handle, command);
-
-                // Check for state changes
-                let new_freq = state
-                    .multiplexer
-                    .get_radio(handle)
-                    .and_then(|r| r.frequency_hz);
-                let new_mode = state.multiplexer.get_radio(handle).and_then(|r| r.mode);
-                let new_ptt = state.multiplexer.get_radio(handle).map(|r| r.ptt);
-                let new_active = state.multiplexer.active_radio();
-
-                // Emit state change event if anything changed
-                let freq_changed = old_freq != new_freq;
-                let mode_changed = old_mode != new_mode;
-                let ptt_changed = old_ptt != new_ptt;
-
-                if freq_changed || mode_changed || ptt_changed {
-                    let _ = event_tx
-                        .send(MuxEvent::RadioStateChanged {
-                            handle,
-                            freq: if freq_changed { new_freq } else { None },
-                            mode: if mode_changed { new_mode } else { None },
-                            ptt: if ptt_changed { new_ptt } else { None },
-                        })
-                        .await;
-                }
-
-                // Emit active radio change event if needed
-                if old_active != new_active {
-                    if let Some(to) = new_active {
-                        let _ = event_tx
-                            .send(MuxEvent::ActiveRadioChanged {
-                                from: old_active,
-                                to,
-                            })
-                            .await;
-                    }
-                }
-
-                // Send to amplifier if there's data
-                if let Some(data) = amp_data {
-                    let amp_protocol = state.multiplexer.amplifier_config().protocol;
-
-                    // Emit traffic event for data going to amplifier
-                    let _ = event_tx
-                        .send(MuxEvent::AmpDataOut {
-                            data: data.clone(),
-                            protocol: amp_protocol,
-                        })
-                        .await;
-
-                    // Send to amplifier if connected
-                    if let Some(ref tx) = state.amp_tx {
-                        if let Err(e) = tx.send(data).await {
-                            warn!("Failed to send to amplifier: {}", e);
-                            let _ = event_tx
-                                .send(MuxEvent::Error {
-                                    source: "Amplifier".to_string(),
-                                    message: format!("Send failed: {}", e),
-                                })
-                                .await;
-                        }
-                    }
-                }
+                // Direct command injection - useful for testing and virtual radios
+                process_radio_command(&mut state, &event_tx, handle, command).await;
             }
 
             MuxActorCommand::SetActiveRadio { handle } => {
@@ -468,10 +489,23 @@ pub async fn run_mux_actor(
                     })
                     .await;
 
-                // Parse commands from raw data and process them
-                // Note: Parsing is done by the caller (async_serial) which sends RadioCommand
-                // This is just for traffic monitoring
-                debug!("Raw data in from radio {}: {} bytes", handle.0, data.len());
+                // Parse commands from raw data using the codec
+                // Collect commands first to avoid borrow conflict with state
+                let commands: Vec<_> = if let Some(codec) = state.codecs.get_mut(&handle) {
+                    codec.push_bytes(&data);
+                    std::iter::from_fn(|| codec.next_command()).collect()
+                } else {
+                    debug!(
+                        "No codec found for radio {} (handle {}), skipping parse",
+                        handle.0, handle.0
+                    );
+                    Vec::new()
+                };
+
+                // Process all complete commands
+                for command in commands {
+                    process_radio_command(&mut state, &event_tx, handle, command).await;
+                }
             }
 
             MuxActorCommand::RadioRawDataOut { handle, data } => {
