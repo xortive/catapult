@@ -15,7 +15,7 @@ use crate::{MuxActorCommand, MuxEvent};
 /// Async amplifier connection that runs in a spawned task
 ///
 /// Generic over the I/O type to support both real serial ports and virtual amplifiers.
-/// For virtual amplifiers, use `VirtualAmplifierIo`.
+/// For virtual amplifiers, use `VirtualAmplifier` from cat-sim.
 pub struct AsyncAmpConnection<T> {
     io: T,
     mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
@@ -30,7 +30,7 @@ where
     ///
     /// # Arguments
     ///
-    /// * `io` - Any type implementing AsyncRead + AsyncWrite (SerialStream, VirtualAmplifierIo, etc.)
+    /// * `io` - Any type implementing AsyncRead + AsyncWrite (SerialStream, VirtualAmplifier, etc.)
     /// * `mux_tx` - Channel sender for communicating with the mux actor
     /// * `event_tx` - Channel sender for emitting MuxEvents (errors)
     pub fn new(
