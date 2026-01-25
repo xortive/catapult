@@ -5,19 +5,25 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
 
 use cat_detect::{suggest_protocol_for_port, DetectedRadio, PortScanner, SerialPortInfo};
-use cat_mux::{Multiplexer, MultiplexerEvent, RadioHandle, SwitchingMode};
+use cat_mux::{
+    run_mux_actor, AmplifierChannel, AmplifierChannelMeta, MuxActorCommand, MuxEvent,
+    RadioChannelMeta, RadioHandle, RadioStateSummary, SwitchingMode,
+};
 use cat_protocol::{OperatingMode, Protocol, RadioCommand};
 use cat_sim::SimulationEvent;
 use eframe::CreationContext;
 use egui::{Color32, RichText, Ui};
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tracing::Level;
 
+use crate::amp_task::{run_amp_task, run_virtual_amp_task, AmpTaskCommand};
+use crate::async_serial::{AsyncRadioConnection, RadioTaskCommand};
 use crate::diagnostics_layer::DiagnosticEvent;
 use crate::radio_panel::{RadioConnectionType, RadioPanel};
-use crate::serial_io::{AmplifierConnection, RadioConnection};
 use crate::settings::{AmplifierSettings, ConfiguredRadio, Settings};
 use crate::simulation_panel::SimulationPanel;
 use crate::traffic_monitor::{DiagnosticSeverity, ExportAction, TrafficMonitor};
+use crate::virtual_radio_task::{run_virtual_radio_task, VirtualRadioCommand};
 
 /// Connection type for amplifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,16 +62,26 @@ pub enum BackgroundMessage {
     ScanComplete(Vec<DetectedRadio>),
     /// Error occurred
     Error(String),
-    /// Traffic received from radio
-    TrafficIn { radio: RadioHandle, data: Vec<u8> },
-    /// Traffic sent to radio (outgoing commands)
-    RadioTrafficOut { radio: RadioHandle, data: Vec<u8> },
-    /// Traffic sent to amplifier
-    TrafficOut { data: Vec<u8> },
-    /// Traffic received from amplifier
-    AmpTrafficIn { data: Vec<u8> },
     /// I/O error from radio or amplifier
     IoError { source: String, message: String },
+    /// Radio registered with mux actor (handle assigned)
+    RadioRegistered {
+        correlation_id: u64,
+        handle: RadioHandle,
+    },
+    /// Radio successfully connected (async task started)
+    RadioConnected {
+        handle: RadioHandle,
+        model: String,
+        port: String,
+    },
+    /// Radio disconnected (async task ended)
+    RadioDisconnected { handle: RadioHandle },
+    /// Radio state sync response from mux actor
+    RadioStateSync {
+        handle: RadioHandle,
+        state: RadioStateSummary,
+    },
 }
 
 /// Configuration for connecting a COM port radio
@@ -83,8 +99,6 @@ struct ComRadioConfig {
 pub struct CatapultApp {
     /// Settings
     settings: Settings,
-    /// Multiplexer engine
-    multiplexer: Multiplexer,
     /// Port scanner
     scanner: PortScanner,
     /// Available serial ports
@@ -93,8 +107,8 @@ pub struct CatapultApp {
     detected_radios: Vec<DetectedRadio>,
     /// Radio panels for UI (unified list of COM and Virtual radios)
     radio_panels: Vec<RadioPanel>,
-    /// Radio serial connections (keyed by RadioHandle)
-    radio_connections: HashMap<RadioHandle, RadioConnection>,
+    /// Async radio task command senders (keyed by radio_id) -> (port_name, cmd_sender)
+    radio_task_senders: HashMap<u32, (String, tokio_mpsc::Sender<RadioTaskCommand>)>,
     /// Traffic monitor
     traffic_monitor: TrafficMonitor,
     /// Is scanning in progress
@@ -113,6 +127,8 @@ pub struct CatapultApp {
     bg_rx: Receiver<BackgroundMessage>,
     /// Background message sender (for cloning to tasks)
     bg_tx: Sender<BackgroundMessage>,
+    /// Tokio runtime handle for spawning async tasks
+    rt_handle: tokio::runtime::Handle,
     /// Selected amplifier port
     amp_port: String,
     /// Selected amplifier protocol
@@ -123,10 +139,12 @@ pub struct CatapultApp {
     amp_civ_address: u8,
     /// Amplifier connection type
     amp_connection_type: AmplifierConnectionType,
-    /// Amplifier connection (when connected, only for ComPort type)
-    amp_connection: Option<AmplifierConnection>,
-    /// Maps simulation radio IDs to multiplexer handles
-    sim_radio_handles: HashMap<String, RadioHandle>,
+    /// Amplifier data sender (for async amplifier task)
+    amp_data_tx: Option<tokio_mpsc::Sender<Vec<u8>>>,
+    /// Amplifier command sender (for shutdown)
+    amp_cmd_tx: Option<tokio_mpsc::Sender<AmpTaskCommand>>,
+    /// Maps simulation radio IDs to RadioHandle
+    sim_radio_ids: HashMap<String, RadioHandle>,
     /// Selected port for adding a new COM radio
     add_radio_port: String,
     /// Selected protocol for adding a new COM radio
@@ -137,11 +155,36 @@ pub struct CatapultApp {
     add_radio_civ_address: u8,
     /// Diagnostic event receiver (from tracing layer)
     diag_rx: Receiver<DiagnosticEvent>,
+    /// Next correlation_id to assign for pending registrations
+    next_correlation_id: u64,
+    /// Mux command sender (for sending commands to mux actor)
+    mux_cmd_tx: tokio_mpsc::Sender<MuxActorCommand>,
+    /// Mux event receiver (for receiving events from mux actor)
+    mux_event_rx: tokio_mpsc::Receiver<MuxEvent>,
+    /// Pending registrations: correlation_id -> panel index
+    pending_registrations: HashMap<u64, usize>,
+    /// Currently active radio handle (tracked locally from events)
+    active_radio: Option<RadioHandle>,
+    /// Current switching mode (tracked locally from events)
+    switching_mode: SwitchingMode,
+    /// Pending radio configs awaiting handle from mux actor
+    pending_radio_configs: HashMap<u64, ComRadioConfig>,
+    /// Virtual radio task command senders (keyed by sim_id)
+    virtual_radio_senders: HashMap<String, tokio_mpsc::Sender<VirtualRadioCommand>>,
+    /// Last time we synced radio states with mux actor
+    last_state_sync: Instant,
+    /// Tokio runtime (must be kept alive for async tasks)
+    _runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl CatapultApp {
     /// Create a new application
-    pub fn new(_cc: &CreationContext<'_>, diag_rx: Receiver<DiagnosticEvent>) -> Self {
+    pub fn new(
+        _cc: &CreationContext<'_>,
+        diag_rx: Receiver<DiagnosticEvent>,
+        runtime: tokio::runtime::Runtime,
+    ) -> Self {
+        let rt_handle = runtime.handle().clone();
         let (bg_tx, bg_rx) = mpsc::channel();
         let settings = Settings::load();
 
@@ -152,6 +195,16 @@ impl CatapultApp {
             AmplifierConnectionType::Simulated
         };
 
+        // Create channels for mux actor
+        let (mux_cmd_tx, mux_cmd_rx) = tokio_mpsc::channel::<MuxActorCommand>(256);
+        let (mux_event_tx, mux_event_rx) = tokio_mpsc::channel::<MuxEvent>(256);
+
+        // Spawn the mux actor (from cat-mux crate)
+        rt_handle.spawn(async move {
+            run_mux_actor(mux_cmd_rx, mux_event_tx).await;
+            tracing::error!("Mux actor exited unexpectedly");
+        });
+
         let mut app = Self {
             traffic_monitor: TrafficMonitor::new(
                 settings.traffic_history_size,
@@ -161,12 +214,11 @@ impl CatapultApp {
                 settings.show_diagnostic_warning,
                 settings.show_diagnostic_error,
             ),
-            multiplexer: Multiplexer::new(),
             scanner: PortScanner::new(),
             available_ports: Vec::new(),
             detected_radios: Vec::new(),
             radio_panels: Vec::new(),
-            radio_connections: HashMap::new(),
+            radio_task_senders: HashMap::new(),
             scanning: false,
             last_scan: None,
             status_message: None,
@@ -175,19 +227,31 @@ impl CatapultApp {
             simulation_panel: SimulationPanel::new(),
             bg_rx,
             bg_tx,
+            rt_handle,
             amp_port: settings.amplifier.port.clone(),
             amp_protocol: settings.amplifier.protocol,
             amp_baud: settings.amplifier.baud_rate,
             amp_civ_address: settings.amplifier.civ_address,
             amp_connection_type,
-            amp_connection: None,
-            sim_radio_handles: HashMap::new(),
+            amp_data_tx: None,
+            amp_cmd_tx: None,
+            sim_radio_ids: HashMap::new(),
             add_radio_port: String::new(),
             add_radio_protocol: Protocol::Kenwood,
             add_radio_baud: 9600,
             add_radio_civ_address: 0x00,
             diag_rx,
             settings,
+            next_correlation_id: 1,
+            mux_cmd_tx,
+            mux_event_rx,
+            pending_registrations: HashMap::new(),
+            active_radio: None,
+            switching_mode: SwitchingMode::default(),
+            pending_radio_configs: HashMap::new(),
+            virtual_radio_senders: HashMap::new(),
+            last_state_sync: Instant::now(),
+            _runtime: Some(runtime),
         };
 
         // Initial port enumeration
@@ -212,42 +276,44 @@ impl CatapultApp {
         app
     }
 
-    /// Refresh available ports
+    /// Refresh available ports (sync version for initialization)
     fn refresh_ports(&mut self) {
         match self.scanner.enumerate_ports() {
             Ok(mut ports) => {
                 PortScanner::sort_by_classification(&mut ports);
                 self.available_ports = ports;
-
-                // Clear add_radio_port if it's no longer available
-                if !self.add_radio_port.is_empty() {
-                    let port_exists = self
-                        .available_ports
-                        .iter()
-                        .any(|p| p.port == self.add_radio_port);
-                    if !port_exists {
-                        self.add_radio_port.clear();
-                    }
-                }
-
-                // Clear amp_port if it's no longer available or is now used by a radio
-                if !self.amp_port.is_empty() {
-                    let port_exists = self.available_ports.iter().any(|p| p.port == self.amp_port);
-                    let in_use_by_radio = self.radio_ports_in_use().contains(&self.amp_port);
-                    if !port_exists || in_use_by_radio {
-                        self.amp_port.clear();
-                        if self.amp_connection.is_some() {
-                            self.amp_connection = None;
-                            self.set_status(
-                                "Amplifier disconnected: port no longer available".into(),
-                            );
-                        }
-                        self.save_amplifier_settings();
-                    }
-                }
+                self.validate_port_selections();
             }
             Err(e) => {
                 self.report_warning("System", format!("Failed to enumerate ports: {}", e));
+            }
+        }
+    }
+
+    /// Validate port selections after port list changes
+    fn validate_port_selections(&mut self) {
+        // Clear add_radio_port if it's no longer available
+        if !self.add_radio_port.is_empty() {
+            let port_exists = self
+                .available_ports
+                .iter()
+                .any(|p| p.port == self.add_radio_port);
+            if !port_exists {
+                self.add_radio_port.clear();
+            }
+        }
+
+        // Clear amp_port if it's no longer available or is now used by a radio
+        if !self.amp_port.is_empty() {
+            let port_exists = self.available_ports.iter().any(|p| p.port == self.amp_port);
+            let in_use_by_radio = self.radio_ports_in_use().contains(&self.amp_port);
+            if !port_exists || in_use_by_radio {
+                self.amp_port.clear();
+                if self.amp_data_tx.is_some() {
+                    self.disconnect_amplifier();
+                    self.set_status("Amplifier disconnected: port no longer available".into());
+                }
+                self.save_amplifier_settings();
             }
         }
     }
@@ -310,75 +376,115 @@ impl CatapultApp {
         for config in self.settings.configured_radios.clone() {
             let port_available = available_ports.contains(&config.port);
 
-            // Add to multiplexer
-            let handle = self.multiplexer.add_radio(
-                config.model_name.clone(),
-                config.port.clone(),
-                config.protocol,
-            );
+            // Create ComRadioConfig
+            let com_config = ComRadioConfig {
+                port: config.port.clone(),
+                protocol: config.protocol,
+                baud_rate: config.baud_rate,
+                civ_address: config.civ_address,
+                model_name: config.model_name.clone(),
+                query_initial_state: false,
+            };
 
-            // Create RadioPanel
-            let mut panel = RadioPanel::new_from_config(handle, &config);
-            if !port_available {
-                panel.unavailable = true;
-            }
-            self.radio_panels.push(panel);
-
-            // Open the serial connection if port is available
             if port_available {
-                match RadioConnection::new(
-                    handle,
-                    &config.port,
-                    config.baud_rate,
-                    config.protocol,
-                    self.bg_tx.clone(),
-                ) {
-                    Ok(mut conn) => {
-                        // Set CI-V address for Icom radios
-                        if let Some(civ_addr) = config.civ_address {
-                            conn.set_civ_address(civ_addr);
-                        }
+                // Create RadioPanel with no handle (will be updated when handle arrives)
+                let panel = RadioPanel::new_from_config(None, &config);
+                self.radio_panels.push(panel);
+                let panel_index = self.radio_panels.len() - 1;
 
-                        // Small delay to let the radio settle after port open
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-
-                        // Query initial state (frequency/mode) before enabling auto-info
-                        if let Err(e) = conn.query_initial_state() {
-                            tracing::warn!(
-                                "Failed to query initial state on {}: {}",
-                                config.port,
-                                e
-                            );
-                        }
-
-                        // Try to enable auto-info mode
-                        if let Err(e) = conn.enable_auto_info() {
-                            let msg =
-                                format!("Failed to enable auto-info on {}: {}", config.port, e);
-                            tracing::warn!("{}", msg);
-                            // Add to traffic monitor so users can see it
-                            let _ = self.bg_tx.send(BackgroundMessage::IoError {
-                                source: format!("Radio {}", config.port),
-                                message:
-                                    "Auto-info not enabled - radio won't send automatic updates"
-                                        .to_string(),
-                            });
-                        }
-
-                        self.radio_connections.insert(handle, conn);
-                        self.report_info("Radio", format!("Connected on {}", config.port));
-                    }
-                    Err(e) => {
-                        self.report_err(
-                            "Radio",
-                            format!("Failed to connect to {}: {}", config.port, e),
-                        );
-                    }
-                }
+                // Register with mux actor (handle will arrive via RadioRegistered message)
+                let _correlation_id = self.register_com_radio(com_config, panel_index);
             } else {
+                // Port not available - create panel without registering
+                let mut panel = RadioPanel::new_from_config(None, &config);
+                panel.unavailable = true;
+                self.radio_panels.push(panel);
                 self.report_warning("Radio", format!("{} not available", config.port));
             }
         }
+    }
+
+    /// Spawn an async task for a radio connection
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_radio_task(
+        &mut self,
+        handle: RadioHandle,
+        port: String,
+        baud_rate: u32,
+        protocol: Protocol,
+        civ_address: Option<u8>,
+        model_name: String,
+        query_initial_state: bool,
+    ) {
+        let tx = self.bg_tx.clone();
+        let mux_tx = self.mux_cmd_tx.clone();
+        let rt = self.rt_handle.clone();
+
+        // Create channel for sending commands to the task
+        let (cmd_tx, cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
+
+        // Store the sender so we can send commands to this radio (keyed by handle)
+        self.radio_task_senders
+            .insert(handle.0, (port.clone(), cmd_tx));
+
+        // Spawn the async connection task
+        rt.spawn(async move {
+            match AsyncRadioConnection::connect(
+                handle,
+                &port,
+                baud_rate,
+                protocol,
+                tx.clone(),
+                mux_tx,
+            ) {
+                Ok(mut conn) => {
+                    // Set CI-V address for Icom radios
+                    if let Some(civ_addr) = civ_address {
+                        conn.set_civ_address(civ_addr);
+                    }
+
+                    // Small delay to let the radio settle after port open
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                    // Query radio ID to get actual model name
+                    let actual_model_name = conn.query_id().await.unwrap_or(model_name);
+
+                    // Query initial state if requested
+                    if query_initial_state {
+                        if let Err(e) = conn.query_initial_state().await {
+                            tracing::warn!("Failed to query initial state on {}: {}", port, e);
+                        }
+                    }
+
+                    // Try to enable auto-info mode
+                    if let Err(e) = conn.enable_auto_info().await {
+                        tracing::warn!("Failed to enable auto-info on {}: {}", port, e);
+                        let _ = tx.send(BackgroundMessage::IoError {
+                            source: format!("Radio {}", port),
+                            message: "Auto-info not enabled - radio won't send automatic updates"
+                                .to_string(),
+                        });
+                    }
+
+                    // Notify UI of successful connection
+                    let _ = tx.send(BackgroundMessage::RadioConnected {
+                        handle,
+                        model: actual_model_name,
+                        port: port.clone(),
+                    });
+
+                    // Start read loop (runs until error or shutdown)
+                    conn.run_read_loop(cmd_rx).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(BackgroundMessage::IoError {
+                        source: format!("Radio {}", port),
+                        message: format!("Connection failed: {}", e),
+                    });
+                    let _ = tx.send(BackgroundMessage::RadioDisconnected { handle });
+                }
+            }
+        });
     }
 
     /// Save current configured COM radios to settings
@@ -435,94 +541,113 @@ impl CatapultApp {
         self.report_err("Settings", error);
     }
 
-    /// Connect a COM port radio and add it to the multiplexer
-    /// Returns (RadioHandle, actual_model_name) on success, None on failure
-    /// The actual_model_name may differ from config if ID probing identifies the radio
-    /// Caller is responsible for creating the RadioPanel after this succeeds
-    fn connect_com_radio(&mut self, config: ComRadioConfig) -> Option<(RadioHandle, String)> {
-        // Add to multiplexer with initial model name (may be updated after ID query)
-        let handle = self.multiplexer.add_radio(
-            config.model_name.clone(),
-            config.port.clone(),
-            config.protocol,
-        );
+    /// Allocate a new correlation_id for pending registrations
+    fn allocate_correlation_id(&mut self) -> u64 {
+        let id = self.next_correlation_id;
+        self.next_correlation_id += 1;
+        id
+    }
 
-        // Open the serial connection
-        match RadioConnection::new(
-            handle,
-            &config.port,
-            config.baud_rate,
-            config.protocol,
-            self.bg_tx.clone(),
-        ) {
-            Ok(mut conn) => {
-                // Set CI-V address for Icom radios
-                if let Some(civ_addr) = config.civ_address {
-                    conn.set_civ_address(civ_addr);
-                }
-
-                // Small delay to let the radio settle after port open
-                std::thread::sleep(std::time::Duration::from_millis(100));
-
-                // Query radio ID to get actual model name
-                let actual_model_name = conn.query_id().unwrap_or(config.model_name.clone());
-
-                // Update multiplexer with actual model name if different
-                if actual_model_name != config.model_name {
-                    self.multiplexer
-                        .rename_radio(handle, actual_model_name.clone());
-                }
-
-                // Query initial state if requested (manual additions need this, scanned radios don't)
-                if config.query_initial_state {
-                    if let Err(e) = conn.query_initial_state() {
-                        tracing::warn!("Failed to query initial state on {}: {}", config.port, e);
-                    }
-                }
-
-                // Try to enable auto-info mode
-                if let Err(e) = conn.enable_auto_info() {
-                    tracing::warn!("Failed to enable auto-info on {}: {}", config.port, e);
-                    let _ = self.bg_tx.send(BackgroundMessage::IoError {
-                        source: format!("Radio {}", config.port),
-                        message: "Auto-info not enabled - radio won't send automatic updates"
-                            .to_string(),
-                    });
-                }
-
-                self.radio_connections.insert(handle, conn);
-                self.report_info(
-                    "Radio",
-                    format!("Connected {} on {}", actual_model_name, config.port),
+    /// Send a command to the mux actor, logging a warning if the channel is full
+    fn send_mux_command(&self, cmd: MuxActorCommand, context: &str) {
+        match self.mux_cmd_tx.try_send(cmd) {
+            Ok(()) => {}
+            Err(tokio_mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(
+                    source = "MuxChannel",
+                    "Failed to send {} command: channel full",
+                    context,
                 );
-                Some((handle, actual_model_name))
             }
-            Err(e) => {
-                // Remove from multiplexer since we couldn't connect
-                self.multiplexer.remove_radio(handle);
-                self.report_err(
-                    "Radio",
-                    format!("Failed to connect to {}: {}", config.port, e),
+            Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
+                tracing::error!(
+                    source = "MuxChannel",
+                    "Failed to send {} command: channel CLOSED (mux actor not running!)",
+                    context,
                 );
-                None
             }
         }
     }
 
-    /// Get the protocol for a radio by its handle
-    fn get_protocol_for_radio(&self, handle: RadioHandle) -> Option<Protocol> {
-        self.radio_panels
-            .iter()
-            .find(|p| p.handle == handle)
-            .map(|p| p.protocol)
+    /// Send a command to a radio task, logging a warning if the channel is full
+    fn send_radio_task_command(
+        sender: &tokio_mpsc::Sender<RadioTaskCommand>,
+        cmd: RadioTaskCommand,
+        context: &str,
+    ) {
+        if let Err(e) = sender.try_send(cmd) {
+            tracing::warn!(
+                source = "RadioTask",
+                "Failed to send {} command: {} (channel full or closed)",
+                context,
+                e
+            );
+        }
     }
 
-    /// Get the protocol for a virtual radio by its simulation ID
-    fn get_protocol_for_sim_radio(&self, radio_id: &str) -> Option<Protocol> {
-        self.simulation_panel
-            .context()
-            .get_radio(radio_id)
-            .map(|r| r.protocol())
+    /// Send a command to the amp task, logging a warning if the channel is full
+    fn send_amp_task_command(
+        sender: &tokio_mpsc::Sender<AmpTaskCommand>,
+        cmd: AmpTaskCommand,
+        context: &str,
+    ) {
+        if let Err(e) = sender.try_send(cmd) {
+            tracing::warn!(
+                source = "AmpTask",
+                "Failed to send {} command: {} (channel full or closed)",
+                context,
+                e
+            );
+        }
+    }
+
+    /// Register a COM port radio with the mux actor
+    /// Returns correlation_id - the RadioHandle will arrive via BackgroundMessage::RadioRegistered
+    /// The async radio task is spawned when the handle is received
+    /// Caller must store the panel index in pending_registrations with correlation_id as key
+    fn register_com_radio(&mut self, config: ComRadioConfig, panel_index: usize) -> u64 {
+        // Allocate a correlation_id
+        let correlation_id = self.allocate_correlation_id();
+
+        // Create metadata for the radio channel
+        let meta = RadioChannelMeta::new_real(
+            config.model_name.clone(),
+            config.port.clone(),
+            config.protocol,
+            config.civ_address,
+        );
+
+        // Create oneshot for receiving the handle
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        // Send RegisterRadio to mux actor
+        self.send_mux_command(
+            MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+            },
+            "RegisterRadio",
+        );
+
+        // Spawn a task to await the handle and send it back via BackgroundMessage
+        let bg_tx = self.bg_tx.clone();
+        self.rt_handle.spawn(async move {
+            if let Ok(handle) = resp_rx.await {
+                let _ = bg_tx.send(BackgroundMessage::RadioRegistered {
+                    correlation_id,
+                    handle,
+                });
+            }
+        });
+
+        // Store the config so we can spawn the task when the handle arrives
+        self.pending_radio_configs.insert(correlation_id, config);
+
+        // Store the panel index for when the handle arrives
+        self.pending_registrations
+            .insert(correlation_id, panel_index);
+
+        correlation_id
     }
 
     /// Get set of ports currently used by radios
@@ -615,15 +740,13 @@ impl CatapultApp {
                             query_initial_state: false, // Scanner already detected state
                         };
 
-                        if let Some((handle, _model_name)) = self.connect_com_radio(config) {
-                            // Update radio state from detection
-                            if let Some(state) = self.multiplexer.get_radio_mut(handle) {
-                                state.update_from_detection(radio);
-                            }
+                        // Create RadioPanel with no handle (will be updated when handle arrives)
+                        self.radio_panels.push(RadioPanel::new(None, radio));
+                        let panel_index = self.radio_panels.len() - 1;
 
-                            self.radio_panels.push(RadioPanel::new(handle, radio));
-                            new_count += 1;
-                        }
+                        // Register with mux actor (handle will arrive via RadioRegistered)
+                        let _correlation_id = self.register_com_radio(config, panel_index);
+                        new_count += 1;
                     }
 
                     self.detected_radios = radios;
@@ -640,72 +763,239 @@ impl CatapultApp {
                     self.scanning = false;
                     self.report_err("System", e);
                 }
-                BackgroundMessage::TrafficIn { radio, data } => {
-                    let protocol = self.get_protocol_for_radio(radio);
-                    self.traffic_monitor.add_incoming(radio, &data, protocol);
-                }
-                BackgroundMessage::RadioTrafficOut { radio, data } => {
-                    // Get protocol and port name from the radio connection
-                    let protocol = self.get_protocol_for_radio(radio);
-                    let port_name = self
-                        .radio_connections
-                        .get(&radio)
-                        .map(|c| c.port_name().to_string())
-                        .unwrap_or_default();
-                    self.traffic_monitor
-                        .add_to_real_radio(radio, port_name, &data, protocol);
-                }
-                BackgroundMessage::TrafficOut { data } => {
-                    // Outgoing to amplifier - use amplifier protocol
-                    self.traffic_monitor
-                        .add_outgoing(&data, Some(self.amp_protocol));
-                }
-                BackgroundMessage::AmpTrafficIn { data } => {
-                    // Incoming from amplifier - use amplifier protocol
-                    self.traffic_monitor.add_from_amplifier(
-                        self.amp_port.clone(),
-                        &data,
-                        Some(self.amp_protocol),
-                    );
-                }
+                // Note: Traffic is now handled via MuxEvent in process_mux_events()
                 BackgroundMessage::IoError { source, message } => {
                     self.report_err(&source, message);
+                }
+                BackgroundMessage::RadioRegistered {
+                    correlation_id,
+                    handle,
+                } => {
+                    // Look up panel index from pending_registrations
+                    if let Some(panel_idx) = self.pending_registrations.remove(&correlation_id) {
+                        if let Some(panel) = self.radio_panels.get_mut(panel_idx) {
+                            panel.handle = Some(handle);
+                            tracing::info!("Radio registered: handle={:?}", handle);
+
+                            // For virtual radios, store handle in sim_radio_ids
+                            if let Some(sim_id) = panel.sim_radio_id.clone() {
+                                self.sim_radio_ids.insert(sim_id, handle);
+                            }
+
+                            // For COM radios, spawn the connection task
+                            if let Some(config) = self.pending_radio_configs.remove(&correlation_id)
+                            {
+                                self.spawn_radio_task(
+                                    handle,
+                                    config.port.clone(),
+                                    config.baud_rate,
+                                    config.protocol,
+                                    config.civ_address,
+                                    config.model_name.clone(),
+                                    config.query_initial_state,
+                                );
+                            }
+                        }
+                    }
+                }
+                BackgroundMessage::RadioConnected {
+                    handle,
+                    model,
+                    port,
+                } => {
+                    // Update radio panel with actual model name and send rename to mux actor
+                    if let Some(panel) = self
+                        .radio_panels
+                        .iter_mut()
+                        .find(|p| p.handle == Some(handle))
+                    {
+                        panel.name = model.clone();
+                        self.send_mux_command(
+                            MuxActorCommand::UpdateRadioMeta {
+                                handle,
+                                name: Some(model.clone()),
+                            },
+                            "UpdateRadioMeta",
+                        );
+                    }
+
+                    self.report_info("Radio", format!("Connected {} on {}", model, port));
+                }
+                BackgroundMessage::RadioDisconnected { handle } => {
+                    // Remove the task sender
+                    self.radio_task_senders.remove(&handle.0);
+                    tracing::debug!("Radio {:?} disconnected", handle);
+                }
+                BackgroundMessage::RadioStateSync { handle, state } => {
+                    // Update RadioPanel from authoritative mux actor state
+                    if let Some(panel) = self
+                        .radio_panels
+                        .iter_mut()
+                        .find(|p| p.handle == Some(handle))
+                    {
+                        // Only update if different (avoid unnecessary changes)
+                        if panel.frequency_hz != state.frequency_hz {
+                            panel.frequency_hz = state.frequency_hz;
+                        }
+                        if panel.mode != state.mode {
+                            panel.mode = state.mode;
+                        }
+                        if panel.ptt != state.ptt {
+                            panel.ptt = state.ptt;
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// Process multiplexer events
+    /// Process events from the mux actor and update local state
     fn process_mux_events(&mut self) {
-        for event in self.multiplexer.drain_events() {
+        while let Ok(event) = self.mux_event_rx.try_recv() {
             match event {
-                MultiplexerEvent::ActiveRadioChanged { from: _, to } => {
-                    let name = self
-                        .multiplexer
-                        .get_radio(to)
-                        .map(|r| r.name.clone())
-                        .unwrap_or_default();
-                    self.set_status(format!("Switched to {}", name));
-                }
-                MultiplexerEvent::AmplifierCommand(data) => {
-                    // Send to amplifier if connected, otherwise log as simulated
-                    let amp_protocol = Some(self.amp_protocol);
-                    if let Some(ref mut conn) = self.amp_connection {
-                        self.traffic_monitor.add_outgoing(&data, amp_protocol);
-                        if let Err(e) = conn.write(&data) {
-                            self.report_err("Amplifier", format!("Write error: {}", e));
+                MuxEvent::RadioStateChanged {
+                    handle,
+                    freq,
+                    mode,
+                    ptt,
+                } => {
+                    // Update the RadioPanel's local state
+                    if let Some(panel) = self
+                        .radio_panels
+                        .iter_mut()
+                        .find(|p| p.handle == Some(handle))
+                    {
+                        if let Some(f) = freq {
+                            panel.frequency_hz = Some(f);
                         }
-                    } else {
-                        self.traffic_monitor
-                            .add_simulated_outgoing(&data, amp_protocol);
+                        if let Some(m) = mode {
+                            panel.mode = Some(m);
+                        }
+                        if let Some(p) = ptt {
+                            panel.ptt = p;
+                        }
                     }
                 }
-                MultiplexerEvent::Error(e) => {
-                    self.report_err("Multiplexer", e);
+                MuxEvent::ActiveRadioChanged { from: _, to } => {
+                    self.active_radio = Some(to);
                 }
-                _ => {}
+                MuxEvent::SwitchingModeChanged { mode } => {
+                    self.switching_mode = mode;
+                }
+                MuxEvent::RadioConnected { handle, meta } => {
+                    tracing::debug!(
+                        "MuxEvent::RadioConnected: handle={}, name={}",
+                        handle.0,
+                        meta.display_name
+                    );
+                }
+                MuxEvent::RadioDisconnected { handle } => {
+                    tracing::debug!("MuxEvent::RadioDisconnected: handle={}", handle.0);
+                }
+                MuxEvent::Error { source, message } => {
+                    self.report_err(&source, message);
+                }
+                MuxEvent::AmpConnected { meta: _ } => {
+                    tracing::debug!("MuxEvent::AmpConnected");
+                }
+                MuxEvent::AmpDisconnected => {
+                    tracing::debug!("MuxEvent::AmpDisconnected");
+                }
+                MuxEvent::SwitchingBlocked {
+                    requested,
+                    current,
+                    remaining_ms,
+                } => {
+                    tracing::debug!(
+                        "Switching blocked: requested={}, current={}, remaining={}ms",
+                        requested.0,
+                        current.0,
+                        remaining_ms
+                    );
+                }
+                // Traffic events - forward to traffic monitor
+                MuxEvent::RadioDataIn { .. }
+                | MuxEvent::RadioDataOut { .. }
+                | MuxEvent::AmpDataOut { .. }
+                | MuxEvent::AmpDataIn { .. } => {
+                    self.forward_traffic_event(event);
+                }
             }
         }
+    }
+
+    /// Periodically sync radio states from the mux actor (every 5 seconds)
+    ///
+    /// This ensures that the UI's RadioPanel state stays in sync with the
+    /// authoritative state in the mux actor, even if events are dropped.
+    fn maybe_sync_radio_states(&mut self) {
+        const SYNC_INTERVAL_SECS: u64 = 5;
+
+        if self.last_state_sync.elapsed().as_secs() < SYNC_INTERVAL_SECS {
+            return;
+        }
+
+        self.last_state_sync = Instant::now();
+
+        // Query state for each radio panel that has a valid handle
+        for panel in &self.radio_panels {
+            let Some(handle) = panel.handle else {
+                // No handle yet, not registered
+                continue;
+            };
+
+            let (resp_tx, resp_rx) = oneshot::channel();
+
+            self.send_mux_command(
+                MuxActorCommand::QueryRadioState {
+                    handle,
+                    response: resp_tx,
+                },
+                "QueryRadioState",
+            );
+
+            // Spawn task to handle the response
+            let bg_tx = self.bg_tx.clone();
+            self.rt_handle.spawn(async move {
+                if let Ok(Some(summary)) = resp_rx.await {
+                    let _ = bg_tx.send(BackgroundMessage::RadioStateSync {
+                        handle,
+                        state: summary,
+                    });
+                }
+            });
+        }
+    }
+
+    /// Forward a traffic event to the traffic monitor
+    fn forward_traffic_event(&mut self, event: MuxEvent) {
+        // Build radio metadata lookup from radio panels
+        let radio_metas = |handle: RadioHandle| -> Option<RadioChannelMeta> {
+            self.radio_panels
+                .iter()
+                .find(|p| p.handle == Some(handle))
+                .map(|p| match p.connection_type {
+                    RadioConnectionType::Virtual => RadioChannelMeta::new_virtual(
+                        p.name.clone(),
+                        p.sim_radio_id.clone().unwrap_or_default(),
+                        p.protocol,
+                    ),
+                    RadioConnectionType::ComPort => RadioChannelMeta::new_real(
+                        p.name.clone(),
+                        p.port.clone(),
+                        p.protocol,
+                        p.civ_address,
+                    ),
+                })
+        };
+        let amp_port = self.amp_port.clone();
+        let amp_is_virtual = self.amp_data_tx.is_none();
+        self.traffic_monitor.process_event_with_amp_port(
+            event,
+            &radio_metas,
+            &amp_port,
+            amp_is_virtual,
+        );
     }
 
     /// Draw the toolbar
@@ -734,7 +1024,8 @@ impl CatapultApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Active radio indicator
-                if self.multiplexer.active_radio().is_some() {
+                let has_active = self.active_radio.is_some();
+                if has_active {
                     ui.label(RichText::new("●").color(Color32::GREEN).size(16.0));
                     ui.label("Active");
                 } else {
@@ -747,7 +1038,7 @@ impl CatapultApp {
                 // Amplifier status
                 match self.amp_connection_type {
                     AmplifierConnectionType::ComPort => {
-                        if self.amp_connection.is_some() {
+                        if self.amp_data_tx.is_some() {
                             ui.label(RichText::new("Amp: Connected").color(Color32::GREEN));
                         } else {
                             ui.label(RichText::new("Amp: Disconnected").color(Color32::GRAY));
@@ -807,30 +1098,32 @@ impl CatapultApp {
             query_initial_state: true,
         };
 
-        if let Some((handle, actual_model_name)) = self.connect_com_radio(config) {
-            // Create RadioPanel with actual model name (may be identified via ID probe)
-            let panel = RadioPanel::new_com(
-                handle,
-                actual_model_name,
-                self.add_radio_port.clone(),
-                self.add_radio_protocol,
-                self.add_radio_baud,
-                civ_address,
-            );
-            self.radio_panels.push(panel);
+        // Create RadioPanel with no handle (will be updated when handle arrives)
+        let panel = RadioPanel::new_com(
+            None,
+            model_name,
+            self.add_radio_port.clone(),
+            self.add_radio_protocol,
+            self.add_radio_baud,
+            civ_address,
+        );
+        self.radio_panels.push(panel);
+        let panel_index = self.radio_panels.len() - 1;
 
-            // If this port was selected as amp port, clear it
-            if self.amp_port == self.add_radio_port {
-                self.amp_port.clear();
-                if self.amp_connection.is_some() {
-                    self.disconnect_amplifier();
-                }
-                self.save_amplifier_settings();
+        // Register with mux actor (handle will arrive via RadioRegistered)
+        let _correlation_id = self.register_com_radio(config, panel_index);
+
+        // If this port was selected as amp port, clear it
+        if self.amp_port == self.add_radio_port {
+            self.amp_port.clear();
+            if self.amp_data_tx.is_some() {
+                self.disconnect_amplifier();
             }
-
-            // Save to config
-            self.save_configured_radios();
+            self.save_amplifier_settings();
         }
+
+        // Save to config
+        self.save_configured_radios();
 
         // Clear the add_radio_port for next addition
         self.add_radio_port.clear();
@@ -1005,62 +1298,25 @@ impl CatapultApp {
             return;
         }
 
-        let active = self.multiplexer.active_radio();
+        // Get active radio handle for comparison
+        let active_handle = self.active_radio;
 
-        // Collect radio info to avoid borrow conflicts
-        // For virtual radios, get state from simulation context
-        // For COM radios, get state from multiplexer
+        // Collect radio info from local RadioPanel state
         let radio_info: Vec<_> = self
             .radio_panels
             .iter()
             .enumerate()
             .map(|(idx, panel)| {
-                let (freq_display, mode_display, ptt, freq_hz, mode) =
-                    if panel.connection_type == RadioConnectionType::Virtual {
-                        // Get state from simulation context
-                        if let Some(sim_id) = &panel.sim_radio_id {
-                            if let Some(radio) = self.simulation_panel.context().get_radio(sim_id) {
-                                let freq = radio.frequency_hz();
-                                (
-                                    format!("{:.3} MHz", freq as f64 / 1_000_000.0),
-                                    mode_name(radio.mode()).to_string(),
-                                    radio.ptt(),
-                                    freq,
-                                    radio.mode(),
-                                )
-                            } else {
-                                (
-                                    "---.--- MHz".to_string(),
-                                    "---".to_string(),
-                                    false,
-                                    0,
-                                    OperatingMode::Usb,
-                                )
-                            }
-                        } else {
-                            (
-                                "---.--- MHz".to_string(),
-                                "---".to_string(),
-                                false,
-                                0,
-                                OperatingMode::Usb,
-                            )
-                        }
-                    } else {
-                        // Get state from multiplexer
-                        let state = self.multiplexer.get_radio(panel.handle);
-                        (
-                            state
-                                .map(|s| s.frequency_display())
-                                .unwrap_or_else(|| "---".to_string()),
-                            state
-                                .map(|s| s.mode_display())
-                                .unwrap_or_else(|| "---".to_string()),
-                            state.map(|s| s.ptt).unwrap_or(false),
-                            state.and_then(|s| s.frequency_hz).unwrap_or(0),
-                            state.and_then(|s| s.mode).unwrap_or(OperatingMode::Usb),
-                        )
-                    };
+                // Read state from local RadioPanel fields
+                let freq = panel.frequency_hz.unwrap_or(0);
+                let mode = panel.mode.unwrap_or(OperatingMode::Usb);
+                let freq_display = if freq > 0 {
+                    format!("{:.3} MHz", freq as f64 / 1_000_000.0)
+                } else {
+                    "---.--- MHz".to_string()
+                };
+                let mode_display = panel.mode.map(mode_name).unwrap_or("---").to_string();
+
                 (
                     idx,
                     panel.handle,
@@ -1072,14 +1328,14 @@ impl CatapultApp {
                     panel.protocol,
                     freq_display,
                     mode_display,
-                    ptt,
-                    freq_hz,
+                    panel.ptt,
+                    freq,
                     mode,
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        let mut selected_handle = None;
+        let mut selected_handle: Option<RadioHandle> = None;
         let mut toggle_expanded_idx = None;
         let mut remove_radio_idx = None;
         let mut freq_change: Option<(String, u64)> = None;
@@ -1102,7 +1358,7 @@ impl CatapultApp {
             mode,
         ) in &radio_info
         {
-            let is_active = active == Some(*handle);
+            let is_active = handle.is_some() && active_handle == *handle;
             let is_virtual = *conn_type == RadioConnectionType::Virtual;
 
             // Determine background color based on state
@@ -1156,7 +1412,7 @@ impl CatapultApp {
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if !is_active && ui.button("Select").clicked() {
-                                selected_handle = Some(*handle);
+                                selected_handle = *handle;
                             }
                             // Expand/collapse toggle
                             if ui.button(if *expanded { "Less" } else { "More" }).clicked() {
@@ -1324,9 +1580,8 @@ impl CatapultApp {
 
         // Handle deferred actions
         if let Some(handle) = selected_handle {
-            if let Err(e) = self.multiplexer.select_radio(handle) {
-                self.report_warning("Multiplexer", format!("Radio selection failed: {}", e));
-            }
+            // Send SetActiveRadio to mux actor
+            self.send_mux_command(MuxActorCommand::SetActiveRadio { handle }, "SetActiveRadio");
         }
         if let Some(idx) = toggle_expanded_idx {
             self.radio_panels[idx].expanded = !self.radio_panels[idx].expanded;
@@ -1361,9 +1616,24 @@ impl CatapultApp {
                     self.simulation_panel.context_mut().remove_radio(&sim_id);
                 }
             } else {
-                // COM radio - remove connection and panel, save config
-                self.radio_connections.remove(&handle);
-                self.multiplexer.remove_radio(handle);
+                // COM radio - shutdown async task and remove panel, save config
+                if let Some(handle) = handle {
+                    // Remove task sender (keyed by handle.0)
+                    if let Some((_, sender)) = self.radio_task_senders.remove(&handle.0) {
+                        // Send shutdown command to the async task
+                        Self::send_radio_task_command(
+                            &sender,
+                            RadioTaskCommand::Shutdown,
+                            "Shutdown",
+                        );
+                    }
+                    // Send UnregisterRadio to mux actor
+                    self.send_mux_command(
+                        MuxActorCommand::UnregisterRadio { handle },
+                        "UnregisterRadio",
+                    );
+                }
+                // Remove from panels and save
                 self.radio_panels.remove(idx);
                 self.save_configured_radios();
                 self.set_status("Radio removed".into());
@@ -1401,7 +1671,9 @@ impl CatapultApp {
                             .changed()
                         {
                             // Disconnect when switching to COM port mode
-                            self.amp_connection = None;
+                            if self.amp_data_tx.is_some() {
+                                self.disconnect_amplifier();
+                            }
                         }
                         ui.selectable_value(
                             &mut self.amp_connection_type,
@@ -1504,7 +1776,7 @@ impl CatapultApp {
         match self.amp_connection_type {
             AmplifierConnectionType::ComPort => {
                 ui.horizontal(|ui| {
-                    let is_connected = self.amp_connection.is_some();
+                    let is_connected = self.amp_data_tx.is_some();
                     let can_connect = !self.amp_port.is_empty() && !is_connected;
 
                     if ui
@@ -1553,7 +1825,8 @@ impl CatapultApp {
 
     /// Draw the switching mode panel
     fn draw_switching_panel(&mut self, ui: &mut Ui) {
-        let mut mode = self.multiplexer.switching_mode();
+        // Read from local state
+        let mut mode = self.switching_mode;
 
         egui::Grid::new("switch_config")
             .num_columns(2)
@@ -1569,7 +1842,12 @@ impl CatapultApp {
                             SwitchingMode::Manual,
                         ] {
                             if ui.selectable_value(&mut mode, m, m.name()).changed() {
-                                self.multiplexer.set_switching_mode(mode);
+                                // Send SetSwitchingMode to mux actor
+                                self.switching_mode = mode;
+                                self.send_mux_command(
+                                    MuxActorCommand::SetSwitchingMode { mode },
+                                    "SetSwitchingMode",
+                                );
                             }
                         }
                     });
@@ -1581,13 +1859,6 @@ impl CatapultApp {
                 .color(Color32::GRAY)
                 .size(11.0),
         );
-
-        if self.multiplexer.is_locked() {
-            ui.horizontal(|ui| {
-                ui.label("Lockout:");
-                ui.label(format!("{}ms", self.multiplexer.lockout_remaining_ms()));
-            });
-        }
     }
 
     /// Draw the traffic monitor panel
@@ -1667,139 +1938,340 @@ impl CatapultApp {
         });
     }
 
-    /// Connect to the amplifier
+    /// Connect to the amplifier (dispatches to COM or virtual based on connection type)
     fn connect_amplifier(&mut self) {
+        match self.amp_connection_type {
+            AmplifierConnectionType::ComPort => self.connect_amplifier_com(),
+            AmplifierConnectionType::Simulated => self.connect_amplifier_virtual(),
+        }
+    }
+
+    /// Connect to a physical amplifier via COM port
+    fn connect_amplifier_com(&mut self) {
         if self.amp_port.is_empty() {
             self.set_status("No amplifier port selected".into());
             return;
         }
 
-        // Update multiplexer config with amplifier settings
-        let amp_config = cat_mux::state::AmplifierConfig {
-            port: self.amp_port.clone(),
-            protocol: self.amp_protocol,
-            baud_rate: self.amp_baud,
-            civ_address: if self.amp_protocol == Protocol::IcomCIV {
-                Some(self.amp_civ_address)
-            } else {
-                None
-            },
+        let civ_address = if self.amp_protocol == Protocol::IcomCIV {
+            Some(self.amp_civ_address)
+        } else {
+            None
         };
-        self.multiplexer.set_amplifier_config(amp_config);
 
-        match AmplifierConnection::new(&self.amp_port, self.amp_baud, self.bg_tx.clone()) {
-            Ok(conn) => {
-                self.amp_connection = Some(conn);
-                self.set_status(format!(
-                    "Connected to amplifier on {} @ {} baud",
-                    self.amp_port, self.amp_baud
-                ));
-            }
-            Err(e) => {
-                self.report_err("Amplifier", format!("Failed to connect: {}", e));
-            }
-        }
+        // Send config to mux actor
+        self.send_mux_command(
+            MuxActorCommand::SetAmplifierConfig {
+                port: self.amp_port.clone(),
+                protocol: self.amp_protocol,
+                baud_rate: self.amp_baud,
+                civ_address,
+            },
+            "SetAmplifierConfig",
+        );
+
+        // Create channel for sending data to amp task
+        let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+        let (amp_cmd_tx, amp_cmd_rx) = tokio_mpsc::channel::<AmpTaskCommand>(8);
+
+        // Create a dummy response channel (not used in current architecture)
+        let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+
+        // Create amplifier channel metadata
+        let amp_meta = AmplifierChannelMeta::new_real(
+            self.amp_port.clone(),
+            self.amp_protocol,
+            self.amp_baud,
+            civ_address,
+        );
+
+        // Create AmplifierChannel and tell mux actor
+        let amp_channel = AmplifierChannel::new(amp_meta, amp_data_tx.clone(), response_rx);
+        self.send_mux_command(
+            MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            },
+            "ConnectAmplifier",
+        );
+
+        // Store senders
+        self.amp_data_tx = Some(amp_data_tx);
+        self.amp_cmd_tx = Some(amp_cmd_tx);
+
+        // Spawn the async amp task
+        let port_name = self.amp_port.clone();
+        let baud_rate = self.amp_baud;
+        let mux_tx = self.mux_cmd_tx.clone();
+        self.rt_handle.spawn(async move {
+            run_amp_task(amp_cmd_rx, amp_data_rx, port_name, baud_rate, mux_tx).await;
+        });
+
+        self.set_status(format!(
+            "Connected to amplifier on {} @ {} baud",
+            self.amp_port, self.amp_baud
+        ));
+    }
+
+    /// Connect to a virtual/simulated amplifier
+    fn connect_amplifier_virtual(&mut self) {
+        let civ_address = if self.amp_protocol == Protocol::IcomCIV {
+            Some(self.amp_civ_address)
+        } else {
+            None
+        };
+
+        // Send config to mux actor (use "[VIRTUAL]" as port name)
+        self.send_mux_command(
+            MuxActorCommand::SetAmplifierConfig {
+                port: "[VIRTUAL]".to_string(),
+                protocol: self.amp_protocol,
+                baud_rate: 0,
+                civ_address,
+            },
+            "SetAmplifierConfig (virtual)",
+        );
+
+        // Create channel for sending data to virtual amp task
+        let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+        let (amp_cmd_tx, amp_cmd_rx) = tokio_mpsc::channel::<AmpTaskCommand>(8);
+
+        // Create a dummy response channel (not used in current architecture)
+        let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
+
+        // Create amplifier channel metadata for virtual amp
+        let amp_meta = AmplifierChannelMeta::new_virtual(self.amp_protocol, civ_address);
+
+        // Create AmplifierChannel and tell mux actor
+        let amp_channel = AmplifierChannel::new(amp_meta, amp_data_tx.clone(), response_rx);
+        self.send_mux_command(
+            MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            },
+            "ConnectAmplifier (virtual)",
+        );
+
+        // Store senders
+        self.amp_data_tx = Some(amp_data_tx);
+        self.amp_cmd_tx = Some(amp_cmd_tx);
+
+        // Spawn the virtual amp task
+        let protocol = self.amp_protocol;
+        let mux_tx = self.mux_cmd_tx.clone();
+        self.rt_handle.spawn(async move {
+            run_virtual_amp_task(amp_cmd_rx, amp_data_rx, protocol, civ_address, mux_tx).await;
+        });
+
+        self.set_status(format!(
+            "Connected to virtual amplifier (protocol: {})",
+            self.amp_protocol.name()
+        ));
     }
 
     /// Disconnect from the amplifier
     fn disconnect_amplifier(&mut self) {
-        self.amp_connection = None;
+        // Tell mux actor to stop sending to amp
+        self.send_mux_command(MuxActorCommand::DisconnectAmplifier, "DisconnectAmplifier");
+
+        // Send shutdown to amp task
+        if let Some(tx) = self.amp_cmd_tx.take() {
+            Self::send_amp_task_command(&tx, AmpTaskCommand::Shutdown, "Shutdown");
+        }
+
+        self.amp_data_tx = None;
         self.set_status("Amplifier disconnected".into());
     }
 
     /// Process simulation events and update traffic monitor
     fn process_simulation_events(&mut self) {
-        // Ensure translator uses current UI-selected amplifier protocol
-        // This is needed because in simulation mode, connect_amplifier() is never called
-        if self.multiplexer.amplifier_config().protocol != self.amp_protocol {
-            let amp_config = cat_mux::state::AmplifierConfig {
-                port: self.amp_port.clone(),
-                protocol: self.amp_protocol,
-                baud_rate: self.amp_baud,
-                civ_address: if self.amp_protocol == Protocol::IcomCIV {
-                    Some(self.amp_civ_address)
-                } else {
-                    None
-                },
-            };
-            self.multiplexer.set_amplifier_config(amp_config);
-        }
-
         for event in self.simulation_panel.drain_events() {
             match event {
                 SimulationEvent::RadioOutput { radio_id, data } => {
-                    // Add to traffic monitor as simulated incoming (response from radio)
-                    let protocol = self.get_protocol_for_sim_radio(&radio_id);
-                    self.traffic_monitor
-                        .add_simulated_incoming(radio_id, &data, protocol);
+                    // Route through async task if available, otherwise process inline
+                    if let Some(sender) = self.virtual_radio_senders.get(&radio_id) {
+                        let _ = sender.try_send(VirtualRadioCommand::SimulationOutput(data));
+                    } else {
+                        // Fallback: process inline (handles race condition during startup)
+                        // Find the panel by sim_radio_id to get its handle
+                        if let Some(panel) = self
+                            .radio_panels
+                            .iter()
+                            .find(|p| p.sim_radio_id.as_ref() == Some(&radio_id))
+                        {
+                            if let Some(handle) = panel.handle {
+                                self.send_mux_command(
+                                    MuxActorCommand::RadioRawData {
+                                        handle,
+                                        data: data.clone(),
+                                    },
+                                    "RadioRawData",
+                                );
+                            }
+                        }
+                    }
                 }
                 SimulationEvent::RadioCommandSent { radio_id, data } => {
-                    // Add to traffic monitor as outgoing to simulated radio
-                    let protocol = self.get_protocol_for_sim_radio(&radio_id);
-                    self.traffic_monitor
-                        .add_to_simulated_radio(radio_id, &data, protocol);
+                    // Route through async task if available
+                    if let Some(sender) = self.virtual_radio_senders.get(&radio_id) {
+                        let _ = sender.try_send(VirtualRadioCommand::CommandSent(data));
+                    } else {
+                        // Fallback: process inline
+                        // Find the panel by sim_radio_id to get its handle
+                        if let Some(panel) = self
+                            .radio_panels
+                            .iter()
+                            .find(|p| p.sim_radio_id.as_ref() == Some(&radio_id))
+                        {
+                            if let Some(handle) = panel.handle {
+                                self.send_mux_command(
+                                    MuxActorCommand::RadioRawDataOut { handle, data },
+                                    "RadioRawDataOut",
+                                );
+                            }
+                        }
+                    }
                 }
-                SimulationEvent::RadioAdded { radio_id } => {
-                    // Register the simulated radio with the multiplexer
-                    if let Some(radio) = self.simulation_panel.context().get_radio(&radio_id) {
+                SimulationEvent::RadioAdded { radio_id: sim_id } => {
+                    // Register the simulated radio with the mux actor
+                    if let Some(radio) = self.simulation_panel.context().get_radio(&sim_id) {
                         let name = radio.id().to_string();
                         let protocol = radio.protocol();
-                        let handle =
-                            self.multiplexer
-                                .add_radio(name.clone(), "VRT".to_string(), protocol);
-                        self.sim_radio_handles.insert(radio_id.clone(), handle);
 
-                        // Create a RadioPanel for the unified list
+                        // Allocate a correlation_id for tracking the registration
+                        let correlation_id = self.allocate_correlation_id();
+
+                        // Create metadata for the virtual radio channel
+                        let meta =
+                            RadioChannelMeta::new_virtual(name.clone(), sim_id.clone(), protocol);
+
+                        // Create oneshot for receiving the handle
+                        let (resp_tx, resp_rx) = oneshot::channel();
+
+                        // Send RegisterRadio to mux actor
+                        self.send_mux_command(
+                            MuxActorCommand::RegisterRadio {
+                                meta,
+                                response: resp_tx,
+                            },
+                            "RegisterRadio (virtual)",
+                        );
+
+                        // Create channel for virtual radio task commands
+                        let (vr_cmd_tx, vr_cmd_rx) = tokio_mpsc::channel::<VirtualRadioCommand>(64);
+                        self.virtual_radio_senders.insert(sim_id.clone(), vr_cmd_tx);
+
+                        // Create a RadioPanel with no handle (will be updated when handle arrives)
                         self.radio_panels.push(RadioPanel::new_virtual(
-                            handle,
+                            None,
                             name.clone(),
                             protocol,
-                            radio_id.clone(),
+                            sim_id.clone(),
                         ));
+                        let panel_idx = self.radio_panels.len() - 1;
 
-                        // Enable auto-info mode on the radio so it sends unsolicited updates
-                        // This is done via send_command which generates traffic monitor events
-                        self.simulation_panel.context_mut().send_command(
-                            &radio_id,
-                            &RadioCommand::EnableAutoInfo { enabled: true },
-                        );
+                        // Store the pending registration
+                        self.pending_registrations.insert(correlation_id, panel_idx);
+
+                        // Spawn a task to await the handle and then start the virtual radio task
+                        let bg_tx = self.bg_tx.clone();
+                        let mux_tx = self.mux_cmd_tx.clone();
+                        let sim_id_clone = sim_id.clone();
+                        self.rt_handle.spawn(async move {
+                            if let Ok(handle) = resp_rx.await {
+                                // Notify UI of registration
+                                let _ = bg_tx.send(BackgroundMessage::RadioRegistered {
+                                    correlation_id,
+                                    handle,
+                                });
+
+                                // Start the virtual radio task
+                                run_virtual_radio_task(
+                                    vr_cmd_rx,
+                                    handle,
+                                    sim_id_clone,
+                                    protocol,
+                                    mux_tx,
+                                    bg_tx,
+                                )
+                                .await;
+                            }
+                        });
+
+                        // Enable auto-info mode on the radio
+                        self.simulation_panel
+                            .context_mut()
+                            .send_command(&sim_id, &RadioCommand::EnableAutoInfo { enabled: true });
+
+                        // Query initial state (frequency and mode)
+                        self.simulation_panel
+                            .context_mut()
+                            .send_command(&sim_id, &RadioCommand::GetFrequency);
+                        self.simulation_panel
+                            .context_mut()
+                            .send_command(&sim_id, &RadioCommand::GetMode);
                     }
-                    self.set_status(format!("Virtual radio added: {}", radio_id));
-                    // Save virtual radios to settings
+                    self.set_status(format!("Virtual radio added: {}", sim_id));
                     self.save_virtual_radios();
                 }
-                SimulationEvent::RadioRemoved { radio_id } => {
-                    // Remove the simulated radio from the multiplexer
-                    if let Some(handle) = self.sim_radio_handles.remove(&radio_id) {
-                        self.multiplexer.remove_radio(handle);
+                SimulationEvent::RadioRemoved { radio_id: sim_id } => {
+                    // Shutdown the virtual radio task
+                    if let Some(sender) = self.virtual_radio_senders.remove(&sim_id) {
+                        let _ = sender.try_send(VirtualRadioCommand::Shutdown);
                     }
+
+                    // Get the handle from the panel and unregister from mux actor
+                    if let Some(panel) = self
+                        .radio_panels
+                        .iter()
+                        .find(|p| p.sim_radio_id.as_ref() == Some(&sim_id))
+                    {
+                        if let Some(handle) = panel.handle {
+                            self.send_mux_command(
+                                MuxActorCommand::UnregisterRadio { handle },
+                                "UnregisterRadio (virtual)",
+                            );
+                        }
+                    }
+
+                    // Remove sim_id mapping
+                    self.sim_radio_ids.remove(&sim_id);
+
                     // Remove from radio_panels
                     self.radio_panels
-                        .retain(|p| p.sim_radio_id.as_ref() != Some(&radio_id));
-                    self.set_status(format!("Virtual radio removed: {}", radio_id));
-                    // Save virtual radios to settings
+                        .retain(|p| p.sim_radio_id.as_ref() != Some(&sim_id));
+                    self.set_status(format!("Virtual radio removed: {}", sim_id));
                     self.save_virtual_radios();
                 }
                 SimulationEvent::RadioStateChanged {
-                    radio_id,
+                    radio_id: sim_id,
                     frequency_hz,
                     mode,
                     ptt,
                 } => {
-                    // Feed state changes to the multiplexer to trigger auto-switching
-                    if let Some(&handle) = self.sim_radio_handles.get(&radio_id) {
-                        if let Some(hz) = frequency_hz {
-                            self.multiplexer
-                                .process_radio_command(handle, RadioCommand::SetFrequency { hz });
+                    if let Some(&handle) = self.sim_radio_ids.get(&sim_id) {
+                        // Always update local RadioPanel state directly (for immediate UI update)
+                        // Update local RadioPanel state directly for immediate UI feedback.
+                        // The mux actor will also receive the state change via the RadioOutput
+                        // path, so we don't need to send RadioCommand here (that would be duplicate).
+                        if let Some(panel) = self
+                            .radio_panels
+                            .iter_mut()
+                            .find(|p| p.handle == Some(handle))
+                        {
+                            if let Some(hz) = frequency_hz {
+                                panel.frequency_hz = Some(hz);
+                            }
+                            if let Some(m) = mode {
+                                panel.mode = Some(m);
+                            }
+                            if let Some(active) = ptt {
+                                panel.ptt = active;
+                            }
                         }
-                        if let Some(m) = mode {
-                            self.multiplexer
-                                .process_radio_command(handle, RadioCommand::SetMode { mode: m });
-                        }
-                        if let Some(active) = ptt {
-                            self.multiplexer
-                                .process_radio_command(handle, RadioCommand::SetPtt { active });
-                        }
+                    } else {
+                        tracing::warn!(
+                            "No handle mapping for sim_id {} in RadioStateChanged",
+                            sim_id
+                        );
                     }
                     // Save frequency/mode changes (but not PTT which is transient)
                     if frequency_hz.is_some() || mode.is_some() {
@@ -1813,35 +2285,14 @@ impl CatapultApp {
 
 impl eframe::App for CatapultApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Process background messages and events
+        // Process background messages and events (non-blocking)
+        // All I/O data now comes through channels from async tasks
+        // Command processing happens in mux actor - UI receives events
         self.process_diagnostic_events();
         self.process_messages();
-        self.process_simulation_events();
         self.process_mux_events();
-
-        // Poll all radio connections and collect commands
-        let radio_commands: Vec<_> = self
-            .radio_connections
-            .iter_mut()
-            .filter_map(|(&handle, conn)| conn.poll().map(|cmd| (handle, cmd)))
-            .collect();
-
-        // Process radio commands through multiplexer
-        for (handle, cmd) in radio_commands {
-            if let Some(amp_cmd) = self.multiplexer.process_radio_command(handle, cmd) {
-                // Send to amplifier
-                if let Some(ref mut amp_conn) = self.amp_connection {
-                    if let Err(e) = amp_conn.write(&amp_cmd) {
-                        self.report_err("Amplifier", format!("Write error: {}", e));
-                    }
-                }
-            }
-        }
-
-        // Poll amplifier for incoming data
-        if let Some(ref mut conn) = self.amp_connection {
-            conn.poll();
-        }
+        self.process_simulation_events();
+        self.maybe_sync_radio_states();
 
         // Clear old status messages
         if let Some((_, when)) = &self.status_message {
@@ -1903,13 +2354,13 @@ impl eframe::App for CatapultApp {
             });
         });
 
-        // Request repaint when we have active connections that need polling
+        // Request repaint when we have active connections (for receiving async messages)
         let has_virtual_radios = self
             .radio_panels
             .iter()
             .any(|p| p.connection_type == RadioConnectionType::Virtual);
-        let has_com_radios = !self.radio_connections.is_empty();
-        let has_amplifier = self.amp_connection.is_some();
+        let has_com_radios = !self.radio_task_senders.is_empty();
+        let has_amplifier = self.amp_data_tx.is_some();
 
         if self.scanning || has_virtual_radios || has_com_radios || has_amplifier {
             ctx.request_repaint();

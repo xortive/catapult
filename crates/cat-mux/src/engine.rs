@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use cat_protocol::{Protocol, RadioCommand};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info};
 
 use crate::error::MuxError;
 use crate::state::{AmplifierConfig, RadioHandle, RadioState, SwitchingMode};
@@ -63,8 +63,6 @@ pub enum MultiplexerEvent {
         current: RadioHandle,
         remaining_ms: u64,
     },
-    /// Error occurred
-    Error(String),
 }
 
 /// The multiplexer engine
@@ -301,9 +299,7 @@ impl Multiplexer {
                 Some(bytes)
             }
             Err(e) => {
-                warn!("Translation failed: {}", e);
-                self.event_buffer
-                    .push(MultiplexerEvent::Error(e.to_string()));
+                error!("Translation failed: {}", e);
                 None
             }
         }

@@ -2,7 +2,7 @@
 
 use cat_detect::DetectedRadio;
 use cat_mux::RadioHandle;
-use cat_protocol::Protocol;
+use cat_protocol::{OperatingMode, Protocol};
 
 use crate::settings::ConfiguredRadio;
 
@@ -27,8 +27,8 @@ impl RadioConnectionType {
 
 /// UI panel for a single radio
 pub struct RadioPanel {
-    /// Radio handle in the multiplexer
-    pub handle: RadioHandle,
+    /// Radio handle in the local multiplexer (None if pending connection)
+    pub handle: Option<RadioHandle>,
     /// Display name
     pub name: String,
     /// Serial port (or "VRT" for virtual)
@@ -47,11 +47,17 @@ pub struct RadioPanel {
     pub sim_radio_id: Option<String>,
     /// Whether the port is unavailable (for restored radios)
     pub unavailable: bool,
+    /// Current frequency in Hz (local state updated from MuxEvent)
+    pub frequency_hz: Option<u64>,
+    /// Current operating mode (local state updated from MuxEvent)
+    pub mode: Option<OperatingMode>,
+    /// Current PTT state (local state updated from MuxEvent)
+    pub ptt: bool,
 }
 
 impl RadioPanel {
     /// Create a new radio panel from a detected radio (COM port)
-    pub fn new(handle: RadioHandle, detected: &DetectedRadio) -> Self {
+    pub fn new(handle: Option<RadioHandle>, detected: &DetectedRadio) -> Self {
         Self {
             handle,
             name: detected.model_name(),
@@ -63,11 +69,14 @@ impl RadioPanel {
             connection_type: RadioConnectionType::ComPort,
             sim_radio_id: None,
             unavailable: false,
+            frequency_hz: None,
+            mode: None,
+            ptt: false,
         }
     }
 
     /// Create a new radio panel from a saved configuration
-    pub fn new_from_config(handle: RadioHandle, config: &ConfiguredRadio) -> Self {
+    pub fn new_from_config(handle: Option<RadioHandle>, config: &ConfiguredRadio) -> Self {
         Self {
             handle,
             name: config.model_name.clone(),
@@ -79,12 +88,15 @@ impl RadioPanel {
             connection_type: RadioConnectionType::ComPort,
             sim_radio_id: None,
             unavailable: false,
+            frequency_hz: None,
+            mode: None,
+            ptt: false,
         }
     }
 
     /// Create a new COM port radio panel with explicit parameters
     pub fn new_com(
-        handle: RadioHandle,
+        handle: Option<RadioHandle>,
         name: String,
         port: String,
         protocol: Protocol,
@@ -102,12 +114,15 @@ impl RadioPanel {
             connection_type: RadioConnectionType::ComPort,
             sim_radio_id: None,
             unavailable: false,
+            frequency_hz: None,
+            mode: None,
+            ptt: false,
         }
     }
 
     /// Create a new radio panel for a virtual radio
     pub fn new_virtual(
-        handle: RadioHandle,
+        handle: Option<RadioHandle>,
         name: String,
         protocol: Protocol,
         sim_id: String,
@@ -123,6 +138,9 @@ impl RadioPanel {
             connection_type: RadioConnectionType::Virtual,
             sim_radio_id: Some(sim_id),
             unavailable: false,
+            frequency_hz: None,
+            mode: None,
+            ptt: false,
         }
     }
 }

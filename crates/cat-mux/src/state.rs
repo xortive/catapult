@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Unique identifier for a radio in the multiplexer
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RadioHandle(pub(crate) u32);
+pub struct RadioHandle(pub u32);
 
 impl RadioHandle {
     /// Get the raw handle value

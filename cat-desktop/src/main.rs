@@ -3,13 +3,15 @@
 //! A desktop application for managing multiple amateur radio transceivers
 //! connected to a single amplifier via CAT protocol translation.
 
+mod amp_task;
 mod app;
+mod async_serial;
 mod diagnostics_layer;
 mod radio_panel;
-mod serial_io;
 mod settings;
 mod simulation_panel;
 mod traffic_monitor;
+mod virtual_radio_task;
 
 use std::sync::mpsc;
 
@@ -37,6 +39,9 @@ fn main() -> eframe::Result<()> {
 
     tracing::info!("Starting Catapult CAT Multiplexer");
 
+    // Create global tokio runtime for async serial I/O
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1024.0, 768.0])
@@ -45,9 +50,10 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
+    // Pass runtime to app (app stores it to keep it alive)
     eframe::run_native(
         "Catapult",
         options,
-        Box::new(move |cc| Ok(Box::new(CatapultApp::new(cc, diag_rx)))),
+        Box::new(move |cc| Ok(Box::new(CatapultApp::new(cc, diag_rx, rt)))),
     )
 }
