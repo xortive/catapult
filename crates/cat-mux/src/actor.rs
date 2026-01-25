@@ -233,25 +233,23 @@ async fn process_radio_command(
         meta.display_name, handle.0, command
     );
 
-    // Track state changes for event emission
-    let old_freq = state
+    // Capture old state with a single lookup
+    let (old_freq, old_mode, old_ptt) = state
         .multiplexer
         .get_radio(handle)
-        .and_then(|r| r.frequency_hz);
-    let old_mode = state.multiplexer.get_radio(handle).and_then(|r| r.mode);
-    let old_ptt = state.multiplexer.get_radio(handle).map(|r| r.ptt);
+        .map(|r| (r.frequency_hz, r.mode, Some(r.ptt)))
+        .unwrap_or((None, None, None));
     let old_active = state.multiplexer.active_radio();
 
     // Process through multiplexer
     let amp_data = state.multiplexer.process_radio_command(handle, command);
 
-    // Check for state changes
-    let new_freq = state
+    // Capture new state with a single lookup
+    let (new_freq, new_mode, new_ptt) = state
         .multiplexer
         .get_radio(handle)
-        .and_then(|r| r.frequency_hz);
-    let new_mode = state.multiplexer.get_radio(handle).and_then(|r| r.mode);
-    let new_ptt = state.multiplexer.get_radio(handle).map(|r| r.ptt);
+        .map(|r| (r.frequency_hz, r.mode, Some(r.ptt)))
+        .unwrap_or((None, None, None));
     let new_active = state.multiplexer.active_radio();
 
     // Emit state change event if anything changed
