@@ -3,24 +3,25 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cat_detect::{probe_port, PortScanner, ProbeResult, SerialPortInfo};
 use cat_mux::{
     run_mux_actor, AmplifierChannel, AmplifierChannelMeta, MuxActorCommand, MuxEvent,
-    RadioChannelMeta, RadioHandle, RadioStateSummary, SwitchingMode,
+    RadioChannelMeta, RadioHandle, RadioStateSummary, SwitchingMode, VirtualAmplifierIo,
 };
 use cat_protocol::{OperatingMode, Protocol, RadioCommand};
 use cat_sim::SimulationEvent;
 use eframe::CreationContext;
 use egui::{Color32, RichText, Ui};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+use tokio_serial::SerialPortBuilderExt;
 use tracing::Level;
 
-use crate::amp_task::{run_amp_task, run_virtual_amp_task};
+use crate::amp_task::run_amp_task;
 use crate::async_serial::{AsyncRadioConnection, RadioTaskCommand, VirtualRadioIo};
 use crate::diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState};
-use crate::radio_panel::{RadioConnectionType, RadioPanel};
+use crate::radio_panel::RadioPanel;
 use crate::settings::{AmplifierSettings, ConfiguredRadio, Settings};
 use crate::simulation_panel::SimulationPanel;
 use crate::traffic_monitor::{DiagnosticSeverity, ExportAction, TrafficMonitor};
@@ -503,7 +504,7 @@ impl CatapultApp {
         let configs: Vec<ConfiguredRadio> = self
             .radio_panels
             .iter()
-            .filter(|p| p.connection_type == RadioConnectionType::ComPort)
+            .filter(|p| !p.is_virtual())
             .map(|p| ConfiguredRadio {
                 port: p.port.clone(),
                 protocol: p.protocol,
@@ -649,7 +650,7 @@ impl CatapultApp {
     fn radio_ports_in_use(&self) -> HashSet<String> {
         self.radio_panels
             .iter()
-            .filter(|p| p.connection_type == RadioConnectionType::ComPort)
+            .filter(|p| !p.is_virtual())
             .map(|p| p.port.clone())
             .collect()
     }
@@ -940,18 +941,21 @@ impl CatapultApp {
             self.radio_panels
                 .iter()
                 .find(|p| p.handle == Some(handle))
-                .map(|p| match p.connection_type {
-                    RadioConnectionType::Virtual => RadioChannelMeta::new_virtual(
-                        p.name.clone(),
-                        p.sim_radio_id.clone().unwrap_or_default(),
-                        p.protocol,
-                    ),
-                    RadioConnectionType::ComPort => RadioChannelMeta::new_real(
-                        p.name.clone(),
-                        p.port.clone(),
-                        p.protocol,
-                        p.civ_address,
-                    ),
+                .map(|p| {
+                    if p.is_virtual() {
+                        RadioChannelMeta::new_virtual(
+                            p.name.clone(),
+                            p.sim_radio_id.clone().unwrap_or_default(),
+                            p.protocol,
+                        )
+                    } else {
+                        RadioChannelMeta::new_real(
+                            p.name.clone(),
+                            p.port.clone(),
+                            p.protocol,
+                            p.civ_address,
+                        )
+                    }
                 })
         };
         let amp_port = self.amp_port.clone();
@@ -1317,7 +1321,7 @@ impl CatapultApp {
                     panel.handle,
                     panel.name.clone(),
                     panel.port.clone(),
-                    panel.connection_type,
+                    panel.is_virtual(),
                     panel.sim_radio_id.clone(),
                     panel.expanded,
                     panel.protocol,
@@ -1342,7 +1346,7 @@ impl CatapultApp {
             handle,
             name,
             port,
-            conn_type,
+            is_virtual,
             sim_id,
             expanded,
             protocol,
@@ -1354,22 +1358,21 @@ impl CatapultApp {
         ) in &radio_info
         {
             let is_active = handle.is_some() && active_handle == *handle;
-            let is_virtual = *conn_type == RadioConnectionType::Virtual;
 
             // Determine background color based on state
             let bg_color = if *ptt {
-                if is_virtual {
+                if *is_virtual {
                     Color32::from_rgb(80, 40, 20) // Red-orange tint for virtual
                 } else {
                     Color32::from_rgb(80, 30, 30) // Red tint for COM
                 }
             } else if is_active {
-                if is_virtual {
+                if *is_virtual {
                     Color32::from_rgb(60, 50, 30)
                 } else {
                     Color32::from_rgb(40, 60, 40)
                 }
-            } else if is_virtual {
+            } else if *is_virtual {
                 Color32::from_rgb(40, 35, 25)
             } else {
                 Color32::from_rgb(30, 30, 30)
@@ -1381,20 +1384,17 @@ impl CatapultApp {
                 .inner_margin(8.0)
                 .outer_margin(4.0)
                 .show(ui, |ui| {
-                    // Top row: Badge, TX indicator, and Select/Expand button
+                    // Top row: SIM badge (for virtual radios), TX indicator, and Select/Expand button
                     ui.horizontal(|ui| {
-                        // Connection type badge
-                        let badge_color = if is_virtual {
-                            Color32::from_rgb(255, 165, 0) // Orange for virtual
-                        } else {
-                            Color32::from_rgb(100, 180, 100) // Green for COM
-                        };
-                        ui.label(
-                            RichText::new(conn_type.badge())
-                                .color(badge_color)
-                                .strong()
-                                .size(10.0),
-                        );
+                        // SIM badge only for virtual radios
+                        if *is_virtual {
+                            ui.label(
+                                RichText::new("[SIM]")
+                                    .color(Color32::from_rgb(255, 165, 0)) // Orange for virtual
+                                    .strong()
+                                    .size(10.0),
+                            );
+                        }
 
                         if *ptt {
                             ui.label(
@@ -1438,7 +1438,7 @@ impl CatapultApp {
                         if is_active {
                             ui.label(RichText::new("●").color(Color32::GREEN).size(10.0));
                         }
-                        let detail = if is_virtual {
+                        let detail = if *is_virtual {
                             protocol.name()
                         } else {
                             port.as_str()
@@ -1451,7 +1451,7 @@ impl CatapultApp {
                     });
 
                     // Expanded controls for virtual radios
-                    if is_virtual && *expanded {
+                    if *is_virtual && *expanded {
                         if let Some(sim_id) = sim_id {
                             ui.add_space(8.0);
                             ui.separator();
@@ -1601,7 +1601,7 @@ impl CatapultApp {
                 return; // Index no longer valid
             };
             // Extract data before mutating
-            let is_virtual = panel.connection_type == RadioConnectionType::Virtual;
+            let is_virtual = panel.is_virtual();
             let sim_id = panel.sim_radio_id.clone();
             let handle = panel.handle;
 
@@ -1920,6 +1920,18 @@ impl CatapultApp {
             None
         };
 
+        // Open the serial port
+        let stream = match tokio_serial::new(&self.amp_port, self.amp_baud)
+            .timeout(Duration::from_millis(100))
+            .open_native_async()
+        {
+            Ok(s) => s,
+            Err(e) => {
+                self.set_status(format!("Failed to open {}: {}", self.amp_port, e));
+                return;
+            }
+        };
+
         // Send config to mux actor
         self.send_mux_command(
             MuxActorCommand::SetAmplifierConfig {
@@ -1960,11 +1972,9 @@ impl CatapultApp {
         self.amp_shutdown_tx = Some(shutdown_tx);
 
         // Spawn the async amp task
-        let port_name = self.amp_port.clone();
-        let baud_rate = self.amp_baud;
         let mux_tx = self.mux_cmd_tx.clone();
         self.rt_handle.spawn(async move {
-            run_amp_task(shutdown_rx, amp_data_rx, port_name, baud_rate, mux_tx).await;
+            run_amp_task(shutdown_rx, amp_data_rx, stream, mux_tx).await;
         });
 
         self.set_status(format!(
@@ -1980,6 +1990,9 @@ impl CatapultApp {
         } else {
             None
         };
+
+        // Create the virtual amplifier I/O
+        let virtual_io = VirtualAmplifierIo::new(self.amp_protocol, civ_address);
 
         // Send config to mux actor (use "[VIRTUAL]" as port name)
         self.send_mux_command(
@@ -2015,11 +2028,10 @@ impl CatapultApp {
         self.amp_data_tx = Some(amp_data_tx);
         self.amp_shutdown_tx = Some(shutdown_tx);
 
-        // Spawn the virtual amp task
-        let protocol = self.amp_protocol;
+        // Spawn the amp task with virtual I/O
         let mux_tx = self.mux_cmd_tx.clone();
         self.rt_handle.spawn(async move {
-            run_virtual_amp_task(shutdown_rx, amp_data_rx, protocol, civ_address, mux_tx).await;
+            run_amp_task(shutdown_rx, amp_data_rx, virtual_io, mux_tx).await;
         });
 
         self.set_status(format!(
@@ -2347,10 +2359,7 @@ impl eframe::App for CatapultApp {
         });
 
         // Request repaint when we have active connections (for receiving async messages)
-        let has_virtual_radios = self
-            .radio_panels
-            .iter()
-            .any(|p| p.connection_type == RadioConnectionType::Virtual);
+        let has_virtual_radios = self.radio_panels.iter().any(|p| p.is_virtual());
         let has_com_radios = !self.radio_task_senders.is_empty();
         let has_amplifier = self.amp_data_tx.is_some();
 

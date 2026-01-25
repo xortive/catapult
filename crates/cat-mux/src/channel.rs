@@ -7,6 +7,24 @@
 use cat_protocol::{Protocol, RadioModel};
 use serde::{Deserialize, Serialize};
 
+/// Prefix for virtual/simulated radio port names
+pub const VIRTUAL_PORT_PREFIX: &str = "VSIM:";
+
+/// Check if a port name represents a virtual radio
+pub fn is_virtual_port(port_name: &str) -> bool {
+    port_name.starts_with(VIRTUAL_PORT_PREFIX)
+}
+
+/// Create a virtual port name from a simulation ID
+pub fn virtual_port_name(sim_id: &str) -> String {
+    format!("{}{}", VIRTUAL_PORT_PREFIX, sim_id)
+}
+
+/// Extract simulation ID from a virtual port name
+pub fn sim_id_from_port(port_name: &str) -> Option<&str> {
+    port_name.strip_prefix(VIRTUAL_PORT_PREFIX)
+}
+
 /// Type of radio connection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RadioType {
@@ -58,10 +76,10 @@ impl RadioChannelMeta {
     pub fn new_virtual(display_name: String, sim_id: String, protocol: Protocol) -> Self {
         Self {
             protocol,
-            radio_type: RadioType::Virtual,
+            radio_type: RadioType::Virtual, // Keep for backward compat
             model_info: None,
-            port_name: None,
-            sim_id: Some(sim_id),
+            port_name: Some(virtual_port_name(&sim_id)), // Synthetic virtual port
+            sim_id: Some(sim_id), // Keep for backward compat
             display_name,
             civ_address: None,
         }
@@ -69,7 +87,10 @@ impl RadioChannelMeta {
 
     /// Check if this is a virtual/simulated radio
     pub fn is_simulated(&self) -> bool {
-        self.radio_type == RadioType::Virtual
+        self.port_name
+            .as_ref()
+            .map(|p| is_virtual_port(p))
+            .unwrap_or(false)
     }
 
     /// Update the model info after identification
@@ -113,6 +134,26 @@ mod tests {
         assert_eq!(meta.radio_type, RadioType::Virtual);
         assert!(meta.is_simulated());
         assert_eq!(meta.sim_id, Some("sim-001".to_string()));
-        assert!(meta.port_name.is_none());
+        assert_eq!(meta.port_name, Some("VSIM:sim-001".to_string()));
+    }
+
+    #[test]
+    fn test_virtual_port_helpers() {
+        // Test is_virtual_port
+        assert!(is_virtual_port("VSIM:sim-001"));
+        assert!(is_virtual_port("VSIM:ic7300-sim"));
+        assert!(!is_virtual_port("/dev/ttyUSB0"));
+        assert!(!is_virtual_port("COM3"));
+        assert!(!is_virtual_port(""));
+
+        // Test virtual_port_name
+        assert_eq!(virtual_port_name("sim-001"), "VSIM:sim-001");
+        assert_eq!(virtual_port_name("ic7300-sim"), "VSIM:ic7300-sim");
+
+        // Test sim_id_from_port
+        assert_eq!(sim_id_from_port("VSIM:sim-001"), Some("sim-001"));
+        assert_eq!(sim_id_from_port("VSIM:ic7300-sim"), Some("ic7300-sim"));
+        assert_eq!(sim_id_from_port("/dev/ttyUSB0"), None);
+        assert_eq!(sim_id_from_port("COM3"), None);
     }
 }

@@ -53,9 +53,12 @@ pub use actor::{run_mux_actor, MuxActorCommand, RadioStateSummary};
 // Re-export channel types
 pub use amplifier::{
     create_virtual_amp_channel, AmplifierChannel, AmplifierChannelMeta, AmplifierType,
-    VirtualAmplifier,
+    VirtualAmplifier, VirtualAmplifierIo,
 };
-pub use channel::{RadioChannelMeta, RadioType};
+pub use channel::{
+    is_virtual_port, sim_id_from_port, virtual_port_name, RadioChannelMeta, RadioType,
+    VIRTUAL_PORT_PREFIX,
+};
 
 // Re-export event types
 pub use events::MuxEvent;

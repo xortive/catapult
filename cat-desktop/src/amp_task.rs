@@ -1,56 +1,43 @@
 //! Amplifier Task
 //!
-//! This module provides async tasks for communicating with amplifiers.
-//! Supports both physical amplifiers over serial ports and virtual/simulated amplifiers.
+//! This module provides an async task for communicating with amplifiers.
+//! Supports both physical amplifiers over serial ports and virtual/simulated amplifiers
+//! through a single generic implementation.
 
 use std::time::Duration;
 
-use cat_mux::{MuxActorCommand, VirtualAmplifier};
-use cat_protocol::Protocol;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use cat_mux::MuxActorCommand;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
-use tokio_serial::{SerialPortBuilderExt, SerialStream};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Run the async amplifier task
 ///
-/// This handles all async I/O with the amplifier serial port.
-/// Errors are reported through the mux actor via ReportError command.
-pub async fn run_amp_task(
-    shutdown_rx: oneshot::Receiver<()>,
-    data_rx: tokio_mpsc::Receiver<Vec<u8>>,
-    port_name: String,
-    baud_rate: u32,
-    mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
-) {
-    info!("Amplifier task starting on {} @ {}", port_name, baud_rate);
-
-    // Open the serial port
-    let stream = match tokio_serial::new(&port_name, baud_rate)
-        .timeout(Duration::from_millis(100))
-        .open_native_async()
-    {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Failed to open serial port {port_name}: {e}");
-            return;
-        }
-    };
-
-    info!("Amplifier connected on {}", port_name);
-
-    run_amp_loop(stream, shutdown_rx, data_rx, mux_tx).await;
-
-    info!("Amplifier task shutting down");
-}
-
-/// Inner loop for amplifier communication
-async fn run_amp_loop(
-    mut stream: SerialStream,
+/// This handles all async I/O with the amplifier through a generic I/O type.
+/// Works with both real serial ports (SerialStream) and virtual amplifiers (VirtualAmplifierIo).
+///
+/// # Arguments
+///
+/// * `shutdown_rx` - Oneshot receiver for shutdown signal
+/// * `data_rx` - Channel receiver for data to write to the amplifier
+/// * `io` - Any type implementing AsyncRead + AsyncWrite (SerialStream, VirtualAmplifierIo, etc.)
+/// * `mux_tx` - Channel sender for communicating back to the mux actor
+///
+/// # Notes
+///
+/// - Serial port opening is handled by the caller
+/// - For virtual amplifiers, pass a VirtualAmplifierIo instance
+pub async fn run_amp_task<T>(
     mut shutdown_rx: oneshot::Receiver<()>,
     mut data_rx: tokio_mpsc::Receiver<Vec<u8>>,
+    mut io: T,
     mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
-) {
+)
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    info!("Amplifier task starting");
+
     let mut buffer = vec![0u8; 256];
 
     loop {
@@ -62,88 +49,47 @@ async fn run_amp_loop(
 
             // Check for data to write (from mux actor)
             Some(data) = data_rx.recv() => {
-                if let Err(e) = stream.write_all(&data).await {
+                debug!("Amp task writing {} bytes", data.len());
+                if let Err(e) = io.write_all(&data).await {
                     let _ = mux_tx.send(MuxActorCommand::ReportError {
                         source: "Amplifier".to_string(),
                         message: format!("Write error: {}", e),
                     }).await;
                 } else {
-                    let _ = stream.flush().await;
-                    // Note: AmpDataOut is already emitted by mux actor when it sends data
+                    let _ = io.flush().await;
                 }
             }
 
             // Read from amplifier with timeout
             result = tokio::time::timeout(
                 Duration::from_millis(100),
-                stream.read(&mut buffer)
+                io.read(&mut buffer)
             ) => {
                 match result {
                     Ok(Ok(n)) if n > 0 => {
                         let data = buffer[..n].to_vec();
+                        debug!("Amp task received {} bytes", n);
                         // Send raw amp data to mux actor for traffic monitoring
                         let _ = mux_tx.send(MuxActorCommand::AmpRawData { data }).await;
                     }
                     Ok(Ok(_)) => {} // 0 bytes
                     Ok(Err(e)) => {
-                        let _ = mux_tx.send(MuxActorCommand::ReportError {
-                            source: "Amplifier".to_string(),
-                            message: format!("Read error: {}", e),
-                        }).await;
-                        break;
+                        // For virtual amplifiers, WouldBlock/TimedOut is expected
+                        if e.kind() != std::io::ErrorKind::WouldBlock
+                            && e.kind() != std::io::ErrorKind::TimedOut
+                        {
+                            let _ = mux_tx.send(MuxActorCommand::ReportError {
+                                source: "Amplifier".to_string(),
+                                message: format!("Read error: {}", e),
+                            }).await;
+                            break;
+                        }
                     }
                     Err(_) => {} // Timeout, continue
                 }
             }
         }
     }
-}
 
-/// Run the virtual amplifier task
-///
-/// This handles simulated amplifier communication - it receives commands
-/// from the mux actor, processes them through VirtualAmplifier, and
-/// emits traffic events for monitoring.
-pub async fn run_virtual_amp_task(
-    mut shutdown_rx: oneshot::Receiver<()>,
-    mut data_rx: tokio_mpsc::Receiver<Vec<u8>>,
-    protocol: Protocol,
-    civ_address: Option<u8>,
-    mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
-) {
-    info!("Virtual amplifier task starting (protocol: {:?})", protocol);
-
-    let mut amp = VirtualAmplifier::new(protocol, civ_address);
-
-    loop {
-        tokio::select! {
-            // Check for shutdown signal
-            _ = &mut shutdown_rx => {
-                break;
-            }
-
-            // Check for data to process (from mux actor)
-            Some(data) = data_rx.recv() => {
-                debug!(
-                    "Virtual amp received {} bytes: {:02X?}",
-                    data.len(),
-                    &data[..data.len().min(16)]
-                );
-
-                // Process the command through the virtual amplifier
-                if let Some(response) = amp.process_command(&data) {
-                    // Send response back to mux actor as amp data in
-                    let _ = mux_tx.send(MuxActorCommand::AmpRawData { data: response }).await;
-                }
-
-                debug!(
-                    "Virtual amp state: freq={} Hz, mode={:?}",
-                    amp.frequency_hz(),
-                    amp.mode()
-                );
-            }
-        }
-    }
-
-    info!("Virtual amplifier task shutting down");
+    info!("Amplifier task shutting down");
 }

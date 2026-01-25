@@ -1,28 +1,9 @@
 //! Radio panel UI component
 
-use cat_mux::RadioHandle;
+use cat_mux::{is_virtual_port, virtual_port_name, RadioHandle};
 use cat_protocol::{OperatingMode, Protocol};
 
 use crate::settings::ConfiguredRadio;
-
-/// Type of connection for a radio
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RadioConnectionType {
-    /// Physical radio connected via COM/serial port
-    ComPort,
-    /// Virtual/simulated radio
-    Virtual,
-}
-
-impl RadioConnectionType {
-    /// Get the badge text for display
-    pub fn badge(&self) -> &'static str {
-        match self {
-            RadioConnectionType::ComPort => "[COM]",
-            RadioConnectionType::Virtual => "[VRT]",
-        }
-    }
-}
 
 /// UI panel for a single radio
 pub struct RadioPanel {
@@ -30,7 +11,7 @@ pub struct RadioPanel {
     pub handle: Option<RadioHandle>,
     /// Display name
     pub name: String,
-    /// Serial port (or "VRT" for virtual)
+    /// Serial port (or "VSIM:..." for virtual radios)
     pub port: String,
     /// Protocol (for future use in protocol-specific UI)
     pub protocol: Protocol,
@@ -40,8 +21,6 @@ pub struct RadioPanel {
     pub civ_address: Option<u8>,
     /// Is expanded in UI (for collapsible virtual radio controls)
     pub expanded: bool,
-    /// Connection type (COM port or Virtual)
-    pub connection_type: RadioConnectionType,
     /// Simulation radio ID (only for Virtual radios)
     pub sim_radio_id: Option<String>,
     /// Whether the port is unavailable (for restored radios)
@@ -65,7 +44,6 @@ impl RadioPanel {
             baud_rate: config.baud_rate,
             civ_address: config.civ_address,
             expanded: false,
-            connection_type: RadioConnectionType::ComPort,
             sim_radio_id: None,
             unavailable: false,
             frequency_hz: None,
@@ -91,7 +69,6 @@ impl RadioPanel {
             baud_rate,
             civ_address,
             expanded: false,
-            connection_type: RadioConnectionType::ComPort,
             sim_radio_id: None,
             unavailable: false,
             frequency_hz: None,
@@ -110,17 +87,21 @@ impl RadioPanel {
         Self {
             handle,
             name,
-            port: "VRT".to_string(),
+            port: virtual_port_name(&sim_id),
             protocol,
             baud_rate: 0,
             civ_address: None,
             expanded: false,
-            connection_type: RadioConnectionType::Virtual,
             sim_radio_id: Some(sim_id),
             unavailable: false,
             frequency_hz: None,
             mode: None,
             ptt: false,
         }
+    }
+
+    /// Check if this is a virtual radio based on port name
+    pub fn is_virtual(&self) -> bool {
+        is_virtual_port(&self.port)
     }
 }
