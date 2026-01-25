@@ -1,6 +1,6 @@
 //! Radio panel UI component
 
-use cat_mux::{is_virtual_port, virtual_port_name, RadioHandle};
+use cat_mux::{is_virtual_port, sim_id_from_port, virtual_port_name, RadioHandle};
 use cat_protocol::{OperatingMode, Protocol};
 
 use crate::settings::ConfiguredRadio;
@@ -21,8 +21,6 @@ pub struct RadioPanel {
     pub civ_address: Option<u8>,
     /// Is expanded in UI (for collapsible virtual radio controls)
     pub expanded: bool,
-    /// Simulation radio ID (only for Virtual radios)
-    pub sim_radio_id: Option<String>,
     /// Whether the port is unavailable (for restored radios)
     pub unavailable: bool,
     /// Current frequency in Hz (local state updated from MuxEvent)
@@ -44,7 +42,6 @@ impl RadioPanel {
             baud_rate: config.baud_rate,
             civ_address: config.civ_address,
             expanded: false,
-            sim_radio_id: None,
             unavailable: false,
             frequency_hz: None,
             mode: None,
@@ -69,7 +66,6 @@ impl RadioPanel {
             baud_rate,
             civ_address,
             expanded: false,
-            sim_radio_id: None,
             unavailable: false,
             frequency_hz: None,
             mode: None,
@@ -92,7 +88,6 @@ impl RadioPanel {
             baud_rate: 0,
             civ_address: None,
             expanded: false,
-            sim_radio_id: Some(sim_id),
             unavailable: false,
             frequency_hz: None,
             mode: None,
@@ -103,5 +98,10 @@ impl RadioPanel {
     /// Check if this is a virtual radio based on port name
     pub fn is_virtual(&self) -> bool {
         is_virtual_port(&self.port)
+    }
+
+    /// Get the simulation ID for virtual radios (derived from port name)
+    pub fn sim_id(&self) -> Option<&str> {
+        sim_id_from_port(&self.port)
     }
 }

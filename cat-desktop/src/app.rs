@@ -745,8 +745,8 @@ impl CatapultApp {
                             tracing::info!("Radio registered: handle={:?}", handle);
 
                             // For virtual radios, store handle in sim_radio_ids
-                            if let Some(sim_id) = panel.sim_radio_id.clone() {
-                                self.sim_radio_ids.insert(sim_id, handle);
+                            if let Some(sim_id) = panel.sim_id() {
+                                self.sim_radio_ids.insert(sim_id.to_string(), handle);
                             }
 
                             // For COM radios, spawn the connection task
@@ -945,7 +945,7 @@ impl CatapultApp {
                     if p.is_virtual() {
                         RadioChannelMeta::new_virtual(
                             p.name.clone(),
-                            p.sim_radio_id.clone().unwrap_or_default(),
+                            p.sim_id().unwrap_or_default().to_string(),
                             p.protocol,
                         )
                     } else {
@@ -1322,7 +1322,7 @@ impl CatapultApp {
                     panel.name.clone(),
                     panel.port.clone(),
                     panel.is_virtual(),
-                    panel.sim_radio_id.clone(),
+                    panel.sim_id().map(String::from),
                     panel.expanded,
                     panel.protocol,
                     freq_display,
@@ -1602,7 +1602,7 @@ impl CatapultApp {
             };
             // Extract data before mutating
             let is_virtual = panel.is_virtual();
-            let sim_id = panel.sim_radio_id.clone();
+            let sim_id = panel.sim_id().map(String::from);
             let handle = panel.handle;
 
             if is_virtual {
@@ -2067,11 +2067,11 @@ impl CatapultApp {
                         let _ = channels.sim_tx.try_send(data);
                     } else {
                         // Fallback: process inline (handles race condition during startup)
-                        // Find the panel by sim_radio_id to get its handle
+                        // Find the panel by sim_id to get its handle
                         if let Some(panel) = self
                             .radio_panels
                             .iter()
-                            .find(|p| p.sim_radio_id.as_ref() == Some(&radio_id))
+                            .find(|p| p.sim_id() == Some(radio_id.as_str()))
                         {
                             if let Some(handle) = panel.handle {
                                 self.send_mux_command(
@@ -2227,7 +2227,7 @@ impl CatapultApp {
                     if let Some(panel) = self
                         .radio_panels
                         .iter()
-                        .find(|p| p.sim_radio_id.as_ref() == Some(&sim_id))
+                        .find(|p| p.sim_id() == Some(sim_id.as_str()))
                     {
                         if let Some(handle) = panel.handle {
                             self.send_mux_command(
@@ -2242,7 +2242,7 @@ impl CatapultApp {
 
                     // Remove from radio_panels
                     self.radio_panels
-                        .retain(|p| p.sim_radio_id.as_ref() != Some(&sim_id));
+                        .retain(|p| p.sim_id() != Some(sim_id.as_str()));
                     self.set_status(format!("Virtual radio removed: {}", sim_id));
                     self.save_virtual_radios();
                 }

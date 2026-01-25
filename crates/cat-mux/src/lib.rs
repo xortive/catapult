@@ -56,8 +56,7 @@ pub use amplifier::{
     VirtualAmplifier, VirtualAmplifierIo,
 };
 pub use channel::{
-    is_virtual_port, sim_id_from_port, virtual_port_name, RadioChannelMeta, RadioType,
-    VIRTUAL_PORT_PREFIX,
+    is_virtual_port, sim_id_from_port, virtual_port_name, RadioChannelMeta, VIRTUAL_PORT_PREFIX,
 };
 
 // Re-export event types

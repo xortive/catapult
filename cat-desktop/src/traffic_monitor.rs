@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use cat_mux::{MuxEvent, RadioChannelMeta, RadioHandle, RadioType};
+use cat_mux::{sim_id_from_port, MuxEvent, RadioChannelMeta, RadioHandle};
 use cat_protocol::display::{
     decode_and_annotate_with_hint, AnnotatedFrame, FrameSegment, SegmentType,
 };
@@ -611,14 +611,18 @@ impl TrafficMonitor {
 
                 // Determine source based on radio metadata
                 let source = if let Some(meta) = radio_metas(handle) {
-                    match meta.radio_type {
-                        RadioType::Real => TrafficSource::RealRadio {
+                    if meta.is_simulated() {
+                        let port = meta.port_name.as_deref().unwrap_or_default();
+                        TrafficSource::SimulatedRadio {
+                            id: sim_id_from_port(port)
+                                .map(String::from)
+                                .unwrap_or(meta.display_name),
+                        }
+                    } else {
+                        TrafficSource::RealRadio {
                             handle,
                             port: meta.port_name.unwrap_or_default(),
-                        },
-                        RadioType::Virtual => TrafficSource::SimulatedRadio {
-                            id: meta.sim_id.unwrap_or(meta.display_name),
-                        },
+                        }
                     }
                 } else {
                     TrafficSource::RealRadio {
@@ -646,14 +650,18 @@ impl TrafficMonitor {
 
                 // Determine source based on radio metadata
                 let source = if let Some(meta) = radio_metas(handle) {
-                    match meta.radio_type {
-                        RadioType::Real => TrafficSource::ToRealRadio {
+                    if meta.is_simulated() {
+                        let port = meta.port_name.as_deref().unwrap_or_default();
+                        TrafficSource::ToSimulatedRadio {
+                            id: sim_id_from_port(port)
+                                .map(String::from)
+                                .unwrap_or(meta.display_name),
+                        }
+                    } else {
+                        TrafficSource::ToRealRadio {
                             handle,
                             port: meta.port_name.unwrap_or_default(),
-                        },
-                        RadioType::Virtual => TrafficSource::ToSimulatedRadio {
-                            id: meta.sim_id.unwrap_or(meta.display_name),
-                        },
+                        }
                     }
                 } else {
                     TrafficSource::ToRealRadio {

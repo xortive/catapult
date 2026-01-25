@@ -5,7 +5,6 @@
 //! these types.
 
 use cat_protocol::{Protocol, RadioModel};
-use serde::{Deserialize, Serialize};
 
 /// Prefix for virtual/simulated radio port names
 pub const VIRTUAL_PORT_PREFIX: &str = "VSIM:";
@@ -25,28 +24,15 @@ pub fn sim_id_from_port(port_name: &str) -> Option<&str> {
     port_name.strip_prefix(VIRTUAL_PORT_PREFIX)
 }
 
-/// Type of radio connection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RadioType {
-    /// Real hardware radio connected via COM/serial port
-    Real,
-    /// Virtual/simulated radio
-    Virtual,
-}
-
 /// Metadata for a connected radio channel
 #[derive(Debug, Clone)]
 pub struct RadioChannelMeta {
     /// Protocol used by this radio
     pub protocol: Protocol,
-    /// Whether this is a real or virtual radio
-    pub radio_type: RadioType,
     /// Identified radio model (if known)
     pub model_info: Option<RadioModel>,
-    /// Serial port name (for real radios)
+    /// Port name (real ports like "/dev/ttyUSB0" or virtual ports like "VSIM:sim-001")
     pub port_name: Option<String>,
-    /// Simulation ID (for virtual radios)
-    pub sim_id: Option<String>,
     /// Human-readable display name
     pub display_name: String,
     /// CI-V address (for Icom radios)
@@ -63,10 +49,8 @@ impl RadioChannelMeta {
     ) -> Self {
         Self {
             protocol,
-            radio_type: RadioType::Real,
             model_info: None,
             port_name: Some(port_name),
-            sim_id: None,
             display_name,
             civ_address,
         }
@@ -76,10 +60,8 @@ impl RadioChannelMeta {
     pub fn new_virtual(display_name: String, sim_id: String, protocol: Protocol) -> Self {
         Self {
             protocol,
-            radio_type: RadioType::Virtual, // Keep for backward compat
             model_info: None,
-            port_name: Some(virtual_port_name(&sim_id)), // Synthetic virtual port
-            sim_id: Some(sim_id), // Keep for backward compat
+            port_name: Some(virtual_port_name(&sim_id)),
             display_name,
             civ_address: None,
         }
@@ -91,6 +73,11 @@ impl RadioChannelMeta {
             .as_ref()
             .map(|p| is_virtual_port(p))
             .unwrap_or(false)
+    }
+
+    /// Get the simulation ID for virtual radios (derived from port name)
+    pub fn sim_id(&self) -> Option<&str> {
+        self.port_name.as_deref().and_then(sim_id_from_port)
     }
 
     /// Update the model info after identification
@@ -117,10 +104,10 @@ mod tests {
             Some(0x94),
         );
 
-        assert_eq!(meta.radio_type, RadioType::Real);
         assert!(!meta.is_simulated());
         assert_eq!(meta.port_name, Some("/dev/ttyUSB0".to_string()));
         assert_eq!(meta.civ_address, Some(0x94));
+        assert_eq!(meta.sim_id(), None);
     }
 
     #[test]
@@ -131,10 +118,9 @@ mod tests {
             Protocol::Kenwood,
         );
 
-        assert_eq!(meta.radio_type, RadioType::Virtual);
         assert!(meta.is_simulated());
-        assert_eq!(meta.sim_id, Some("sim-001".to_string()));
         assert_eq!(meta.port_name, Some("VSIM:sim-001".to_string()));
+        assert_eq!(meta.sim_id(), Some("sim-001"));
     }
 
     #[test]
