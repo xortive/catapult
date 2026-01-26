@@ -41,8 +41,10 @@ impl CatapultApp {
                     if port == self.add_radio_port {
                         if let Some(probe_result) = result {
                             // Update UI fields with probe result
-                            self.add_radio_protocol = probe_result.protocol;
-                            self.add_radio_baud = baud_rate;
+                            // Note: protocol is NOT updated - user already selected it
+                            if baud_rate > 0 {
+                                self.add_radio_baud = baud_rate;
+                            }
                             if let Some(addr) = probe_result.address {
                                 self.add_radio_civ_address = addr;
                             }
@@ -51,14 +53,19 @@ impl CatapultApp {
                                 .model
                                 .map(|m| format!("{} {}", m.manufacturer, m.model))
                                 .unwrap_or_else(|| {
-                                    format!("{} radio", probe_result.protocol.name())
+                                    format!("{} radio", self.add_radio_protocol.name())
                                 });
                             self.set_status(format!(
-                                "Detected {} on {}",
+                                "Identified {} on {}",
                                 self.add_radio_model, port
                             ));
                         } else {
-                            self.set_status(format!("No radio detected on {}", port));
+                            self.set_status(format!(
+                                "No response on {} using {} at {} baud. Check protocol, baud rate, and connection.",
+                                port,
+                                self.add_radio_protocol.name(),
+                                self.add_radio_baud
+                            ));
                         }
                     }
                 }

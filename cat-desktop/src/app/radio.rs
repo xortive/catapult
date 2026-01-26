@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use cat_detect::{probe_port, ProbeResult, RadioProber};
+use cat_detect::{probe_port_with_protocol, ProbeResult, RadioProber};
 use cat_mux::{
     AsyncRadioConnection, MuxActorCommand, MuxEvent, RadioChannelMeta, RadioHandle,
     RadioTaskCommand,
@@ -31,7 +31,7 @@ pub(crate) enum RadioConnectionConfig {
 /// Probe a virtual port by creating a temporary virtual radio and probing it
 ///
 /// This creates a temporary VirtualRadio with the given protocol, connects to it
-/// via a duplex stream, probes it to detect the protocol, then tears everything down.
+/// via a duplex stream, probes it using the specified protocol, then tears everything down.
 async fn probe_virtual_port(protocol: Protocol) -> Option<ProbeResult> {
     let radio = VirtualRadio::new("probe-temp", protocol);
     let (mut probe_stream, radio_stream) = tokio::io::duplex(1024);
@@ -43,7 +43,7 @@ async fn probe_virtual_port(protocol: Protocol) -> Option<ProbeResult> {
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let prober = RadioProber::new();
-    let result = prober.probe(&mut probe_stream).await;
+    let result = prober.probe_protocol(&mut probe_stream, protocol).await;
 
     // Clean up
     drop(probe_stream);
@@ -502,48 +502,41 @@ impl CatapultApp {
         }
     }
 
-    /// Probe the selected port for radio detection
+    /// Probe the selected port for radio model detection using the user-selected protocol
     pub(super) fn probe_selected_port(&mut self) {
         if self.add_radio_port.is_empty() || self.probing {
             return;
         }
 
         self.probing = true;
-        self.set_status(format!("Probing {}...", self.add_radio_port));
+        self.set_status(format!(
+            "Detecting model on {} using {} protocol...",
+            self.add_radio_port,
+            self.add_radio_protocol.name()
+        ));
 
         let port = self.add_radio_port.clone();
         let baud_rate = self.add_radio_baud;
+        let protocol = self.add_radio_protocol;
         let tx = self.bg_tx.clone();
         let rt_handle = self.rt_handle.clone();
 
         // Check if this is a virtual port (VSIM:name format)
-        if let Some(name) = port.strip_prefix("VSIM:") {
-            // Find the virtual port config to get its protocol
-            if let Some(vport) = self
-                .settings
-                .virtual_ports
-                .iter()
-                .find(|v| v.name == name)
-                .cloned()
-            {
-                let protocol = vport.protocol;
-                std::thread::spawn(move || {
-                    let result = rt_handle.block_on(probe_virtual_port(protocol));
-                    let _ = tx.send(BackgroundMessage::ProbeComplete {
-                        port,
-                        baud_rate: 0,
-                        result,
-                    });
-                });
-            } else {
-                // Virtual port not found in config
-                self.probing = false;
-                self.report_warning("Probe", format!("Virtual port '{}' not found", name));
-            }
-        } else {
-            // Real COM port - use existing probe_port logic
+        if port.starts_with("VSIM:") {
+            // Virtual port - use the user-selected protocol for probing
             std::thread::spawn(move || {
-                let result = rt_handle.block_on(async { probe_port(&port, baud_rate).await });
+                let result = rt_handle.block_on(probe_virtual_port(protocol));
+                let _ = tx.send(BackgroundMessage::ProbeComplete {
+                    port,
+                    baud_rate: 0,
+                    result,
+                });
+            });
+        } else {
+            // Real COM port - use the user-selected protocol
+            std::thread::spawn(move || {
+                let result = rt_handle
+                    .block_on(async { probe_port_with_protocol(&port, baud_rate, protocol).await });
                 let _ = tx.send(BackgroundMessage::ProbeComplete {
                     port,
                     baud_rate,

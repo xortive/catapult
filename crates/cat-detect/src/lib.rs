@@ -21,5 +21,5 @@ pub mod probe;
 pub mod scanner;
 
 pub use error::DetectError;
-pub use probe::{probe_port, ProbeResult, RadioProber};
+pub use probe::{probe_port, probe_port_with_protocol, ProbeResult, RadioProber};
 pub use scanner::{PortScanner, SerialPortInfo};

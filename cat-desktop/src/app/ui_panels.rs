@@ -194,14 +194,14 @@ impl CatapultApp {
                             });
                         }
 
-                        // Probe button and detected model display
+                        // Detect Model button and detected model display
                         ui.horizontal(|ui| {
                             let can_probe = !self.add_radio_port.is_empty() && !self.probing;
                             if self.probing {
                                 ui.spinner();
                             } else if ui
-                                .add_enabled(can_probe, egui::Button::new("Probe"))
-                                .on_hover_text("Detect radio protocol and model")
+                                .add_enabled(can_probe, egui::Button::new("Detect Model"))
+                                .on_hover_text("Query radio for model identification using selected protocol")
                                 .clicked()
                             {
                                 self.probe_selected_port();

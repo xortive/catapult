@@ -238,6 +238,159 @@ impl RadioProber {
         None
     }
 
+    /// Probe using a specific protocol to detect the radio model only
+    ///
+    /// Unlike `probe()` which tries all protocols, this method only uses the
+    /// specified protocol. Use this when the user has already selected which
+    /// protocol their radio uses.
+    pub async fn probe_protocol<S>(&self, stream: &mut S, protocol: Protocol) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        debug!("Probing with specified protocol: {:?}", protocol);
+
+        match protocol {
+            Protocol::Elecraft => self.try_elecraft_k3(stream).await,
+            Protocol::Kenwood => self.probe_kenwood_only(stream).await,
+            Protocol::FlexRadio => self.probe_flex_only(stream).await,
+            Protocol::YaesuAscii => self.probe_yaesu_ascii_only(stream).await,
+            Protocol::IcomCIV => self.probe_icom(stream).await,
+            Protocol::Yaesu => self.probe_yaesu(stream).await,
+        }
+    }
+
+    /// Probe for Kenwood radios only (3-digit ID response)
+    async fn probe_kenwood_only<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let probe = kenwood::probe_command();
+        trace!("Sending Kenwood-only ID probe");
+
+        if let Err(e) = stream.write_all(&probe).await {
+            warn!("Failed to write Kenwood ID probe: {}", e);
+            return None;
+        }
+
+        let mut buf = [0u8; 64];
+        match timeout(self.config.timeout, stream.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                let response = &buf[..n];
+                trace!("Kenwood ID response: {:?}", String::from_utf8_lossy(response));
+
+                if kenwood::is_valid_id_response(response) {
+                    let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
+                    let model = RadioDatabase::by_kenwood_id(&id_str);
+                    info!(
+                        "Identified {} via Kenwood protocol",
+                        model
+                            .as_ref()
+                            .map(|m| m.model.as_str())
+                            .unwrap_or("Kenwood")
+                    );
+                    return Some(ProbeResult {
+                        protocol: Protocol::Kenwood,
+                        model,
+                        id_data: response.to_vec(),
+                        address: None,
+                    });
+                }
+            }
+            Ok(Ok(_)) => trace!("No response to Kenwood ID probe"),
+            Ok(Err(e)) => trace!("Kenwood ID read error: {}", e),
+            Err(_) => trace!("Kenwood ID probe timeout"),
+        }
+
+        None
+    }
+
+    /// Probe for FlexRadio only (ID904-913 response)
+    async fn probe_flex_only<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let probe = kenwood::probe_command(); // ID; command works for FlexRadio too
+        trace!("Sending FlexRadio-only ID probe");
+
+        if let Err(e) = stream.write_all(&probe).await {
+            warn!("Failed to write FlexRadio ID probe: {}", e);
+            return None;
+        }
+
+        let mut buf = [0u8; 64];
+        match timeout(self.config.timeout, stream.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                let response = &buf[..n];
+                trace!("FlexRadio ID response: {:?}", String::from_utf8_lossy(response));
+
+                if flex::is_valid_id_response(response) {
+                    let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
+                    let model = RadioDatabase::by_flex_id(&id_str);
+                    info!(
+                        "Identified {} via FlexRadio protocol",
+                        model
+                            .as_ref()
+                            .map(|m| m.model.as_str())
+                            .unwrap_or("FlexRadio")
+                    );
+                    return Some(ProbeResult {
+                        protocol: Protocol::FlexRadio,
+                        model,
+                        id_data: response.to_vec(),
+                        address: None,
+                    });
+                }
+            }
+            Ok(Ok(_)) => trace!("No response to FlexRadio ID probe"),
+            Ok(Err(e)) => trace!("FlexRadio ID read error: {}", e),
+            Err(_) => trace!("FlexRadio ID probe timeout"),
+        }
+
+        None
+    }
+
+    /// Probe for Yaesu ASCII radios only (4-digit ID response like ID0570)
+    async fn probe_yaesu_ascii_only<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let probe = kenwood::probe_command(); // ID; command works for Yaesu ASCII too
+        trace!("Sending YaesuAscii-only ID probe");
+
+        if let Err(e) = stream.write_all(&probe).await {
+            warn!("Failed to write YaesuAscii ID probe: {}", e);
+            return None;
+        }
+
+        let mut buf = [0u8; 64];
+        match timeout(self.config.timeout, stream.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                let response = &buf[..n];
+                trace!("YaesuAscii ID response: {:?}", String::from_utf8_lossy(response));
+
+                if yaesu_ascii::is_valid_id_response(response) {
+                    let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
+                    let model = RadioDatabase::by_yaesu_ascii_id(&id_str);
+                    info!(
+                        "Identified {} via Yaesu ASCII protocol",
+                        model.as_ref().map(|m| m.model.as_str()).unwrap_or("Yaesu")
+                    );
+                    return Some(ProbeResult {
+                        protocol: Protocol::YaesuAscii,
+                        model,
+                        id_data: response.to_vec(),
+                        address: None,
+                    });
+                }
+            }
+            Ok(Ok(_)) => trace!("No response to YaesuAscii ID probe"),
+            Ok(Err(e)) => trace!("YaesuAscii ID read error: {}", e),
+            Err(_) => trace!("YaesuAscii ID probe timeout"),
+        }
+
+        None
+    }
+
     /// Probe for Icom CI-V radios
     async fn probe_icom<S>(&self, stream: &mut S) -> Option<ProbeResult>
     where
@@ -383,6 +536,42 @@ pub async fn probe_port(port_name: &str, baud_rate: u32) -> Option<ProbeResult> 
 
     let prober = RadioProber::new();
     prober.probe(&mut stream).await
+}
+
+/// Probe a specific port using a specified protocol
+///
+/// This is a convenience function for probing when the user has already
+/// selected which protocol their radio uses. Only the specified protocol
+/// is tried, rather than auto-detecting across all protocols.
+pub async fn probe_port_with_protocol(
+    port_name: &str,
+    baud_rate: u32,
+    protocol: Protocol,
+) -> Option<ProbeResult> {
+    use std::time::Duration;
+    use tokio_serial::SerialPortBuilderExt;
+
+    debug!(
+        "Probing {} at {} baud with {:?} protocol",
+        port_name, baud_rate, protocol
+    );
+
+    let mut stream = match tokio_serial::new(port_name, baud_rate)
+        .timeout(Duration::from_millis(100))
+        .open_native_async()
+    {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Failed to open {}: {}", port_name, e);
+            return None;
+        }
+    };
+
+    // Give the port a moment to settle
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let prober = RadioProber::new();
+    prober.probe_protocol(&mut stream, protocol).await
 }
 
 #[cfg(test)]
