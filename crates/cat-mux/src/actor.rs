@@ -43,7 +43,9 @@ use crate::channel::RadioChannelMeta;
 use crate::engine::Multiplexer;
 use crate::error::MuxError;
 use crate::events::MuxEvent;
-use crate::state::{AmplifierConfig, AmplifierEmulatedState, RadioHandle, SwitchingMode};
+use crate::state::{
+    AmplifierConfig, AmplifierEmulatedState, RadioHandle, SwitchingMode, VirtualAmpBehaviorMode,
+};
 
 /// Summary of a radio's state for sync purposes
 ///
@@ -173,6 +175,12 @@ pub enum MuxActorCommand {
         message: String,
     },
 
+    /// Set the virtual amplifier behavior mode (Auto Information vs Polling)
+    SetVirtualAmpBehavior {
+        /// The behavior mode to use
+        mode: VirtualAmpBehaviorMode,
+    },
+
     /// Shutdown the actor
     Shutdown,
 }
@@ -193,6 +201,10 @@ struct MuxActorState {
     amp_codec: Option<Box<dyn RadioCodec>>,
     /// Emulated state that the amplifier believes the radio is in
     amp_emulated: AmplifierEmulatedState,
+    /// Virtual amplifier behavior mode
+    virtual_amp_behavior: VirtualAmpBehaviorMode,
+    /// Whether the amplifier is virtual (simulated)
+    is_virtual_amp: bool,
 }
 
 impl MuxActorState {
@@ -205,6 +217,8 @@ impl MuxActorState {
             amp_meta: None,
             amp_codec: None,
             amp_emulated: AmplifierEmulatedState::default(),
+            virtual_amp_behavior: VirtualAmpBehaviorMode::default(),
+            is_virtual_amp: false,
         }
     }
 
@@ -312,14 +326,29 @@ async fn process_radio_command(
         }
 
         // Always update emulated state so we can respond to amp queries
+        let mut emulated_changed = false;
         if let Some(hz) = new_freq {
-            state.amp_emulated.frequency_hz = Some(hz);
+            if state.amp_emulated.frequency_hz != Some(hz) {
+                state.amp_emulated.frequency_hz = Some(hz);
+                emulated_changed = true;
+            }
         }
         if let Some(mode) = new_mode {
-            state.amp_emulated.mode = Some(mode);
+            if state.amp_emulated.mode != Some(mode) {
+                state.amp_emulated.mode = Some(mode);
+                emulated_changed = true;
+            }
         }
         if let Some(ptt) = new_ptt {
-            state.amp_emulated.ptt = ptt;
+            if state.amp_emulated.ptt != ptt {
+                state.amp_emulated.ptt = ptt;
+                emulated_changed = true;
+            }
+        }
+
+        // Emit event if emulated state changed (for UI display)
+        if emulated_changed && state.is_virtual_amp {
+            emit_amp_emulated_state(state, event_tx).await;
         }
     }
 
@@ -382,6 +411,17 @@ fn handle_amp_query(state: &MuxActorState, query: &RadioCommand) -> Option<Radio
     }
 }
 
+/// Emit an AmpEmulatedStateChanged event with the current emulated state
+async fn emit_amp_emulated_state(state: &MuxActorState, event_tx: &mpsc::Sender<MuxEvent>) {
+    let _ = event_tx
+        .send(MuxEvent::AmpEmulatedStateChanged {
+            frequency_hz: state.amp_emulated.frequency_hz,
+            mode: state.amp_emulated.mode,
+            ptt: state.amp_emulated.ptt,
+        })
+        .await;
+}
+
 /// Send a RadioCommand to the amplifier
 ///
 /// Translates the command to the amplifier's protocol and sends it.
@@ -434,15 +474,85 @@ async fn send_to_amp(
 ///
 /// * `cmd_rx` - Receiver for commands sent to the actor
 /// * `event_tx` - Sender for events emitted by the actor
+/// Poll the active radio's state and emit updates
+async fn do_polling_tick(state: &mut MuxActorState, event_tx: &mpsc::Sender<MuxEvent>) {
+    if !state.is_virtual_amp
+        || state.virtual_amp_behavior != VirtualAmpBehaviorMode::Polling
+        || state.amp_tx.is_none()
+    {
+        return;
+    }
+
+    let protocol = state.multiplexer.amplifier_config().protocol;
+
+    // Update emulated state from active radio first
+    if let Some(active_handle) = state.multiplexer.active_radio() {
+        if let Some(radio) = state.multiplexer.get_radio(active_handle) {
+            let mut changed = false;
+            if radio.frequency_hz != state.amp_emulated.frequency_hz {
+                state.amp_emulated.frequency_hz = radio.frequency_hz;
+                changed = true;
+            }
+            if radio.mode != state.amp_emulated.mode {
+                state.amp_emulated.mode = radio.mode;
+                changed = true;
+            }
+            if radio.ptt != state.amp_emulated.ptt {
+                state.amp_emulated.ptt = radio.ptt;
+                changed = true;
+            }
+            if changed {
+                emit_amp_emulated_state(state, event_tx).await;
+            }
+        }
+    }
+
+    // Simulate amp sending ID; query
+    let _ = event_tx
+        .send(MuxEvent::AmpDataIn {
+            data: b"ID;".to_vec(),
+            protocol,
+        })
+        .await;
+    if let Some(response) = handle_amp_query(state, &RadioCommand::GetId) {
+        send_to_amp(state, event_tx, response).await;
+    }
+
+    // Simulate amp sending FA; query
+    let _ = event_tx
+        .send(MuxEvent::AmpDataIn {
+            data: b"FA;".to_vec(),
+            protocol,
+        })
+        .await;
+    if let Some(response) = handle_amp_query(state, &RadioCommand::GetFrequency) {
+        send_to_amp(state, event_tx, response).await;
+    }
+}
+
 pub async fn run_mux_actor(
     mut cmd_rx: mpsc::Receiver<MuxActorCommand>,
     event_tx: mpsc::Sender<MuxEvent>,
 ) {
+    use std::time::Duration;
+    use tokio::time::{interval, Interval, MissedTickBehavior};
+
     let mut state = MuxActorState::new();
     info!("Multiplexer actor started");
 
-    while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
+    // Create polling interval (500ms) but only tick when in polling mode
+    let mut polling_interval: Interval = interval(Duration::from_millis(500));
+    polling_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            // Handle commands from channel
+            cmd = cmd_rx.recv() => {
+                let Some(cmd) = cmd else {
+                    // Channel closed
+                    break;
+                };
+                match cmd {
             MuxActorCommand::RegisterRadio { meta, response } => {
                 let name = meta.display_name.clone();
                 let port = meta
@@ -587,6 +697,7 @@ pub async fn run_mux_actor(
             }
 
             MuxActorCommand::ConnectAmplifier { channel } => {
+                state.is_virtual_amp = channel.meta.is_simulated();
                 state.amp_tx = Some(channel.command_tx);
                 state.amp_meta = Some(channel.meta.clone());
                 // Reset codec and emulated state for new connection
@@ -597,7 +708,7 @@ pub async fn run_mux_actor(
                     .send(MuxEvent::AmpConnected { meta: channel.meta })
                     .await;
 
-                info!("Amplifier connected");
+                info!("Amplifier connected (virtual={})", state.is_virtual_amp);
             }
 
             MuxActorCommand::DisconnectAmplifier => {
@@ -605,6 +716,8 @@ pub async fn run_mux_actor(
                 state.amp_meta = None;
                 state.amp_codec = None;
                 state.amp_emulated = AmplifierEmulatedState::default();
+                state.virtual_amp_behavior = VirtualAmpBehaviorMode::default();
+                state.is_virtual_amp = false;
 
                 let _ = event_tx.send(MuxEvent::AmpDisconnected).await;
 
@@ -748,6 +861,36 @@ pub async fn run_mux_actor(
                 }
             }
 
+            MuxActorCommand::SetVirtualAmpBehavior { mode } => {
+                let old_mode = state.virtual_amp_behavior;
+                state.virtual_amp_behavior = mode;
+
+                if old_mode != mode {
+                    info!("Virtual amp behavior mode changed to {:?}", mode);
+
+                    // Only take action if this is a virtual amp
+                    if state.is_virtual_amp && state.amp_tx.is_some() {
+                        match mode {
+                            VirtualAmpBehaviorMode::AutoInfo => {
+                                // Send AI2; to enable auto-info mode
+                                send_to_amp(
+                                    &state,
+                                    &event_tx,
+                                    RadioCommand::EnableAutoInfo { enabled: true },
+                                )
+                                .await;
+                                state.amp_emulated.auto_info_enabled = true;
+                            }
+                            VirtualAmpBehaviorMode::Polling => {
+                                // Disable auto-info mode
+                                state.amp_emulated.auto_info_enabled = false;
+                                // Polling will be handled by the polling interval
+                            }
+                        }
+                    }
+                }
+            }
+
             MuxActorCommand::Shutdown => {
                 info!("Multiplexer actor shutting down");
                 break;
@@ -755,6 +898,13 @@ pub async fn run_mux_actor(
 
             MuxActorCommand::ReportError { source, message } => {
                 let _ = event_tx.send(MuxEvent::Error { source, message }).await;
+            }
+                }
+            }
+
+            // Handle polling interval tick
+            _ = polling_interval.tick() => {
+                do_polling_tick(&mut state, &event_tx).await;
             }
         }
     }
