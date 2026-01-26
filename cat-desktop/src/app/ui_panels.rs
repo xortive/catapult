@@ -69,171 +69,10 @@ impl CatapultApp {
 
     /// Draw the radio list panel (unified COM and Virtual radios)
     pub(super) fn draw_radio_panel(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("Radios");
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Add Radio dropdown menu
-                ui.menu_button("+", |ui| {
-                    ui.label(RichText::new("Add Radio:").small());
-
-                    // Collect available ports into owned data to avoid borrow conflicts
-                    // PortInfo includes both real serial ports and virtual ports from settings
-                    let available_ports: Vec<(String, String, bool, Option<Protocol>)> = self
-                        .available_radio_ports()
-                        .into_iter()
-                        .map(|p| {
-                            (
-                                p.port_name(),
-                                p.display_label(),
-                                p.is_virtual(),
-                                p.virtual_protocol(),
-                            )
-                        })
-                        .collect();
-
-                    if available_ports.is_empty() {
-                        ui.label(
-                            RichText::new("No ports available")
-                                .color(Color32::GRAY)
-                                .small(),
-                        );
-                        ui.label(
-                            RichText::new("Configure virtual ports in Settings")
-                                .color(Color32::GRAY)
-                                .small(),
-                        );
-                    } else {
-                        // Port dropdown
-                        let selected_label = if self.add_radio_port.is_empty() {
-                            "Select port...".to_string()
-                        } else {
-                            // Find the label for the selected port
-                            available_ports
-                                .iter()
-                                .find(|(port, _, _, _)| *port == self.add_radio_port)
-                                .map(|(_, label, _, _)| label.clone())
-                                .unwrap_or_else(|| self.add_radio_port.clone())
-                        };
-
-                        let prev_port = self.add_radio_port.clone();
-                        egui::ComboBox::from_id_salt("add_radio_port")
-                            .selected_text(&selected_label)
-                            .width(200.0)
-                            .show_ui(ui, |ui| {
-                                for (port_name, label, _, _) in &available_ports {
-                                    ui.selectable_value(
-                                        &mut self.add_radio_port,
-                                        port_name.clone(),
-                                        label,
-                                    );
-                                }
-                            });
-
-                        // Clear model when port changes (protocol set via probing)
-                        if self.add_radio_port != prev_port {
-                            self.add_radio_model.clear();
-                        }
-
-                        // Protocol dropdown
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Protocol:").small());
-                            egui::ComboBox::from_id_salt("add_radio_protocol")
-                                .selected_text(self.add_radio_protocol.name())
-                                .width(100.0)
-                                .show_ui(ui, |ui| {
-                                    for proto in [
-                                        Protocol::Kenwood,
-                                        Protocol::IcomCIV,
-                                        Protocol::Yaesu,
-                                        Protocol::YaesuAscii,
-                                        Protocol::Elecraft,
-                                        Protocol::FlexRadio,
-                                    ] {
-                                        ui.selectable_value(
-                                            &mut self.add_radio_protocol,
-                                            proto,
-                                            proto.name(),
-                                        );
-                                    }
-                                });
-                        });
-
-                        // Baud rate dropdown (only relevant for real COM ports)
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Baud:").small());
-                            egui::ComboBox::from_id_salt("add_radio_baud")
-                                .selected_text(format!("{}", self.add_radio_baud))
-                                .width(80.0)
-                                .show_ui(ui, |ui| {
-                                    for &baud in &[4800u32, 9600, 19200, 38400, 57600, 115200] {
-                                        ui.selectable_value(
-                                            &mut self.add_radio_baud,
-                                            baud,
-                                            format!("{}", baud),
-                                        );
-                                    }
-                                });
-                        });
-
-                        // CI-V address for Icom protocol
-                        if self.add_radio_protocol == Protocol::IcomCIV {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("CI-V:").small());
-                                let mut addr_str = format!("{:02X}", self.add_radio_civ_address);
-                                let response = ui.add(
-                                    egui::TextEdit::singleline(&mut addr_str).desired_width(40.0),
-                                );
-                                if response.changed() {
-                                    if let Ok(addr) =
-                                        u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
-                                    {
-                                        self.add_radio_civ_address = addr;
-                                    }
-                                }
-                            });
-                        }
-
-                        // Detect Model button and detected model display
-                        ui.horizontal(|ui| {
-                            let can_probe = !self.add_radio_port.is_empty() && !self.probing;
-                            if self.probing {
-                                ui.spinner();
-                            } else if ui
-                                .add_enabled(can_probe, egui::Button::new("Detect Model"))
-                                .on_hover_text("Query radio for model identification using selected protocol")
-                                .clicked()
-                            {
-                                self.probe_selected_port();
-                            }
-                            if !self.add_radio_model.is_empty() {
-                                ui.label(
-                                    RichText::new(&self.add_radio_model)
-                                        .small()
-                                        .color(Color32::GREEN),
-                                );
-                            }
-                        });
-
-                        // Add Radio button
-                        let can_add = !self.add_radio_port.is_empty() && !self.probing;
-                        if ui
-                            .add_enabled(can_add, egui::Button::new("Add"))
-                            .on_hover_text("Add radio")
-                            .clicked()
-                        {
-                            self.add_radio_from_port();
-                            // Reset the model field after adding
-                            self.add_radio_model.clear();
-                            ui.close_menu();
-                        }
-                    }
-                });
-            });
-        });
+        ui.heading("Radios");
 
         if self.radio_panels.is_empty() {
-            ui.label("No radios. Click '+' to add a radio.");
+            ui.label("No radios. Open Settings to add a radio.");
             return;
         }
 
@@ -318,9 +157,9 @@ impl CatapultApp {
                 Color32::from_rgb(30, 30, 30)
             };
 
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(bg_color)
-                .rounding(4.0)
+                .corner_radius(4.0)
                 .inner_margin(8.0)
                 .outer_margin(4.0)
                 .show(ui, |ui| {
@@ -581,7 +420,7 @@ impl CatapultApp {
         {
             match action {
                 ExportAction::CopyToClipboard(content) => {
-                    ui.output_mut(|o| o.copied_text = content);
+                    ui.ctx().copy_text(content);
                     self.set_status("Log copied to clipboard".to_string());
                 }
                 ExportAction::SavedToFile(path) => {
@@ -610,6 +449,153 @@ impl CatapultApp {
 
             // Track the change
             self.prev_diagnostic_level = current_level;
+        }
+    }
+
+    /// Draw the add radio section for the settings panel
+    pub(super) fn draw_add_radio_section(&mut self, ui: &mut Ui) {
+        // Collect available ports into owned data to avoid borrow conflicts
+        // PortInfo includes both real serial ports and virtual ports from settings
+        let available_ports: Vec<(String, String, bool, Option<Protocol>)> = self
+            .available_radio_ports()
+            .into_iter()
+            .map(|p| {
+                (
+                    p.port_name(),
+                    p.display_label(),
+                    p.is_virtual(),
+                    p.virtual_protocol(),
+                )
+            })
+            .collect();
+
+        if available_ports.is_empty() {
+            ui.label(
+                RichText::new("No ports available")
+                    .color(Color32::GRAY)
+                    .small(),
+            );
+            ui.label(
+                RichText::new("Configure virtual ports below, or connect a serial device")
+                    .color(Color32::GRAY)
+                    .small(),
+            );
+            return;
+        }
+
+        egui::Grid::new("add_radio_grid")
+            .num_columns(2)
+            .spacing([10.0, 8.0])
+            .show(ui, |ui| {
+                // Port dropdown
+                ui.label("Port:");
+                let selected_label = if self.add_radio_port.is_empty() {
+                    "Select port...".to_string()
+                } else {
+                    // Find the label for the selected port
+                    available_ports
+                        .iter()
+                        .find(|(port, _, _, _)| *port == self.add_radio_port)
+                        .map(|(_, label, _, _)| label.clone())
+                        .unwrap_or_else(|| self.add_radio_port.clone())
+                };
+
+                let prev_port = self.add_radio_port.clone();
+                egui::ComboBox::from_id_salt("add_radio_port")
+                    .selected_text(&selected_label)
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for (port_name, label, _, _) in &available_ports {
+                            ui.selectable_value(&mut self.add_radio_port, port_name.clone(), label);
+                        }
+                    });
+                ui.end_row();
+
+                // Clear model when port changes
+                if self.add_radio_port != prev_port {
+                    self.add_radio_model.clear();
+                }
+
+                // Protocol dropdown
+                ui.label("Protocol:");
+                egui::ComboBox::from_id_salt("add_radio_protocol")
+                    .selected_text(self.add_radio_protocol.name())
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for proto in [
+                            Protocol::Kenwood,
+                            Protocol::IcomCIV,
+                            Protocol::Yaesu,
+                            Protocol::YaesuAscii,
+                            Protocol::Elecraft,
+                            Protocol::FlexRadio,
+                        ] {
+                            ui.selectable_value(&mut self.add_radio_protocol, proto, proto.name());
+                        }
+                    });
+                ui.end_row();
+
+                // Baud rate dropdown
+                ui.label("Baud:");
+                egui::ComboBox::from_id_salt("add_radio_baud")
+                    .selected_text(format!("{}", self.add_radio_baud))
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for &baud in &[4800u32, 9600, 19200, 38400, 57600, 115200] {
+                            ui.selectable_value(&mut self.add_radio_baud, baud, format!("{}", baud));
+                        }
+                    });
+                ui.end_row();
+
+                // CI-V address for Icom protocol
+                if self.add_radio_protocol == Protocol::IcomCIV {
+                    ui.label("CI-V Address:");
+                    let mut addr_str = format!("{:02X}", self.add_radio_civ_address);
+                    let response =
+                        ui.add(egui::TextEdit::singleline(&mut addr_str).desired_width(50.0));
+                    if response.changed() {
+                        if let Ok(addr) =
+                            u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
+                        {
+                            self.add_radio_civ_address = addr;
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+
+        ui.add_space(8.0);
+
+        // Detect Model button and detected model display
+        ui.horizontal(|ui| {
+            let can_probe = !self.add_radio_port.is_empty() && !self.probing;
+            if self.probing {
+                ui.spinner();
+                ui.label("Detecting...");
+            } else if ui
+                .add_enabled(can_probe, egui::Button::new("Detect Model"))
+                .on_hover_text("Query radio for model identification using selected protocol")
+                .clicked()
+            {
+                self.probe_selected_port();
+            }
+            if !self.add_radio_model.is_empty() {
+                ui.label(RichText::new(&self.add_radio_model).color(Color32::GREEN));
+            }
+        });
+
+        ui.add_space(4.0);
+
+        // Add Radio button
+        let can_add = !self.add_radio_port.is_empty() && !self.probing;
+        if ui
+            .add_enabled(can_add, egui::Button::new("Add Radio"))
+            .on_hover_text("Add radio with current settings")
+            .clicked()
+        {
+            self.add_radio_from_port();
+            // Reset the model field after adding
+            self.add_radio_model.clear();
         }
     }
 }

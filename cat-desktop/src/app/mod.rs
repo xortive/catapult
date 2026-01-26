@@ -380,6 +380,11 @@ impl eframe::App for CatapultApp {
                         self.draw_switching_panel(ui);
 
                         ui.add_space(16.0);
+                        ui.heading("Add Radio");
+                        ui.separator();
+                        self.draw_add_radio_section(ui);
+
+                        ui.add_space(16.0);
                         ui.heading("Settings");
                         ui.separator();
                         if let Some(error) = self.settings.draw(ui) {

@@ -115,8 +115,6 @@ pub struct Settings {
     /// When set, events at this level and above are captured (e.g., INFO captures INFO, WARN, ERROR)
     #[serde(default = "default_diagnostic_level", with = "level_serde")]
     pub diagnostic_level: Option<Level>,
-    /// Default baud rates to try
-    pub baud_rates: Vec<u32>,
     /// Virtual radios to restore on startup
     #[serde(default)]
     pub virtual_radios: Vec<VirtualRadioConfig>,
@@ -143,7 +141,6 @@ impl Default for Settings {
             show_hex: true,
             show_decoded: true,
             diagnostic_level: Some(Level::INFO),
-            baud_rates: vec![38400, 19200, 9600, 4800, 115200],
             virtual_radios: Vec::new(),
             configured_radios: Vec::new(),
             virtual_ports: Vec::new(),
@@ -239,25 +236,6 @@ impl Settings {
                 ui.checkbox(&mut self.show_decoded, "");
                 ui.end_row();
             });
-
-        ui.add_space(16.0);
-
-        ui.heading("Baud Rates");
-        ui.label("Comma-separated list of baud rates to try:");
-
-        let mut baud_str = self
-            .baud_rates
-            .iter()
-            .map(|b| b.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        if ui.text_edit_singleline(&mut baud_str).changed() {
-            self.baud_rates = baud_str
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-        }
 
         ui.add_space(16.0);
 
