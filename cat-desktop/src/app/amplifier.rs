@@ -172,10 +172,10 @@ impl CatapultApp {
                 });
             }
             AmplifierConnectionType::Simulated => {
-                // Mode selector (only when not connected)
+                // Simulation mode selector (only when not connected)
                 if self.amp_data_tx.is_none() {
                     ui.horizontal(|ui| {
-                        ui.label("Mode:");
+                        ui.label("Simulation Mode:");
                         egui::ComboBox::from_id_salt("virtual_amp_mode")
                             .selected_text(match self.virtual_amp_mode {
                                 VirtualAmpMode::AutoInfo => "Auto-Info",
@@ -228,55 +228,18 @@ impl CatapultApp {
                     ui.add_space(8.0);
                     ui.separator();
 
-                    // Show current mode
+                    // Frequency display
                     ui.horizontal(|ui| {
-                        ui.label("Mode:");
-                        ui.label(
-                            RichText::new(match self.virtual_amp_mode {
-                                VirtualAmpMode::AutoInfo => "Auto-Info",
-                                VirtualAmpMode::Polling => "Polling",
-                            })
-                            .strong(),
-                        );
+                        ui.label("Freq:");
+                        let freq_str = match self.virtual_amp_state.as_ref() {
+                            Some(state) => {
+                                let mhz = state.frequency_hz as f64 / 1_000_000.0;
+                                format!("{:.3} MHz", mhz)
+                            }
+                            None => "---".to_string(),
+                        };
+                        ui.label(RichText::new(freq_str).monospace());
                     });
-
-                    ui.add_space(4.0);
-
-                    // Emulated state display
-                    ui.label(RichText::new("Amplifier State:").strong());
-
-                    egui::Grid::new("virtual_amp_state")
-                        .num_columns(2)
-                        .spacing([10.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label("Freq:");
-                            let freq_str = match self.virtual_amp_state.as_ref() {
-                                Some(state) => {
-                                    let mhz = state.frequency_hz as f64 / 1_000_000.0;
-                                    format!("{:.3} MHz", mhz)
-                                }
-                                None => "---".to_string(),
-                            };
-                            ui.label(RichText::new(freq_str).monospace());
-                            ui.end_row();
-
-                            ui.label("Mode:");
-                            let mode_str = match self.virtual_amp_state.as_ref() {
-                                Some(state) => super::mode_name(state.mode).to_string(),
-                                None => "---".to_string(),
-                            };
-                            ui.label(RichText::new(mode_str).monospace());
-                            ui.end_row();
-
-                            ui.label("PTT:");
-                            let (ptt_str, ptt_color) = match self.virtual_amp_state.as_ref() {
-                                Some(state) if state.ptt => ("TX", Color32::RED),
-                                Some(_) => ("RX", Color32::GREEN),
-                                None => ("---", Color32::GRAY),
-                            };
-                            ui.label(RichText::new(ptt_str).monospace().color(ptt_color));
-                            ui.end_row();
-                        });
                 }
             }
         }
