@@ -75,20 +75,31 @@ impl CatapultApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Add Radio dropdown menu
                 ui.menu_button("+", |ui| {
-                    // Add COM Radio section
-                    ui.label(RichText::new("Add COM Radio:").small());
+                    ui.label(RichText::new("Add Radio:").small());
 
                     // Collect available ports into owned data to avoid borrow conflicts
-                    // Include vid for protocol suggestion and port name for the dropdown
-                    let available_ports: Vec<(String, String, Option<u16>)> = self
+                    // PortInfo includes both real serial ports and virtual ports from settings
+                    let available_ports: Vec<(String, String, bool, Option<Protocol>)> = self
                         .available_radio_ports()
                         .into_iter()
-                        .map(|p| (p.port.clone(), Self::format_port_label(p), p.vid))
+                        .map(|p| {
+                            (
+                                p.port_name(),
+                                p.display_label(),
+                                p.is_virtual(),
+                                p.virtual_protocol(),
+                            )
+                        })
                         .collect();
 
                     if available_ports.is_empty() {
                         ui.label(
                             RichText::new("No ports available")
+                                .color(Color32::GRAY)
+                                .small(),
+                        );
+                        ui.label(
+                            RichText::new("Configure virtual ports in Settings")
                                 .color(Color32::GRAY)
                                 .small(),
                         );
@@ -100,17 +111,17 @@ impl CatapultApp {
                             // Find the label for the selected port
                             available_ports
                                 .iter()
-                                .find(|(port, _, _)| *port == self.add_radio_port)
-                                .map(|(_, label, _)| label.clone())
+                                .find(|(port, _, _, _)| *port == self.add_radio_port)
+                                .map(|(_, label, _, _)| label.clone())
                                 .unwrap_or_else(|| self.add_radio_port.clone())
                         };
 
                         let prev_port = self.add_radio_port.clone();
                         egui::ComboBox::from_id_salt("add_radio_port")
                             .selected_text(&selected_label)
-                            .width(160.0)
+                            .width(200.0)
                             .show_ui(ui, |ui| {
-                                for (port_name, label, _vid) in &available_ports {
+                                for (port_name, label, _, _) in &available_ports {
                                     ui.selectable_value(
                                         &mut self.add_radio_port,
                                         port_name.clone(),
@@ -118,7 +129,8 @@ impl CatapultApp {
                                     );
                                 }
                             });
-                        // Clear model when port changes
+
+                        // Clear model when port changes (protocol set via probing)
                         if self.add_radio_port != prev_port {
                             self.add_radio_model.clear();
                         }
@@ -147,7 +159,7 @@ impl CatapultApp {
                                 });
                         });
 
-                        // Baud rate dropdown
+                        // Baud rate dropdown (only relevant for real COM ports)
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("Baud:").small());
                             egui::ComboBox::from_id_salt("add_radio_baud")
@@ -210,28 +222,9 @@ impl CatapultApp {
                             .on_hover_text("Add radio")
                             .clicked()
                         {
-                            self.add_com_radio();
+                            self.add_radio_from_port();
                             // Reset the model field after adding
                             self.add_radio_model.clear();
-                            ui.close_menu();
-                        }
-                    }
-
-                    ui.separator();
-                    ui.label(RichText::new("Add Virtual Radio:").small());
-
-                    for proto in [
-                        Protocol::Kenwood,
-                        Protocol::IcomCIV,
-                        Protocol::Yaesu,
-                        Protocol::YaesuAscii,
-                        Protocol::Elecraft,
-                        Protocol::FlexRadio,
-                    ] {
-                        if ui.button(proto.name()).clicked() {
-                            let name =
-                                format!("Virtual {}", self.simulation_panel.radio_count() + 1);
-                            self.add_virtual_radio(&name, proto);
                             ui.close_menu();
                         }
                     }

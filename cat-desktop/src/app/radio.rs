@@ -1,6 +1,8 @@
 //! Radio management - COM and virtual radio handling
 
-use cat_detect::probe_port;
+use std::time::Duration;
+
+use cat_detect::{probe_port, ProbeResult, RadioProber};
 use cat_mux::{
     AsyncRadioConnection, MuxActorCommand, MuxEvent, RadioChannelMeta, RadioHandle,
     RadioTaskCommand,
@@ -12,6 +14,30 @@ use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use crate::radio_panel::RadioPanel;
 
 use super::{BackgroundMessage, CatapultApp, ComRadioConfig, VirtualRadioCommand};
+
+/// Probe a virtual port by creating a temporary virtual radio and probing it
+///
+/// This creates a temporary VirtualRadio with the given protocol, connects to it
+/// via a duplex stream, probes it to detect the protocol, then tears everything down.
+async fn probe_virtual_port(protocol: Protocol) -> Option<ProbeResult> {
+    let radio = VirtualRadio::new("probe-temp", protocol);
+    let (mut probe_stream, radio_stream) = tokio::io::duplex(1024);
+    let (_cmd_tx, cmd_rx) = tokio_mpsc::channel(1);
+
+    let task = tokio::spawn(run_virtual_radio_task(radio_stream, radio, cmd_rx));
+
+    // Give the virtual radio task time to start
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let prober = RadioProber::new();
+    let result = prober.probe(&mut probe_stream).await;
+
+    // Clean up
+    drop(probe_stream);
+    task.abort();
+
+    result
+}
 
 impl CatapultApp {
     /// Allocate a new correlation_id for pending registrations
@@ -394,14 +420,41 @@ impl CatapultApp {
         let tx = self.bg_tx.clone();
         let rt_handle = self.rt_handle.clone();
 
-        std::thread::spawn(move || {
-            let result = rt_handle.block_on(async { probe_port(&port, baud_rate).await });
-            let _ = tx.send(BackgroundMessage::ProbeComplete {
-                port,
-                baud_rate,
-                result,
+        // Check if this is a virtual port (VSIM:name format)
+        if let Some(name) = port.strip_prefix("VSIM:") {
+            // Find the virtual port config to get its protocol
+            if let Some(vport) = self
+                .settings
+                .virtual_ports
+                .iter()
+                .find(|v| v.name == name)
+                .cloned()
+            {
+                let protocol = vport.protocol;
+                std::thread::spawn(move || {
+                    let result = rt_handle.block_on(probe_virtual_port(protocol));
+                    let _ = tx.send(BackgroundMessage::ProbeComplete {
+                        port,
+                        baud_rate: 0,
+                        result,
+                    });
+                });
+            } else {
+                // Virtual port not found in config
+                self.probing = false;
+                self.report_warning("Probe", format!("Virtual port '{}' not found", name));
+            }
+        } else {
+            // Real COM port - use existing probe_port logic
+            std::thread::spawn(move || {
+                let result = rt_handle.block_on(async { probe_port(&port, baud_rate).await });
+                let _ = tx.send(BackgroundMessage::ProbeComplete {
+                    port,
+                    baud_rate,
+                    result,
+                });
             });
-        });
+        }
     }
 
     /// Add a new COM radio with the current add_radio_* settings
@@ -460,5 +513,37 @@ impl CatapultApp {
 
         // Clear the add_radio_port for next addition
         self.add_radio_port.clear();
+    }
+
+    /// Add a radio from the selected port (handles both real and virtual ports)
+    ///
+    /// Checks if the selected port is virtual (starts with "VSIM:") and either
+    /// calls add_virtual_radio() or add_com_radio() accordingly.
+    pub(super) fn add_radio_from_port(&mut self) {
+        if self.add_radio_port.is_empty() {
+            return;
+        }
+
+        // Check if this is a virtual port (VSIM:name format)
+        if let Some(name) = self.add_radio_port.strip_prefix("VSIM:") {
+            // Find the virtual port config by name
+            if let Some(vport) = self
+                .settings
+                .virtual_ports
+                .iter()
+                .find(|v| v.name == name)
+                .cloned()
+            {
+                // Add virtual radio with the configured protocol
+                self.add_virtual_radio(&vport.name, vport.protocol);
+                // Clear selection for next addition
+                self.add_radio_port.clear();
+            } else {
+                self.report_warning("Radio", format!("Virtual port '{}' not found", name));
+            }
+        } else {
+            // Real COM port - use existing add_com_radio logic
+            self.add_com_radio();
+        }
     }
 }

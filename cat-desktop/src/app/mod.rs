@@ -35,7 +35,7 @@ use cat_sim::VirtualRadioCommand;
 use crate::diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState};
 use crate::radio_panel::RadioPanel;
 use crate::settings::Settings;
-use crate::simulation_panel::{SimulationAction, SimulationPanel};
+use crate::simulation_panel::SimulationPanel;
 use crate::traffic_monitor::TrafficMonitor;
 
 /// Connection type for amplifier
@@ -396,20 +396,6 @@ impl eframe::App for CatapultApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.draw_radio_panel(ui);
-
-                // Simulation panel (debug mode) - show at bottom of central panel
-                ui.add_space(16.0);
-                ui.separator();
-                if let Some(action) = self.simulation_panel.ui(ui) {
-                    match action {
-                        SimulationAction::AddRadio { name, protocol } => {
-                            self.add_virtual_radio(&name, protocol);
-                        }
-                        SimulationAction::RemoveRadio { sim_id } => {
-                            self.remove_virtual_radio(&sim_id);
-                        }
-                    }
-                }
             });
         });
 

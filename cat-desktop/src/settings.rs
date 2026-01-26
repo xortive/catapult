@@ -8,6 +8,15 @@ use egui::Ui;
 use serde::{Deserialize, Serialize};
 use tracing::Level;
 
+/// Virtual port configuration (for simulated radios configured in Settings)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VirtualPortConfig {
+    /// Name for the virtual port (displayed as VSIM:<name>)
+    pub name: String,
+    /// Protocol for the virtual radio
+    pub protocol: Protocol,
+}
+
 /// Saved COM port radio configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConfiguredRadio {
@@ -114,6 +123,9 @@ pub struct Settings {
     /// Configured COM port radios to restore on startup
     #[serde(default)]
     pub configured_radios: Vec<ConfiguredRadio>,
+    /// Virtual ports configured in settings (appear in port dropdown)
+    #[serde(default)]
+    pub virtual_ports: Vec<VirtualPortConfig>,
     /// Amplifier configuration
     #[serde(default)]
     pub amplifier: AmplifierSettings,
@@ -134,6 +146,7 @@ impl Default for Settings {
             baud_rates: vec![38400, 19200, 9600, 4800, 115200],
             virtual_radios: Vec::new(),
             configured_radios: Vec::new(),
+            virtual_ports: Vec::new(),
             amplifier: AmplifierSettings::default(),
         }
     }
@@ -245,6 +258,108 @@ impl Settings {
                 .filter_map(|s| s.trim().parse().ok())
                 .collect();
         }
+
+        ui.add_space(16.0);
+
+        // Virtual Ports section
+        ui.heading("Virtual Ports");
+        ui.label(
+            egui::RichText::new("Configure simulated radios that appear in the port dropdown")
+                .small()
+                .color(egui::Color32::GRAY),
+        );
+
+        // List existing virtual ports
+        let mut remove_idx = None;
+        for (idx, vport) in self.virtual_ports.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(format!("VSIM:{}", vport.name));
+                ui.label(
+                    egui::RichText::new(format!("[{}]", vport.protocol.name()))
+                        .color(egui::Color32::from_rgb(100, 180, 255)),
+                );
+                if ui
+                    .button(
+                        egui::RichText::new("Remove").color(egui::Color32::from_rgb(255, 100, 100)),
+                    )
+                    .clicked()
+                {
+                    remove_idx = Some(idx);
+                }
+            });
+        }
+        if let Some(idx) = remove_idx {
+            self.virtual_ports.remove(idx);
+        }
+
+        // Add new virtual port form
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Add:");
+
+            // Use egui's temp memory for the form state
+            let id = ui.id().with("new_vport_name");
+            let mut name = ui
+                .memory(|m| m.data.get_temp::<String>(id))
+                .unwrap_or_default();
+            let name_response = ui.add(
+                egui::TextEdit::singleline(&mut name)
+                    .hint_text("Name")
+                    .desired_width(100.0),
+            );
+            ui.memory_mut(|m| m.data.insert_temp(id, name.clone()));
+
+            let proto_id = ui.id().with("new_vport_protocol");
+            let mut protocol = ui
+                .memory(|m| m.data.get_temp::<Protocol>(proto_id))
+                .unwrap_or(Protocol::Kenwood);
+            egui::ComboBox::from_id_salt("new_vport_protocol")
+                .selected_text(protocol.name())
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    for proto in [
+                        Protocol::Kenwood,
+                        Protocol::IcomCIV,
+                        Protocol::Yaesu,
+                        Protocol::YaesuAscii,
+                        Protocol::Elecraft,
+                        Protocol::FlexRadio,
+                    ] {
+                        ui.selectable_value(&mut protocol, proto, proto.name());
+                    }
+                });
+            ui.memory_mut(|m| m.data.insert_temp(proto_id, protocol));
+
+            let can_add = !name.is_empty() && !self.virtual_ports.iter().any(|v| v.name == name);
+            if ui.add_enabled(can_add, egui::Button::new("+")).clicked() {
+                self.virtual_ports.push(VirtualPortConfig {
+                    name: name.clone(),
+                    protocol,
+                });
+                // Clear the name field
+                ui.memory_mut(|m| m.data.insert_temp(id, String::new()));
+            }
+            // Show error if name already exists
+            if !name.is_empty() && self.virtual_ports.iter().any(|v| v.name == name) {
+                ui.label(
+                    egui::RichText::new("Name already exists")
+                        .small()
+                        .color(egui::Color32::RED),
+                );
+            }
+
+            // Tooltip if enter is pressed
+            if name_response.lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && can_add
+            {
+                self.virtual_ports.push(VirtualPortConfig {
+                    name: name.clone(),
+                    protocol,
+                });
+                ui.memory_mut(|m| m.data.insert_temp(id, String::new()));
+            }
+        });
 
         ui.add_space(16.0);
 

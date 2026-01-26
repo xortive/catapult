@@ -4,6 +4,8 @@ use std::collections::HashSet;
 
 use cat_detect::SerialPortInfo;
 
+use crate::port_info::PortInfo;
+
 use super::CatapultApp;
 
 impl CatapultApp {
@@ -58,12 +60,41 @@ impl CatapultApp {
     }
 
     /// Get available ports for adding a new radio (excludes ports already used by radios)
-    pub(super) fn available_radio_ports(&self) -> Vec<&SerialPortInfo> {
+    ///
+    /// Returns a merged list of:
+    /// - Real serial ports from system enumeration
+    /// - Virtual ports configured in settings
+    ///
+    /// Both real and virtual ports that are already in use are filtered out.
+    pub(super) fn available_radio_ports(&self) -> Vec<PortInfo> {
         let in_use = self.radio_ports_in_use();
-        self.available_ports
+
+        // Also collect virtual ports that are in use
+        let virtual_in_use: HashSet<String> = self
+            .radio_panels
             .iter()
-            .filter(|p| !in_use.contains(&p.port))
-            .collect()
+            .filter(|p| p.is_virtual())
+            .map(|p| p.port.clone())
+            .collect();
+
+        let mut ports: Vec<PortInfo> = Vec::new();
+
+        // Add real ports
+        for port in &self.available_ports {
+            if !in_use.contains(&port.port) {
+                ports.push(PortInfo::Real(port.clone()));
+            }
+        }
+
+        // Add virtual ports from settings
+        for vport in &self.settings.virtual_ports {
+            let port_name = format!("VSIM:{}", vport.name);
+            if !virtual_in_use.contains(&port_name) {
+                ports.push(PortInfo::Virtual(vport.clone()));
+            }
+        }
+
+        ports
     }
 
     /// Get available ports for amplifier (excludes ports used by radios)

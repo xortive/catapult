@@ -5,6 +5,7 @@
 
 mod app;
 mod diagnostics_layer;
+mod port_info;
 mod radio_panel;
 mod settings;
 mod simulation_panel;
