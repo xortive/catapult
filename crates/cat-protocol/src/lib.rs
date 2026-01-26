@@ -90,6 +90,12 @@ pub trait ProtocolCodec {
     /// Try to extract the next complete command from the buffer
     fn next_command(&mut self) -> Option<Self::Command>;
 
+    /// Try to extract the next complete command along with its raw bytes
+    ///
+    /// This is useful for traffic monitoring where we want to show the exact
+    /// bytes that were parsed for each command.
+    fn next_command_with_bytes(&mut self) -> Option<(Self::Command, Vec<u8>)>;
+
     /// Clear the internal buffer
     fn clear(&mut self);
 }
@@ -123,6 +129,12 @@ pub trait RadioCodec: Send + Sync {
     /// Try to extract the next complete command from the buffer
     fn next_command(&mut self) -> Option<RadioCommand>;
 
+    /// Try to extract the next complete command along with its raw bytes
+    ///
+    /// This is useful for traffic monitoring where we want to show the exact
+    /// bytes that were parsed for each command, rather than the entire buffer.
+    fn next_command_with_bytes(&mut self) -> Option<(RadioCommand, Vec<u8>)>;
+
     /// Clear the internal buffer
     fn clear(&mut self);
 }
@@ -139,6 +151,11 @@ macro_rules! impl_radio_codec {
 
             fn next_command(&mut self) -> Option<$crate::RadioCommand> {
                 $crate::ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_command())
+            }
+
+            fn next_command_with_bytes(&mut self) -> Option<($crate::RadioCommand, Vec<u8>)> {
+                $crate::ProtocolCodec::next_command_with_bytes(self)
+                    .map(|(cmd, bytes)| (cmd.to_radio_command(), bytes))
             }
 
             fn clear(&mut self) {

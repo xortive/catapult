@@ -343,6 +343,10 @@ impl ProtocolCodec for CivCodec {
     }
 
     fn next_command(&mut self) -> Option<Self::Command> {
+        self.next_command_with_bytes().map(|(cmd, _)| cmd)
+    }
+
+    fn next_command_with_bytes(&mut self) -> Option<(Self::Command, Vec<u8>)> {
         // Find preamble
         let preamble_pos = self.find_preamble()?;
 
@@ -358,7 +362,7 @@ impl ProtocolCodec for CivCodec {
         let frame: Vec<u8> = self.buffer.drain(..=term_pos).collect();
 
         match Self::parse_frame(&frame) {
-            Ok(cmd) => Some(cmd),
+            Ok(cmd) => Some((cmd, frame)),
             Err(e) => {
                 tracing::warn!("Failed to parse CI-V frame: {}", e);
                 None

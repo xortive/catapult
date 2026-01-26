@@ -124,19 +124,23 @@ impl ProtocolCodec for ElecraftCodec {
     }
 
     fn next_command(&mut self) -> Option<Self::Command> {
-        // Try to get the next Kenwood command
-        let kenwood_cmd = self.inner.next_command()?;
+        self.next_command_with_bytes().map(|(cmd, _)| cmd)
+    }
+
+    fn next_command_with_bytes(&mut self) -> Option<(Self::Command, Vec<u8>)> {
+        // Try to get the next Kenwood command with its raw bytes
+        let (kenwood_cmd, raw_bytes) = self.inner.next_command_with_bytes()?;
 
         // Check if it's an Elecraft-specific command
         if let KenwoodCommand::Unknown(s) = &kenwood_cmd {
             // Try to parse as Elecraft-specific
             if let Some(elecraft_cmd) = Self::parse_elecraft(s) {
-                return Some(elecraft_cmd);
+                return Some((elecraft_cmd, raw_bytes));
             }
         }
 
         // Return as wrapped Kenwood command
-        Some(ElecraftCommand::Kenwood(kenwood_cmd))
+        Some((ElecraftCommand::Kenwood(kenwood_cmd), raw_bytes))
     }
 
     fn clear(&mut self) {

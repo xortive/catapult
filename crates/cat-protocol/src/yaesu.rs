@@ -249,6 +249,10 @@ impl ProtocolCodec for YaesuCodec {
     }
 
     fn next_command(&mut self) -> Option<Self::Command> {
+        self.next_command_with_bytes().map(|(cmd, _)| cmd)
+    }
+
+    fn next_command_with_bytes(&mut self) -> Option<(Self::Command, Vec<u8>)> {
         let len = self.expected_response_len.unwrap_or(COMMAND_LEN);
 
         if self.buffer.len() < len {
@@ -259,12 +263,14 @@ impl ProtocolCodec for YaesuCodec {
         let bytes: Vec<u8> = self.buffer.drain(..len).collect();
         self.expected_response_len = None;
 
-        if len == 5 {
-            let arr: [u8; 5] = bytes.try_into().ok()?;
-            Some(Self::parse_command(&arr))
+        let cmd = if len == 5 {
+            let arr: [u8; 5] = bytes.clone().try_into().ok()?;
+            Self::parse_command(&arr)
         } else {
-            Some(Self::parse_freq_mode_response(&bytes))
-        }
+            Self::parse_freq_mode_response(&bytes)
+        };
+
+        Some((cmd, bytes))
     }
 
     fn clear(&mut self) {

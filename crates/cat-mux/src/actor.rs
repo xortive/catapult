@@ -649,20 +649,12 @@ pub async fn run_mux_actor(
                     .map(|m| m.protocol)
                     .unwrap_or(cat_protocol::Protocol::Kenwood);
 
-                // Emit traffic event
-                let _ = event_tx
-                    .send(MuxEvent::RadioDataIn {
-                        handle,
-                        data: data.clone(),
-                        protocol,
-                    })
-                    .await;
-
                 // Parse commands from raw data using the codec
-                // Collect commands first to avoid borrow conflict with state
-                let commands: Vec<_> = if let Some(codec) = state.codecs.get_mut(&handle) {
+                // Emit traffic event for EACH command with its specific bytes
+                let commands_with_bytes: Vec<_> = if let Some(codec) = state.codecs.get_mut(&handle)
+                {
                     codec.push_bytes(&data);
-                    std::iter::from_fn(|| codec.next_command()).collect()
+                    std::iter::from_fn(|| codec.next_command_with_bytes()).collect()
                 } else {
                     debug!(
                         "No codec found for radio {} (handle {}), skipping parse",
@@ -671,8 +663,17 @@ pub async fn run_mux_actor(
                     Vec::new()
                 };
 
-                // Process all complete commands
-                for command in commands {
+                // Process each complete command and emit its traffic event
+                for (command, raw_bytes) in commands_with_bytes {
+                    // Emit traffic event with just this command's bytes
+                    let _ = event_tx
+                        .send(MuxEvent::RadioDataIn {
+                            handle,
+                            data: raw_bytes,
+                            protocol,
+                        })
+                        .await;
+
                     process_radio_command(&mut state, &event_tx, handle, command).await;
                 }
             }
@@ -698,29 +699,30 @@ pub async fn run_mux_actor(
                 // Get amplifier protocol
                 let protocol = state.multiplexer.amplifier_config().protocol;
 
-                // Emit traffic event
-                let _ = event_tx
-                    .send(MuxEvent::AmpDataIn {
-                        data: data.clone(),
-                        protocol,
-                    })
-                    .await;
-
                 // Create codec if not exists
                 if state.amp_codec.is_none() {
                     state.amp_codec = Some(create_radio_codec(protocol));
                 }
 
                 // Parse commands from amplifier data
-                let commands: Vec<_> = if let Some(codec) = state.amp_codec.as_mut() {
+                // Emit traffic event for EACH command with its specific bytes
+                let commands_with_bytes: Vec<_> = if let Some(codec) = state.amp_codec.as_mut() {
                     codec.push_bytes(&data);
-                    std::iter::from_fn(|| codec.next_command()).collect()
+                    std::iter::from_fn(|| codec.next_command_with_bytes()).collect()
                 } else {
                     Vec::new()
                 };
 
                 // Process each command from the amplifier
-                for cmd in commands {
+                for (cmd, raw_bytes) in commands_with_bytes {
+                    // Emit traffic event with just this command's bytes
+                    let _ = event_tx
+                        .send(MuxEvent::AmpDataIn {
+                            data: raw_bytes,
+                            protocol,
+                        })
+                        .await;
+
                     debug!("Amp sent command: {:?}", cmd);
 
                     if cmd.is_query() {

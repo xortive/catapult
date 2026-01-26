@@ -348,6 +348,10 @@ impl ProtocolCodec for YaesuAsciiCodec {
     }
 
     fn next_command(&mut self) -> Option<Self::Command> {
+        self.next_command_with_bytes().map(|(cmd, _)| cmd)
+    }
+
+    fn next_command_with_bytes(&mut self) -> Option<(Self::Command, Vec<u8>)> {
         // Find terminator
         let term_pos = self.buffer.iter().position(|&b| b == b';')?;
 
@@ -357,13 +361,15 @@ impl ProtocolCodec for YaesuAsciiCodec {
         // Parse as ASCII (strip terminator)
         let cmd_str = String::from_utf8_lossy(&cmd_bytes[..cmd_bytes.len() - 1]);
 
-        match Self::parse_command(&cmd_str) {
-            Ok(cmd) => Some(cmd),
+        let cmd = match Self::parse_command(&cmd_str) {
+            Ok(cmd) => cmd,
             Err(e) => {
                 tracing::warn!("Failed to parse Yaesu ASCII command: {}", e);
-                Some(YaesuAsciiCommand::Unknown(cmd_str.into_owned()))
+                YaesuAsciiCommand::Unknown(cmd_str.into_owned())
             }
-        }
+        };
+
+        Some((cmd, cmd_bytes))
     }
 
     fn clear(&mut self) {

@@ -422,18 +422,22 @@ impl ProtocolCodec for FlexCodec {
     }
 
     fn next_command(&mut self) -> Option<Self::Command> {
-        // Get the next Kenwood command
-        let kenwood_cmd = self.inner.next_command()?;
+        self.next_command_with_bytes().map(|(cmd, _)| cmd)
+    }
+
+    fn next_command_with_bytes(&mut self) -> Option<(Self::Command, Vec<u8>)> {
+        // Get the next Kenwood command with its raw bytes
+        let (kenwood_cmd, raw_bytes) = self.inner.next_command_with_bytes()?;
 
         // Check if it's an unknown command that might be FlexRadio-specific (ZZ prefix)
         if let KenwoodCommand::Unknown(ref s) = kenwood_cmd {
             if let Some(flex_cmd) = Self::parse_zz_command(s) {
-                return Some(flex_cmd);
+                return Some((flex_cmd, raw_bytes));
             }
         }
 
         // Convert Kenwood command to FlexCommand
-        Some(Self::convert_kenwood_command(kenwood_cmd))
+        Some((Self::convert_kenwood_command(kenwood_cmd), raw_bytes))
     }
 
     fn clear(&mut self) {
