@@ -34,7 +34,7 @@ fn lines_for_entry(entry: &TrafficEntry, show_hex: bool, bytes_per_line: usize) 
 /// Calculate how many bytes can fit per line given available width
 /// Returns (bytes_per_line, char_width) - char_width is for continuation line alignment
 fn calculate_bytes_per_line(ui: &Ui, available_width: f32) -> usize {
-    let char_width = ui.fonts(|f| f.glyph_width(&egui::TextStyle::Monospace.resolve(ui.style()), ' '));
+    let char_width = ui.fonts_mut(|f| f.glyph_width(&egui::TextStyle::Monospace.resolve(ui.style()), ' '));
 
     // Estimate metadata width: timestamp (12 chars) + direction badge (~10) + protocol badge (~8) + spacing
     // This is approximate - first line will have variable metadata, continuation lines just have offset
@@ -62,8 +62,8 @@ impl TrafficMonitor {
         show_decoded: bool,
     ) -> Option<ExportAction> {
         let mut export_action = None;
-        // Toolbar
-        ui.horizontal(|ui| {
+        // Toolbar - use horizontal_wrapped to allow narrower panels
+        ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
             ui.separator();
 
@@ -82,7 +82,7 @@ impl TrafficMonitor {
             ui.menu_button("Export", |ui| {
                 if ui.button("Copy to Clipboard").clicked() {
                     export_action = Some(ExportAction::CopyToClipboard(self.format_filtered_log()));
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Save to File...").clicked() {
                     export_action = Some(match self.save_filtered_log_with_dialog() {
@@ -90,7 +90,7 @@ impl TrafficMonitor {
                         Ok(None) => ExportAction::Cancelled,
                         Err(e) => ExportAction::Error(e),
                     });
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
@@ -147,28 +147,28 @@ impl TrafficMonitor {
                         .clicked()
                     {
                         self.diagnostic_level = None;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .selectable_label(self.diagnostic_level == Some(Level::ERROR), "Error")
                         .clicked()
                     {
                         self.diagnostic_level = Some(Level::ERROR);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .selectable_label(self.diagnostic_level == Some(Level::WARN), "Warning")
                         .clicked()
                     {
                         self.diagnostic_level = Some(Level::WARN);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .selectable_label(self.diagnostic_level == Some(Level::INFO), "Info")
                         .clicked()
                     {
                         self.diagnostic_level = Some(Level::INFO);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .selectable_label(
@@ -181,7 +181,7 @@ impl TrafficMonitor {
                         .clicked()
                     {
                         self.diagnostic_level = Some(Level::DEBUG);
-                        ui.close_menu();
+                        ui.close();
                     }
                 },
             );
@@ -211,7 +211,7 @@ impl TrafficMonitor {
         let text_style = egui::TextStyle::Monospace;
         let row_height = ui.text_style_height(&text_style);
 
-        egui::ScrollArea::vertical()
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
             .stick_to_bottom(self.auto_scroll)
             .show_rows(ui, row_height, visual_rows.len(), |ui, row_range| {

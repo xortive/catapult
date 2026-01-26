@@ -42,8 +42,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "std"] }
 
 # GUI
-eframe = "0.30"
-egui = "0.30"
+eframe = "0.33"
+egui = "0.33"
 
 # Testing
 proptest = "1.5"
