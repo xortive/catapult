@@ -112,8 +112,6 @@ pub(super) struct ComRadioConfig {
     pub baud_rate: u32,
     pub civ_address: Option<u8>,
     pub model_name: String,
-    /// Whether to query initial state (skip for scanned radios that already have state)
-    pub query_initial_state: bool,
 }
 
 /// Main application state

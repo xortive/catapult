@@ -52,6 +52,54 @@ async fn probe_virtual_port(protocol: Protocol) -> Option<ProbeResult> {
     result
 }
 
+/// Run the post-connection setup and read loop for any radio connection
+///
+/// This function handles CI-V address configuration, initial settle delay,
+/// model ID query, initial state query, auto-info enablement, and the read loop.
+/// It's used by both COM and virtual radio connections to ensure consistent behavior.
+async fn run_radio_connection<T>(
+    mut conn: AsyncRadioConnection<T>,
+    handle: RadioHandle,
+    port_display: String,
+    model_name: String,
+    civ_address: Option<u8>,
+    bg_tx: std::sync::mpsc::Sender<BackgroundMessage>,
+    cmd_rx: tokio_mpsc::Receiver<RadioTaskCommand>,
+) where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    // Set CI-V address for Icom radios
+    if let Some(civ_addr) = civ_address {
+        conn.set_civ_address(civ_addr);
+    }
+
+    // Small delay to let the radio settle
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Query radio ID to get actual model name
+    let actual_model_name = conn.query_id().await.unwrap_or(model_name);
+
+    // Query initial state
+    if let Err(e) = conn.query_initial_state().await {
+        tracing::warn!("Failed to query initial state on {}: {}", port_display, e);
+    }
+
+    // Enable auto-info mode
+    if let Err(e) = conn.enable_auto_info().await {
+        tracing::warn!("Failed to enable auto-info on {}: {}", port_display, e);
+    }
+
+    // Notify UI of successful connection
+    let _ = bg_tx.send(BackgroundMessage::RadioConnected {
+        handle,
+        model: actual_model_name,
+        port: port_display,
+    });
+
+    // Start read loop (runs until error or shutdown)
+    conn.run_read_loop(cmd_rx).await;
+}
+
 impl CatapultApp {
     /// Allocate a new correlation_id for pending registrations
     pub(super) fn allocate_correlation_id(&mut self) -> u64 {
@@ -141,7 +189,6 @@ impl CatapultApp {
         let protocol = config.protocol;
         let civ_address = config.civ_address;
         let model_name = config.model_name;
-        let query_initial_state = config.query_initial_state;
 
         // Create channel for sending commands to the task
         let (cmd_tx, cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
@@ -166,47 +213,9 @@ impl CatapultApp {
                 event_tx.clone(),
                 mux_tx,
             ) {
-                Ok(mut conn) => {
-                    // Set CI-V address for Icom radios
-                    if let Some(civ_addr) = civ_address {
-                        conn.set_civ_address(civ_addr);
-                    }
-
-                    // Small delay to let the radio settle after port open
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    // Query radio ID to get actual model name
-                    let actual_model_name = conn.query_id().await.unwrap_or(model_name);
-
-                    // Query initial state if requested
-                    if query_initial_state {
-                        if let Err(e) = conn.query_initial_state().await {
-                            tracing::warn!("Failed to query initial state on {}: {}", port, e);
-                        }
-                    }
-
-                    // Try to enable auto-info mode
-                    if let Err(e) = conn.enable_auto_info().await {
-                        tracing::warn!("Failed to enable auto-info on {}: {}", port, e);
-                        let _ = event_tx
-                            .send(MuxEvent::Error {
-                                source: format!("Radio {}", port),
-                                message:
-                                    "Auto-info not enabled - radio won't send automatic updates"
-                                        .to_string(),
-                            })
-                            .await;
-                    }
-
-                    // Notify UI of successful connection
-                    let _ = bg_tx.send(BackgroundMessage::RadioConnected {
-                        handle,
-                        model: actual_model_name,
-                        port: port.clone(),
-                    });
-
-                    // Start read loop (runs until error or shutdown)
-                    conn.run_read_loop(cmd_rx).await;
+                Ok(conn) => {
+                    run_radio_connection(conn, handle, port, model_name, civ_address, bg_tx, cmd_rx)
+                        .await;
                 }
                 Err(e) => {
                     let _ = event_tx
@@ -270,47 +279,26 @@ impl CatapultApp {
         let bg_tx = self.bg_tx.clone();
         let mux_tx = self.mux_cmd_tx.clone();
         let event_tx = self.mux_event_tx.clone();
+        let port_display = format!("Virtual ({})", sim_id);
         self.rt_handle.spawn(async move {
-            // Create the AsyncRadioConnection with the connection stream
-            let mut conn = AsyncRadioConnection::new(
+            let conn = AsyncRadioConnection::new(
                 handle,
-                sim_id.clone(),
+                sim_id,
                 connection_stream,
                 protocol,
                 event_tx,
                 mux_tx,
             );
-
-            // Set CI-V address for Icom radios
-            if let Some(civ_addr) = civ_address {
-                conn.set_civ_address(civ_addr);
-            }
-
-            // Small delay to let the virtual radio actor settle
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-            // Query radio ID to get actual model name
-            let actual_model_name = conn.query_id().await.unwrap_or(model_name);
-
-            // Query initial state
-            if let Err(e) = conn.query_initial_state().await {
-                tracing::warn!("Failed to query initial state on {}: {}", sim_id, e);
-            }
-
-            // Enable auto-info mode
-            if let Err(e) = conn.enable_auto_info().await {
-                tracing::warn!("Failed to enable auto-info on {}: {}", sim_id, e);
-            }
-
-            // Notify UI of successful connection
-            let _ = bg_tx.send(BackgroundMessage::RadioConnected {
+            run_radio_connection(
+                conn,
                 handle,
-                model: actual_model_name,
-                port: format!("Virtual ({})", sim_id),
-            });
-
-            // Start read loop (runs until error or shutdown)
-            conn.run_read_loop(task_cmd_rx).await;
+                port_display,
+                model_name,
+                civ_address,
+                bg_tx,
+                task_cmd_rx,
+            )
+            .await;
         });
     }
 
@@ -332,7 +320,6 @@ impl CatapultApp {
                 baud_rate: config.baud_rate,
                 civ_address: config.civ_address,
                 model_name: config.model_name.clone(),
-                query_initial_state: false,
             };
 
             if port_available {
@@ -570,7 +557,6 @@ impl CatapultApp {
             baud_rate: self.add_radio_baud,
             civ_address,
             model_name: model_name.clone(),
-            query_initial_state: true,
         };
 
         // Create RadioPanel with no handle (will be updated when handle arrives)
