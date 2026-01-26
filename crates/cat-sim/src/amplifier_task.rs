@@ -7,10 +7,12 @@
 //! - Emit state change events via a broadcast channel
 
 use std::io;
+use std::time::Duration;
 
 use cat_protocol::{create_radio_codec, EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
+use tokio::time::{interval, Interval};
 use tracing::{debug, info, warn};
 
 use crate::VirtualAmplifier;
@@ -18,9 +20,15 @@ use crate::VirtualAmplifier;
 /// Commands that can be sent to a virtual amplifier actor
 #[derive(Debug, Clone)]
 pub enum VirtualAmpCommand {
+    /// Enable or disable polling mode
+    /// When enabled, the virtual amp periodically queries the mux for state
+    SetPolling(bool),
     /// Shutdown the virtual amplifier actor
     Shutdown,
 }
+
+/// Default polling interval in milliseconds
+const POLLING_INTERVAL_MS: u64 = 500;
 
 /// State event emitted when virtual amplifier state changes
 #[derive(Debug, Clone)]
@@ -60,7 +68,7 @@ where
 
     // Send auto-info enable command to mux to start receiving state updates
     // This makes the mux forward radio frequency/mode/PTT changes to us
-    if let Some(ai_cmd) = encode_auto_info_enable(amp.protocol(), amp.civ_address()) {
+    if let Some(ai_cmd) = encode_query(amp.protocol(), amp.civ_address(), &RadioCommand::EnableAutoInfo { enabled: true }) {
         debug!(
             "Virtual amp {} sending auto-info enable: {:02X?}",
             amp.id(),
@@ -72,6 +80,12 @@ where
             let _ = stream.flush().await;
         }
     }
+
+    // Polling state - when enabled, we actively query the mux for state
+    let mut polling_enabled = false;
+    let mut poll_timer: Interval = interval(Duration::from_millis(POLLING_INTERVAL_MS));
+    // Which query to send next (cycles through freq, mode, ptt)
+    let mut poll_index: usize = 0;
 
     // Emit initial state
     let _ = state_tx.send(VirtualAmpStateEvent {
@@ -127,6 +141,14 @@ where
             // Handle commands from the channel
             cmd = cmd_rx.recv() => {
                 match cmd {
+                    Some(VirtualAmpCommand::SetPolling(enabled)) => {
+                        info!("Virtual amp {} polling set to {}", amp.id(), enabled);
+                        polling_enabled = enabled;
+                        if enabled {
+                            // Reset timer when enabling
+                            poll_timer.reset();
+                        }
+                    }
                     Some(VirtualAmpCommand::Shutdown) => {
                         info!("Shutdown requested for virtual amplifier {}", amp.id());
                         break;
@@ -137,6 +159,29 @@ where
                     }
                 }
             }
+
+            // Polling timer - send queries when enabled
+            _ = poll_timer.tick(), if polling_enabled => {
+                // Cycle through queries: frequency, mode, ptt
+                let query = match poll_index % 3 {
+                    0 => RadioCommand::GetFrequency,
+                    1 => RadioCommand::GetMode,
+                    _ => RadioCommand::GetPtt,
+                };
+                poll_index = poll_index.wrapping_add(1);
+
+                if let Some(encoded) = encode_query(amp.protocol(), amp.civ_address(), &query) {
+                    debug!(
+                        "Virtual amp {} polling with {:?}: {:02X?}",
+                        amp.id(), query, encoded
+                    );
+                    if let Err(e) = stream.write_all(&encoded).await {
+                        warn!("Failed to send poll query: {}", e);
+                    } else {
+                        let _ = stream.flush().await;
+                    }
+                }
+            }
         }
     }
 
@@ -144,25 +189,21 @@ where
     Ok(())
 }
 
-/// Encode an auto-info enable command for the given protocol
-fn encode_auto_info_enable(protocol: Protocol, civ_address: Option<u8>) -> Option<Vec<u8>> {
+/// Encode a query command for the given protocol
+fn encode_query(protocol: Protocol, civ_address: Option<u8>, query: &RadioCommand) -> Option<Vec<u8>> {
     use cat_protocol::icom::CivCommand;
     use cat_protocol::kenwood::KenwoodCommand;
 
     match protocol {
         Protocol::Kenwood | Protocol::Elecraft => {
-            // AI2; enables auto-info mode
-            Some(KenwoodCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })?.encode())
+            Some(KenwoodCommand::from_radio_command(query)?.encode())
         }
         Protocol::IcomCIV => {
-            // Icom transceive mode enable
-            let civ_cmd = CivCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })?;
-            // Amp sends to radio (0xE0), amp address is typically 0x00 or specified
+            let civ_cmd = CivCommand::from_radio_command(query)?;
             let to_addr = 0xE0; // Controller/radio address
             let from_addr = civ_address.unwrap_or(0x00); // Amp's CI-V address
             Some(CivCommand::new(to_addr, from_addr, civ_cmd.command).encode())
         }
-        // Other protocols don't have a standard auto-info command or aren't supported yet
         Protocol::Yaesu | Protocol::YaesuAscii | Protocol::FlexRadio => None,
     }
 }

@@ -202,6 +202,21 @@ impl CatapultApp {
                     ui.add_space(8.0);
                     ui.separator();
 
+                    // Polling control
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut self.virtual_amp_polling, "Enable Polling")
+                            .on_hover_text("Actively query the mux for frequency/mode/PTT")
+                            .changed()
+                        {
+                            // Send polling command to virtual amp actor
+                            if let Some(ref tx) = self.virtual_amp_cmd_tx {
+                                let _ = tx.try_send(VirtualAmpCommand::SetPolling(self.virtual_amp_polling));
+                            }
+                        }
+                    });
+
+                    ui.add_space(4.0);
+
                     // Emulated state display
                     ui.label(RichText::new("Amplifier State:").strong());
 
@@ -403,6 +418,7 @@ impl CatapultApp {
         self.amp_data_tx = None;
         self.virtual_amp_state_rx = None;
         self.virtual_amp_state = None;
+        self.virtual_amp_polling = false;
         self.set_status("Amplifier disconnected".into());
     }
 }
