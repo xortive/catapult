@@ -429,7 +429,6 @@ impl CatapultApp {
         });
 
         self.set_status(format!("Virtual radio added: {}", sim_id));
-        self.save_virtual_radios();
 
         sim_id
     }

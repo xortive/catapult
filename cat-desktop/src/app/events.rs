@@ -8,7 +8,7 @@ use tracing::Level;
 
 use crate::traffic_monitor::DiagnosticSeverity;
 
-use super::{BackgroundMessage, CatapultApp};
+use super::{radio::RadioConnectionConfig, BackgroundMessage, CatapultApp};
 
 impl CatapultApp {
     /// Process diagnostic events from tracing layer
@@ -83,7 +83,12 @@ impl CatapultApp {
 
                     // Spawn the connection task (unified for both COM and Virtual)
                     if let Some(config) = self.pending_radio_configs.remove(&correlation_id) {
+                        let is_virtual = matches!(&config, RadioConnectionConfig::Virtual { .. });
                         self.spawn_radio_connection(handle, config);
+                        // Save virtual radios after registration (when simulation_panel has the state)
+                        if is_virtual {
+                            self.save_virtual_radios();
+                        }
                     }
                 }
                 BackgroundMessage::RadioConnected {
