@@ -31,6 +31,19 @@ Any amplifier that accepts CAT control should work. Tested with:
    - **CI-V Address**: (Icom only) The amplifier's CI-V address in hex
 3. Click **Connect**
 
+## Virtual Amplifier (Simulation)
+
+For testing without physical amplifier hardware:
+
+1. Set **Connection** to "Simulated"
+2. Select the **Protocol** (Kenwood, Elecraft, or Icom CI-V)
+3. Choose the **Mode**:
+   - **Auto-Info** (recommended): Receives pushed state updates from the active radio
+   - **Polling**: Queries the radio for frequency every 500ms
+4. Click **Connect**
+
+The simulated amplifier displays received frequency, mode, and PTT state in the Traffic Monitor.
+
 ### USB Connection
 
 Some amplifiers (like the Elecraft KPA1500) have a built-in USB-to-serial adapter. Simply connect a standard USB cable from your computer to the amplifier's USB port. The amplifier appears as a serial port (COM port) on your computer.

@@ -36,9 +36,10 @@ See the CAT commands that would be sent, displayed in the Traffic Monitor. Virtu
 1. Open **Settings** and scroll to the **Virtual Ports** section
 2. Enter a name (e.g., "IC-7300") and select the protocol (e.g., "Icom CI-V")
 3. Click **Add** to create the virtual port
-4. In the **Add Radio** section, select your virtual port from the dropdown
-5. Virtual ports appear as "Name [SIM - Protocol]"
-6. Click **Add Radio**
+4. Scroll to the **Add Radio** section (also in Settings)
+5. Select your virtual port from the dropdown
+6. Virtual ports appear as "Name [SIM - Protocol]"
+7. Click **Add Radio**
 
 The virtual radio appears in:
 - The **Simulation panel** (for controlling frequency, mode, and PTT)

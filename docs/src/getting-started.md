@@ -55,10 +55,11 @@ cargo build --release -p cat-desktop
 ## Connecting Your First Radio
 
 1. Connect your radio via USB
-2. In the **Add Radio** section, select the serial port from the dropdown
-3. Catapult will auto-suggest the protocol for known radios (Icom, Kenwood, FlexRadio, Yaesu)
-4. Adjust the protocol and baud rate if needed
-5. Click **Add Radio**
+2. Open **Settings** and go to the **Add Radio** section
+3. Select the serial port from the dropdown
+4. Catapult will auto-suggest the protocol for known radios (Icom, Kenwood, FlexRadio, Yaesu)
+5. Adjust the protocol and baud rate if needed
+6. Click **Add Radio**
 
 Your radio configuration is saved automatically and will restore on next launch.
 
@@ -80,7 +81,7 @@ The radio should appear in the Radios panel with its current frequency and mode.
 If you don't have hardware connected yet, you can test with virtual radios:
 
 1. Open **Settings** and add one or more virtual ports in the **Virtual Ports** section
-2. Select a virtual port from the port dropdown and click **Add Radio**
+2. In the **Add Radio** section (also in Settings), select a virtual port from the port dropdown and click **Add Radio**
 3. Enable **Debug Mode** in Settings to access the Simulation panel for controlling virtual radios
 
 Virtual radios behave identically to real radios, making them useful for testing switching logic before connecting hardware.

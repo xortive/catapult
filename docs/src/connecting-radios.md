@@ -15,7 +15,7 @@ Icom radios using CI-V may need a level converter. Many USB-CI-V cables include 
 
 ## Adding a Radio
 
-In the **Add Radio** section:
+Open **Settings** to find the **Add Radio** section:
 1. Select the serial port from the dropdown (virtual ports also appear here as "Name [SIM - Protocol]")
 2. Catapult auto-suggests the protocol for known USB radio IDs (Icom, Kenwood, FlexRadio, Yaesu)
 3. Adjust protocol and baud rate if the suggestion is incorrect
