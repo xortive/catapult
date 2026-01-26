@@ -258,61 +258,41 @@ impl TrafficMonitor {
 
             // Direction indicator with source info
             match source {
-                TrafficSource::RealRadio { .. } => {
-                    ui.label(
-                        RichText::new("[Radio→]")
-                            .color(Color32::LIGHT_BLUE)
-                            .monospace(),
-                    );
+                TrafficSource::RealRadio { port, .. } => {
+                    let label = if port.is_empty() {
+                        "[Radio→]".to_string()
+                    } else {
+                        format!("[{}→]", port)
+                    };
+                    ui.label(RichText::new(label).color(Color32::LIGHT_BLUE).monospace());
                 }
-                TrafficSource::ToRealRadio { .. } => {
+                TrafficSource::ToRealRadio { port, .. } => {
+                    let label = if port.is_empty() {
+                        "[→Radio]".to_string()
+                    } else {
+                        format!("[→{}]", port)
+                    };
                     ui.label(
-                        RichText::new("[→Radio]")
+                        RichText::new(label)
                             .color(Color32::from_rgb(180, 100, 255)) // Purple for outgoing to radio
                             .monospace(),
                     );
                 }
-                TrafficSource::SimulatedRadio { id } => {
-                    ui.label(
-                        RichText::new(format!("[{}→]", id))
-                            .color(Color32::from_rgb(100, 180, 255))
-                            .monospace(),
-                    );
+                TrafficSource::RealAmplifier { port } => {
+                    let label = if port.is_empty() {
+                        "[→Amp]".to_string()
+                    } else {
+                        format!("[→{}]", port)
+                    };
+                    ui.label(RichText::new(label).color(Color32::LIGHT_GREEN).monospace());
                 }
-                TrafficSource::ToSimulatedRadio { id } => {
-                    ui.label(
-                        RichText::new(format!("[→{}]", id))
-                            .color(Color32::from_rgb(180, 100, 255)) // Purple for outgoing to radio
-                            .monospace(),
-                    );
-                }
-                TrafficSource::RealAmplifier { .. } => {
-                    ui.label(
-                        RichText::new("[→Amp]")
-                            .color(Color32::LIGHT_GREEN)
-                            .monospace(),
-                    );
-                }
-                TrafficSource::FromRealAmplifier { .. } => {
-                    ui.label(
-                        RichText::new("[Amp→]")
-                            .color(Color32::LIGHT_GREEN)
-                            .monospace(),
-                    );
-                }
-                TrafficSource::SimulatedAmplifier => {
-                    ui.label(
-                        RichText::new("[→Amp]")
-                            .color(Color32::from_rgb(100, 180, 100))
-                            .monospace(),
-                    );
-                }
-                TrafficSource::FromSimulatedAmplifier => {
-                    ui.label(
-                        RichText::new("[Amp→]")
-                            .color(Color32::from_rgb(100, 180, 100))
-                            .monospace(),
-                    );
+                TrafficSource::FromRealAmplifier { port } => {
+                    let label = if port.is_empty() {
+                        "[Amp→]".to_string()
+                    } else {
+                        format!("[{}→]", port)
+                    };
+                    ui.label(RichText::new(label).color(Color32::LIGHT_GREEN).monospace());
                 }
             }
 

@@ -283,12 +283,7 @@ impl CatapultApp {
                 })
         };
         let amp_port = self.amp_port.clone();
-        let amp_is_virtual = self.amp_data_tx.is_none();
-        self.traffic_monitor.process_event_with_amp_port(
-            event,
-            &radio_metas,
-            &amp_port,
-            amp_is_virtual,
-        );
+        self.traffic_monitor
+            .process_event_with_amp_port(event, &radio_metas, &amp_port);
     }
 }

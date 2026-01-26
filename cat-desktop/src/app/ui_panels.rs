@@ -324,18 +324,8 @@ impl CatapultApp {
                 .inner_margin(8.0)
                 .outer_margin(4.0)
                 .show(ui, |ui| {
-                    // Top row: SIM badge (for virtual radios), TX indicator, and Select/Expand button
+                    // Top row: TX indicator and Select/Expand button
                     ui.horizontal(|ui| {
-                        // SIM badge only for virtual radios
-                        if *is_virtual {
-                            ui.label(
-                                RichText::new("[SIM]")
-                                    .color(Color32::from_rgb(255, 165, 0)) // Orange for virtual
-                                    .strong()
-                                    .size(10.0),
-                            );
-                        }
-
                         if *ptt {
                             ui.label(
                                 RichText::new("* TX")

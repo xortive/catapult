@@ -24,22 +24,14 @@ pub(crate) fn segment_color(segment_type: SegmentType) -> Color32 {
 /// Source of traffic data
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrafficSource {
-    /// Real radio on a serial port (incoming)
+    /// Radio on a serial port (incoming)
     RealRadio { handle: RadioHandle, port: String },
-    /// Command sent to real radio (outgoing to radio)
+    /// Command sent to radio (outgoing to radio)
     ToRealRadio { handle: RadioHandle, port: String },
-    /// Simulated radio (incoming)
-    SimulatedRadio { id: String },
-    /// Command sent to simulated radio (outgoing to radio)
-    ToSimulatedRadio { id: String },
-    /// Real amplifier on a serial port (outgoing to amp)
+    /// Amplifier on a serial port (outgoing to amp)
     RealAmplifier { port: String },
-    /// Real amplifier on a serial port (incoming from amp)
+    /// Amplifier on a serial port (incoming from amp)
     FromRealAmplifier { port: String },
-    /// Virtual amplifier (outgoing to amp)
-    SimulatedAmplifier,
-    /// Virtual amplifier (incoming from amp)
-    FromSimulatedAmplifier,
 }
 
 /// Severity level for diagnostic entries

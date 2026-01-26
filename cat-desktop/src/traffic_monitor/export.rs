@@ -57,12 +57,8 @@ impl TrafficMonitor {
                 let src = match source {
                     TrafficSource::RealRadio { port, .. } => format!("Radio({})", port),
                     TrafficSource::ToRealRadio { port, .. } => format!("->Radio({})", port),
-                    TrafficSource::SimulatedRadio { id } => format!("Sim({})", id),
-                    TrafficSource::ToSimulatedRadio { id } => format!("->Sim({})", id),
                     TrafficSource::RealAmplifier { port } => format!("->Amp({})", port),
                     TrafficSource::FromRealAmplifier { port } => format!("Amp({})", port),
-                    TrafficSource::SimulatedAmplifier => "->SimAmp".to_string(),
-                    TrafficSource::FromSimulatedAmplifier => "SimAmp".to_string(),
                 };
                 let hex: String = data
                     .iter()

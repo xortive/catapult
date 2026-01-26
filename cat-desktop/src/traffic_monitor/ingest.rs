@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use cat_mux::{sim_id_from_port, MuxEvent, RadioChannelMeta, RadioHandle};
+use cat_mux::{MuxEvent, RadioChannelMeta, RadioHandle};
 use cat_protocol::Protocol;
 
 use super::models::{DiagnosticSeverity, TrafficDirection, TrafficEntry, TrafficSource};
@@ -41,23 +41,6 @@ impl TrafficMonitor {
         });
     }
 
-    /// Add an incoming traffic entry from a simulated radio
-    #[allow(dead_code)] // Direct API, may be used for testing
-    pub fn add_simulated_incoming(&mut self, id: String, data: &[u8], protocol: Option<Protocol>) {
-        if self.paused {
-            return;
-        }
-
-        let decoded = self.get_cached_annotation(data, protocol);
-        self.add_entry(TrafficEntry::Data {
-            timestamp: SystemTime::now(),
-            direction: TrafficDirection::Incoming,
-            source: TrafficSource::SimulatedRadio { id },
-            data: data.to_vec(),
-            decoded,
-        });
-    }
-
     /// Add an outgoing traffic entry to real amplifier
     #[allow(dead_code)] // Direct API, may be used for testing
     pub fn add_outgoing(&mut self, data: &[u8], protocol: Option<Protocol>) {
@@ -81,40 +64,6 @@ impl TrafficMonitor {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Outgoing,
             source: TrafficSource::RealAmplifier { port },
-            data: data.to_vec(),
-            decoded,
-        });
-    }
-
-    /// Add an outgoing traffic entry to simulated amplifier
-    #[allow(dead_code)] // Reserved for future use
-    pub fn add_simulated_outgoing(&mut self, data: &[u8], protocol: Option<Protocol>) {
-        if self.paused {
-            return;
-        }
-
-        let decoded = self.get_cached_annotation(data, protocol);
-        self.add_entry(TrafficEntry::Data {
-            timestamp: SystemTime::now(),
-            direction: TrafficDirection::Outgoing,
-            source: TrafficSource::SimulatedAmplifier,
-            data: data.to_vec(),
-            decoded,
-        });
-    }
-
-    /// Add an outgoing traffic entry to simulated radio (command sent to radio)
-    #[allow(dead_code)] // Direct API, may be used for testing
-    pub fn add_to_simulated_radio(&mut self, id: String, data: &[u8], protocol: Option<Protocol>) {
-        if self.paused {
-            return;
-        }
-
-        let decoded = self.get_cached_annotation(data, protocol);
-        self.add_entry(TrafficEntry::Data {
-            timestamp: SystemTime::now(),
-            direction: TrafficDirection::Outgoing,
-            source: TrafficSource::ToSimulatedRadio { id },
             data: data.to_vec(),
             decoded,
         });
@@ -155,23 +104,6 @@ impl TrafficMonitor {
             timestamp: SystemTime::now(),
             direction: TrafficDirection::Incoming,
             source: TrafficSource::FromRealAmplifier { port },
-            data: data.to_vec(),
-            decoded,
-        });
-    }
-
-    /// Add an incoming traffic entry from simulated amplifier
-    #[allow(dead_code)] // Reserved for future use
-    pub fn add_from_simulated_amplifier(&mut self, data: &[u8], protocol: Option<Protocol>) {
-        if self.paused {
-            return;
-        }
-
-        let decoded = self.get_cached_annotation(data, protocol);
-        self.add_entry(TrafficEntry::Data {
-            timestamp: SystemTime::now(),
-            direction: TrafficDirection::Incoming,
-            source: TrafficSource::FromSimulatedAmplifier,
             data: data.to_vec(),
             decoded,
         });
@@ -224,35 +156,15 @@ impl TrafficMonitor {
                 data,
                 protocol,
             } => {
-                // Get cached annotation before moving data
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
-
-                // Determine source based on radio metadata
-                let source = if let Some(meta) = radio_metas(handle) {
-                    if meta.is_simulated() {
-                        let port = meta.port_name.as_deref().unwrap_or_default();
-                        TrafficSource::SimulatedRadio {
-                            id: sim_id_from_port(port)
-                                .map(String::from)
-                                .unwrap_or(meta.display_name),
-                        }
-                    } else {
-                        TrafficSource::RealRadio {
-                            handle,
-                            port: meta.port_name.unwrap_or_default(),
-                        }
-                    }
-                } else {
-                    TrafficSource::RealRadio {
-                        handle,
-                        port: String::new(),
-                    }
-                };
+                let port = radio_metas(handle)
+                    .and_then(|m| m.port_name)
+                    .unwrap_or_default();
 
                 self.add_entry(TrafficEntry::Data {
                     timestamp: SystemTime::now(),
                     direction: TrafficDirection::Incoming,
-                    source,
+                    source: TrafficSource::RealRadio { handle, port },
                     data,
                     decoded,
                 });
@@ -263,35 +175,15 @@ impl TrafficMonitor {
                 data,
                 protocol,
             } => {
-                // Get cached annotation before moving data
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
-
-                // Determine source based on radio metadata
-                let source = if let Some(meta) = radio_metas(handle) {
-                    if meta.is_simulated() {
-                        let port = meta.port_name.as_deref().unwrap_or_default();
-                        TrafficSource::ToSimulatedRadio {
-                            id: sim_id_from_port(port)
-                                .map(String::from)
-                                .unwrap_or(meta.display_name),
-                        }
-                    } else {
-                        TrafficSource::ToRealRadio {
-                            handle,
-                            port: meta.port_name.unwrap_or_default(),
-                        }
-                    }
-                } else {
-                    TrafficSource::ToRealRadio {
-                        handle,
-                        port: String::new(),
-                    }
-                };
+                let port = radio_metas(handle)
+                    .and_then(|m| m.port_name)
+                    .unwrap_or_default();
 
                 self.add_entry(TrafficEntry::Data {
                     timestamp: SystemTime::now(),
                     direction: TrafficDirection::Outgoing,
-                    source,
+                    source: TrafficSource::ToRealRadio { handle, port },
                     data,
                     decoded,
                 });
@@ -353,7 +245,6 @@ impl TrafficMonitor {
         event: MuxEvent,
         radio_metas: &dyn Fn(RadioHandle) -> Option<RadioChannelMeta>,
         amp_port: &str,
-        amp_is_virtual: bool,
     ) {
         if self.paused {
             return;
@@ -362,18 +253,12 @@ impl TrafficMonitor {
         match event {
             MuxEvent::AmpDataOut { data, protocol } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
-                let source = if amp_is_virtual {
-                    TrafficSource::SimulatedAmplifier
-                } else {
-                    TrafficSource::RealAmplifier {
-                        port: amp_port.to_string(),
-                    }
-                };
-
                 self.add_entry(TrafficEntry::Data {
                     timestamp: SystemTime::now(),
                     direction: TrafficDirection::Outgoing,
-                    source,
+                    source: TrafficSource::RealAmplifier {
+                        port: amp_port.to_string(),
+                    },
                     data,
                     decoded,
                 });
@@ -381,18 +266,12 @@ impl TrafficMonitor {
 
             MuxEvent::AmpDataIn { data, protocol } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
-                let source = if amp_is_virtual {
-                    TrafficSource::FromSimulatedAmplifier
-                } else {
-                    TrafficSource::FromRealAmplifier {
-                        port: amp_port.to_string(),
-                    }
-                };
-
                 self.add_entry(TrafficEntry::Data {
                     timestamp: SystemTime::now(),
                     direction: TrafficDirection::Incoming,
-                    source,
+                    source: TrafficSource::FromRealAmplifier {
+                        port: amp_port.to_string(),
+                    },
                     data,
                     decoded,
                 });
