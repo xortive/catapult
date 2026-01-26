@@ -75,6 +75,30 @@ The GUI application:
 - Displays radio status
 - Provides simulation controls
 - Traffic monitoring
+- Organized into focused modules for maintainability
+
+## Internal Module Structure
+
+The `cat-desktop` crate uses a modular organization:
+
+### `app/` Directory
+Core application logic split into focused files:
+- `mod.rs` - Main app struct and update loop
+- `radio.rs` - Radio connection and state management
+- `amplifier.rs` - Amplifier connection and command handling
+- `events.rs` - Event processing from the multiplexer
+- `ui_panels.rs` - UI panel rendering
+- `status.rs` - Status bar and notifications
+- `ports.rs` - Serial port enumeration and virtual port management
+
+### `traffic_monitor/` Directory
+Traffic monitoring functionality:
+- `mod.rs` - Traffic monitor state and public API
+- `ingest.rs` - Incoming data processing and parsing
+- `ui.rs` - Traffic display rendering
+- `export.rs` - Traffic log export functionality
+- `models.rs` - Traffic entry data structures
+- `cache.rs` - Protocol-specific caching
 
 ## Event System
 

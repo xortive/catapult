@@ -4,11 +4,17 @@ Virtual radios simulate real radio behavior for testing purposes.
 
 ## Creating Virtual Radios
 
-In the Simulation panel:
+Virtual radios are created in two steps:
 
-1. Enter a name (optional - defaults to "Radio N")
-2. Select a protocol
-3. Click **+ Add**
+1. **Configure a virtual port in Settings:**
+   - Open Settings
+   - In the **Virtual Ports** section, enter a name and select a protocol
+   - Click **Add** to create the virtual port
+
+2. **Add the radio from the port dropdown:**
+   - In the Add Radio section, select your virtual port from the dropdown
+   - Virtual ports appear as "Name [SIM - Protocol]" (e.g., "IC-7300 [SIM - Icom CI-V]")
+   - Click **Add Radio**
 
 Each virtual radio gets a unique ID (sim-1, sim-2, etc.).
 
@@ -56,15 +62,37 @@ Click **TX OFF** to simulate keying the transmitter. The button turns red and sh
 
 Virtual radios are registered with the multiplexer just like real radios:
 
-- They appear in the Radios panel with a `[SIM]` badge
+- They appear in the Radios panel (no visual distinction from real radios)
 - They participate in automatic switching
 - Their state changes trigger amplifier commands
+- They follow the same 100ms settle delay before sending commands
+- They use the same switching rules as real radios
 
-This means you can test switching logic with virtual radios before connecting real hardware.
+This unified behavior means you can test switching logic with virtual radios and expect identical behavior when you connect real hardware.
+
+## Managing Virtual Ports
+
+Virtual ports are managed in Settings:
+
+**Adding a Virtual Port:**
+1. Open Settings
+2. Scroll to the **Virtual Ports** section
+3. Enter a name for the port (e.g., "IC-7300", "K3")
+4. Select the protocol
+5. Click **Add**
+
+**Removing a Virtual Port:**
+1. Open Settings
+2. Find the port in the Virtual Ports list
+3. Click **Remove**
+
+Note: Removing a virtual port will disconnect any radio using that port.
 
 ## Removing Virtual Radios
 
-Click a virtual radio to expand it, then click **Remove**. The radio is unregistered from the multiplexer.
+Virtual radios are removed the same way as real radios: click the radio to expand it, then click **Disconnect**. The radio is unregistered from the multiplexer.
+
+To remove the underlying virtual port, use Settings as described above.
 
 ## Limitations
 

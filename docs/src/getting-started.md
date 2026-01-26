@@ -77,7 +77,13 @@ The radio should appear in the Radios panel with its current frequency and mode.
 
 ## Testing with Simulation
 
-If you don't have hardware connected yet, enable **Debug Mode** in settings to access the simulation panel. This lets you create virtual radios to test the switching logic.
+If you don't have hardware connected yet, you can test with virtual radios:
+
+1. Open **Settings** and add one or more virtual ports in the **Virtual Ports** section
+2. Select a virtual port from the port dropdown and click **Add Radio**
+3. Enable **Debug Mode** in Settings to access the Simulation panel for controlling virtual radios
+
+Virtual radios behave identically to real radios, making them useful for testing switching logic before connecting hardware.
 
 See [Simulation Mode](./simulation/overview.md) for details.
 

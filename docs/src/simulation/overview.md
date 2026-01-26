@@ -21,7 +21,7 @@ Create virtual radios with any protocol. They behave like real radios:
 - Integrate with the multiplexer for switching
 
 ### Traffic Monitor
-See the CAT commands that would be sent, displayed in the Traffic Monitor with a `[SIM]` badge.
+See the CAT commands that would be sent, displayed in the Traffic Monitor. Virtual radios appear the same as real radios in the traffic display.
 
 ## What's NOT Simulated
 
@@ -33,13 +33,16 @@ See the CAT commands that would be sent, displayed in the Traffic Monitor with a
 
 ### Add a Virtual Radio
 
-1. In the Simulation panel, enter a name (e.g., "IC-7300")
-2. Select the protocol (e.g., "Icom CI-V")
-3. Click **+ Add**
+1. Open **Settings** and scroll to the **Virtual Ports** section
+2. Enter a name (e.g., "IC-7300") and select the protocol (e.g., "Icom CI-V")
+3. Click **Add** to create the virtual port
+4. In the **Add Radio** section, select your virtual port from the dropdown
+5. Virtual ports appear as "Name [SIM - Protocol]"
+6. Click **Add Radio**
 
-The virtual radio appears in both:
-- The Simulation panel (for control)
-- The Radios panel in the sidebar (shows active status)
+The virtual radio appears in:
+- The **Simulation panel** (for controlling frequency, mode, and PTT)
+- The **Radios panel** in the sidebar (shows connection and active status, same as real radios)
 
 ### Control a Virtual Radio
 

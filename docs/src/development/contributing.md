@@ -87,6 +87,11 @@ To add a new radio protocol:
 4. Add to the `Protocol` enum
 5. Write tests with real command examples
 
+For GUI integration, the relevant files in `cat-desktop` are:
+- `app/radio.rs` - Radio connection and state handling
+- `app/amplifier.rs` - Amplifier integration
+- `traffic_monitor/ingest.rs` - Protocol-specific traffic parsing
+
 ## Reporting Issues
 
 When reporting bugs, include:

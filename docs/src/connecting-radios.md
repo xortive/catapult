@@ -16,10 +16,19 @@ Icom radios using CI-V may need a level converter. Many USB-CI-V cables include 
 ## Adding a Radio
 
 In the **Add Radio** section:
-1. Select the serial port from the dropdown
+1. Select the serial port from the dropdown (virtual ports also appear here as "Name [SIM - Protocol]")
 2. Catapult auto-suggests the protocol for known USB radio IDs (Icom, Kenwood, FlexRadio, Yaesu)
 3. Adjust protocol and baud rate if the suggestion is incorrect
 4. Click **Add Radio**
+
+## Model Detection
+
+After adding a radio, you can use the **Detect Model** button to identify the specific radio model. This sends a model identification query using the currently selected protocol.
+
+The detected model helps Catapult optimize settings for your specific radio. If detection fails:
+1. Verify the protocol matches your radio's CAT settings
+2. Check that the baud rate is correct
+3. Ensure the radio is powered on and ready
 
 ## Protocol Selection
 
@@ -32,6 +41,17 @@ Choose the correct protocol for your radio:
 - **FlexRadio** - FlexRadio SDRs via SmartSDR CAT
 
 For Icom radios, you may need to set the CI-V address (default: 0x94).
+
+## Virtual Ports
+
+For testing without hardware, you can create virtual ports in Settings:
+
+1. Open **Settings**
+2. Scroll to the **Virtual Ports** section
+3. Enter a name and select a protocol
+4. Click **Add**
+
+Virtual ports appear in the port dropdown alongside real serial ports. See [Virtual Radios](./simulation/virtual-radios.md) for more details.
 
 ## Persistent Configuration
 

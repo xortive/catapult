@@ -135,13 +135,23 @@ sudo usermod -a -G dialout $USER
 
 ## Simulation Issues
 
+### Virtual port not appearing in dropdown
+
+**Symptoms:** Created a virtual port in Settings but it doesn't appear in the port dropdown
+
+**Solutions:**
+1. Verify the virtual port was saved (check Settings > Virtual Ports list)
+2. Close and reopen the port dropdown to refresh
+3. Ensure you gave the virtual port a unique name
+
 ### Simulation panel not visible
 
 **Symptoms:** Can't find simulation controls
 
-**Solution:**
+**Solutions:**
 1. Enable Debug Mode in Settings
 2. Simulation panel appears at bottom of window
+3. Note: You must have at least one virtual radio added to see its controls
 
 ### Virtual radio not triggering switch
 
@@ -149,7 +159,8 @@ sudo usermod -a -G dialout $USER
 
 **Solutions:**
 1. Verify switching mode is Automatic or Frequency Triggered
-2. Check that the virtual radio was registered (appears in Radio panel)
+2. Check that the virtual radio was registered (appears in Radios panel)
+3. Virtual radios follow the same switching rules as real radios, including the 100ms settle delay
 
 ## Getting Help
 
