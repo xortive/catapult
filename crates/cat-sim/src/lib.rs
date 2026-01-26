@@ -27,9 +27,11 @@
 //! ```
 
 pub mod amplifier;
+pub mod amplifier_task;
 pub mod radio;
 pub mod radio_task;
 
 pub use amplifier::VirtualAmplifier;
+pub use amplifier_task::{run_virtual_amp_task, VirtualAmpCommand, VirtualAmpStateEvent};
 pub use radio::{VirtualRadio, VirtualRadioConfig};
 pub use radio_task::{run_virtual_radio_task, VirtualRadioCommand};

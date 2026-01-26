@@ -191,6 +191,10 @@ impl CatapultApp {
                 }
                 MuxEvent::AmpDisconnected => {
                     tracing::debug!("MuxEvent::AmpDisconnected");
+                    // Reset virtual amp state when disconnected
+                    self.virtual_amp_state = None;
+                    self.virtual_amp_cmd_tx = None;
+                    self.virtual_amp_state_rx = None;
                 }
                 MuxEvent::SwitchingBlocked {
                     requested,
@@ -210,6 +214,37 @@ impl CatapultApp {
                 | MuxEvent::AmpDataOut { .. }
                 | MuxEvent::AmpDataIn { .. } => {
                     self.forward_traffic_event(event);
+                }
+            }
+        }
+    }
+
+    /// Process events from virtual amplifier actor (if connected)
+    pub(super) fn process_virtual_amp_events(&mut self) {
+        // Poll the broadcast channel for state updates
+        if let Some(ref mut rx) = self.virtual_amp_state_rx {
+            // Try to receive all pending events (non-blocking)
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => {
+                        tracing::debug!(
+                            "Virtual amp state: freq={}, mode={:?}, ptt={}",
+                            event.frequency_hz,
+                            event.mode,
+                            event.ptt
+                        );
+                        self.virtual_amp_state = Some(event);
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                        tracing::warn!("Virtual amp state receiver lagged by {} events", n);
+                        // Continue to get the latest state
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                        tracing::debug!("Virtual amp state channel closed");
+                        self.virtual_amp_state_rx = None;
+                        break;
+                    }
                 }
             }
         }

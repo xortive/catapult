@@ -4,50 +4,42 @@
 //! and can echo or respond to commands. Useful for testing multiplexer logic
 //! without real hardware.
 
-use std::collections::VecDeque;
-use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use cat_protocol::{OperatingMode, Protocol};
 use tracing::error;
 
 /// Virtual amplifier for testing
 ///
-/// Tracks frequency/mode state and can echo or respond to commands.
-/// Useful for testing multiplexer logic without real hardware.
-///
-/// Implements `AsyncRead + AsyncWrite` so virtual amplifiers can use the same
-/// generic amp task as real serial ports:
-/// - `AsyncWrite::poll_write`: Pushes bytes through codec, processes complete
-///   commands via the virtual amplifier, and buffers any responses
-/// - `AsyncRead::poll_read`: Drains the response buffer
+/// Tracks frequency/mode/PTT state based on commands received. Used by the
+/// virtual amplifier actor task to maintain state that can be reported to the UI.
 pub struct VirtualAmplifier {
+    /// Identifier for logging
+    id: String,
     protocol: Protocol,
     civ_address: Option<u8>,
     frequency_hz: u64,
     mode: OperatingMode,
+    ptt: bool,
     /// Commands received (for test verification)
     received_commands: Vec<Vec<u8>>,
-    /// Codec for parsing incoming data
-    codec: Box<dyn RadioCodec>,
-    /// Buffer for responses to be read
-    response_buffer: VecDeque<u8>,
 }
 
 impl VirtualAmplifier {
     /// Create a new virtual amplifier
-    pub fn new(protocol: Protocol, civ_address: Option<u8>) -> Self {
+    pub fn new(id: impl Into<String>, protocol: Protocol, civ_address: Option<u8>) -> Self {
         Self {
+            id: id.into(),
             protocol,
             civ_address,
             frequency_hz: 14_250_000,
             mode: OperatingMode::Usb,
+            ptt: false,
             received_commands: Vec::new(),
-            codec: create_radio_codec(protocol),
-            response_buffer: VecDeque::new(),
         }
+    }
+
+    /// Get the identifier
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     /// Get the protocol
@@ -70,78 +62,129 @@ impl VirtualAmplifier {
         self.mode
     }
 
+    /// Get current PTT state
+    pub fn ptt(&self) -> bool {
+        self.ptt
+    }
+
     /// Process a command sent to the amplifier
     ///
-    /// Updates internal state based on the command and optionally returns
-    /// a response. Stores the command for test verification.
-    pub fn process_command(&mut self, data: &[u8]) -> Option<Vec<u8>> {
+    /// Updates internal state based on the command and returns true if state
+    /// changed. Stores the command for test verification.
+    pub fn process_command(&mut self, data: &[u8]) -> bool {
         self.received_commands.push(data.to_vec());
 
-        // Parse and update state for frequency/mode commands
+        // Parse and update state for frequency/mode/PTT commands
         match self.protocol {
             Protocol::Kenwood | Protocol::Elecraft => self.process_kenwood_command(data),
             Protocol::IcomCIV => self.process_icom_command(data),
             // These protocols are not yet supported for amplifier simulation
             Protocol::Yaesu | Protocol::YaesuAscii | Protocol::FlexRadio => {
                 error!("Virtual Amp doesn't support protocol: {:?}", self.protocol);
-                None
+                false
             }
         }
     }
 
     /// Process a Kenwood-style command
-    fn process_kenwood_command(&mut self, data: &[u8]) -> Option<Vec<u8>> {
+    ///
+    /// Returns true if state changed, false otherwise.
+    fn process_kenwood_command(&mut self, data: &[u8]) -> bool {
+        let mut changed = false;
+
         // Simple parsing for frequency commands like "FA14250000;"
         if data.starts_with(b"FA") && data.ends_with(b";") {
             if let Ok(freq_str) = std::str::from_utf8(&data[2..data.len() - 1]) {
                 if let Ok(freq) = freq_str.parse::<u64>() {
-                    self.frequency_hz = freq;
+                    if self.frequency_hz != freq {
+                        self.frequency_hz = freq;
+                        changed = true;
+                    }
                 }
             }
         }
         // Mode commands like "MD1;" (USB)
         if data.starts_with(b"MD") && data.ends_with(b";") && data.len() == 4 {
             if let Some(mode) = Self::kenwood_mode_from_byte(data[2]) {
-                self.mode = mode;
+                if self.mode != mode {
+                    self.mode = mode;
+                    changed = true;
+                }
             }
         }
-        None // Virtual amp doesn't need to respond
+        // PTT commands like "TX;" or "RX;" or "TX0;", "TX1;"
+        if data.starts_with(b"TX") && data.ends_with(b";") {
+            if !self.ptt {
+                self.ptt = true;
+                changed = true;
+            }
+        }
+        if data.starts_with(b"RX") && data.ends_with(b";") {
+            if self.ptt {
+                self.ptt = false;
+                changed = true;
+            }
+        }
+
+        changed
     }
 
     /// Process an Icom CI-V command
-    fn process_icom_command(&mut self, data: &[u8]) -> Option<Vec<u8>> {
+    ///
+    /// Returns true if state changed, false otherwise.
+    fn process_icom_command(&mut self, data: &[u8]) -> bool {
         // CI-V frames: FE FE <to> <from> <cmd> [<sub>] [<data>] FD
         if data.len() < 6 || data[0] != 0xFE || data[1] != 0xFE {
-            return None;
+            return false;
         }
 
         // Find the terminator
-        let fd_pos = data.iter().position(|&b| b == 0xFD)?;
+        let Some(fd_pos) = data.iter().position(|&b| b == 0xFD) else {
+            return false;
+        };
         if fd_pos < 5 {
-            return None;
+            return false;
         }
 
         let cmd = data[4];
+        let mut changed = false;
 
         // Command 0x00 or 0x05 with sub-command 0x00 = set frequency
         if cmd == 0x00 || (cmd == 0x05 && data.get(5) == Some(&0x00)) {
             // BCD-encoded frequency follows
-            // For simplicity, we'll parse 5-byte BCD frequency
             let freq_start = if cmd == 0x05 { 6 } else { 5 };
             if let Some(freq) = Self::parse_icom_bcd_frequency(&data[freq_start..fd_pos]) {
-                self.frequency_hz = freq;
+                if self.frequency_hz != freq {
+                    self.frequency_hz = freq;
+                    changed = true;
+                }
             }
         }
 
         // Command 0x01 or 0x06 = set mode
         if cmd == 0x01 || cmd == 0x06 {
-            let mode_byte = data.get(5)?;
-            if let Some(mode) = Self::icom_mode_from_byte(*mode_byte) {
-                self.mode = mode;
+            if let Some(&mode_byte) = data.get(5) {
+                if let Some(mode) = Self::icom_mode_from_byte(mode_byte) {
+                    if self.mode != mode {
+                        self.mode = mode;
+                        changed = true;
+                    }
+                }
             }
         }
 
-        None
+        // Command 0x1C sub 0x00 = PTT control
+        if cmd == 0x1C && data.get(5) == Some(&0x00) {
+            if let Some(&ptt_byte) = data.get(6) {
+                let new_ptt = ptt_byte != 0x00;
+                if self.ptt != new_ptt {
+                    self.ptt = new_ptt;
+                    changed = true;
+                }
+            }
+        }
+
+        changed
     }
 
     /// Parse BCD-encoded frequency from Icom data
@@ -208,71 +251,13 @@ impl VirtualAmplifier {
     }
 }
 
-impl AsyncRead for VirtualAmplifier {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        // Drain from response buffer if available
-        if !self.response_buffer.is_empty() {
-            let to_read = buf.remaining().min(self.response_buffer.len());
-            for _ in 0..to_read {
-                if let Some(byte) = self.response_buffer.pop_front() {
-                    buf.put_slice(&[byte]);
-                }
-            }
-            return Poll::Ready(Ok(()));
-        }
-
-        // No data available - return Pending (will never wake since virtual amp
-        // only generates responses in poll_write, but that's fine for our use case
-        // where we always poll both read and write together with timeout)
-        Poll::Pending
-    }
-}
-
-impl AsyncWrite for VirtualAmplifier {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        // Push bytes through the codec
-        self.codec.push_bytes(buf);
-
-        // Process all complete commands
-        while let Some(_cmd) = self.codec.next_command() {
-            // The VirtualAmplifier.process_command expects raw bytes, not RadioCommand
-            // So we pass the original buffer through for processing
-            // Note: This is a simplification - in practice the virtual amp processes
-            // the raw bytes directly for state tracking
-        }
-
-        // Process raw bytes directly through the virtual amplifier
-        if let Some(response) = self.process_command(buf) {
-            self.response_buffer.extend(response);
-        }
-
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_virtual_amplifier_kenwood_frequency() {
-        let mut amp = VirtualAmplifier::new(Protocol::Kenwood, None);
+        let mut amp = VirtualAmplifier::new("test", Protocol::Kenwood, None);
 
         amp.process_command(b"FA14250000;");
         assert_eq!(amp.frequency_hz(), 14_250_000);
@@ -283,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_virtual_amplifier_kenwood_mode() {
-        let mut amp = VirtualAmplifier::new(Protocol::Kenwood, None);
+        let mut amp = VirtualAmplifier::new("test", Protocol::Kenwood, None);
 
         amp.process_command(b"MD1;");
         assert_eq!(amp.mode(), OperatingMode::Lsb);
@@ -296,8 +281,21 @@ mod tests {
     }
 
     #[test]
+    fn test_virtual_amplifier_kenwood_ptt() {
+        let mut amp = VirtualAmplifier::new("test", Protocol::Kenwood, None);
+
+        assert!(!amp.ptt());
+
+        amp.process_command(b"TX;");
+        assert!(amp.ptt());
+
+        amp.process_command(b"RX;");
+        assert!(!amp.ptt());
+    }
+
+    #[test]
     fn test_virtual_amplifier_tracks_commands() {
-        let mut amp = VirtualAmplifier::new(Protocol::Kenwood, None);
+        let mut amp = VirtualAmplifier::new("test", Protocol::Kenwood, None);
 
         amp.process_command(b"FA14250000;");
         amp.process_command(b"MD2;");
@@ -308,5 +306,20 @@ mod tests {
 
         amp.clear_received();
         assert!(amp.received_commands().is_empty());
+    }
+
+    #[test]
+    fn test_process_command_returns_true_on_change() {
+        let mut amp = VirtualAmplifier::new("test", Protocol::Kenwood, None);
+        // Default frequency is 14_250_000
+
+        // Setting same as initial should return false
+        assert!(!amp.process_command(b"FA14250000;"));
+        // Different value should return true
+        assert!(amp.process_command(b"FA07074000;"));
+        // Same value should return false
+        assert!(!amp.process_command(b"FA07074000;"));
+        // Back to different value should return true
+        assert!(amp.process_command(b"FA14250000;"));
     }
 }

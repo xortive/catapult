@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use cat_mux::{AmplifierChannel, AmplifierChannelMeta, AsyncAmpConnection, MuxActorCommand};
 use cat_protocol::Protocol;
-use cat_sim::VirtualAmplifier;
+use cat_sim::{run_virtual_amp_task, VirtualAmpCommand, VirtualAmplifier};
 use egui::{Color32, RichText, Ui};
-use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc as tokio_mpsc, oneshot};
 use tokio_serial::SerialPortBuilderExt;
 
 use super::{AmplifierConnectionType, CatapultApp};
@@ -172,14 +172,72 @@ impl CatapultApp {
                 });
             }
             AmplifierConnectionType::Simulated => {
+                // Connection status and controls
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Simulated").color(Color32::from_rgb(100, 180, 255)));
+                    let is_connected = self.amp_data_tx.is_some();
+
+                    if ui
+                        .add_enabled(!is_connected, egui::Button::new("Connect"))
+                        .clicked()
+                    {
+                        self.connect_amplifier();
+                    }
+
+                    if ui
+                        .add_enabled(is_connected, egui::Button::new("Disconnect"))
+                        .clicked()
+                    {
+                        self.disconnect_amplifier();
+                    }
+
+                    if is_connected {
+                        ui.label(RichText::new("Connected").color(Color32::GREEN));
+                    } else {
+                        ui.label(RichText::new("Disconnected").color(Color32::GRAY));
+                    }
                 });
-                ui.label(
-                    RichText::new("Commands appear in Traffic Monitor")
-                        .color(Color32::GRAY)
-                        .small(),
-                );
+
+                // Only show state when connected
+                if self.amp_data_tx.is_some() {
+                    ui.add_space(8.0);
+                    ui.separator();
+
+                    // Emulated state display
+                    ui.label(RichText::new("Amplifier State:").strong());
+
+                    egui::Grid::new("virtual_amp_state")
+                        .num_columns(2)
+                        .spacing([10.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Freq:");
+                            let freq_str = match self.virtual_amp_state.as_ref() {
+                                Some(state) => {
+                                    let mhz = state.frequency_hz as f64 / 1_000_000.0;
+                                    format!("{:.3} MHz", mhz)
+                                }
+                                None => "---".to_string(),
+                            };
+                            ui.label(RichText::new(freq_str).monospace());
+                            ui.end_row();
+
+                            ui.label("Mode:");
+                            let mode_str = match self.virtual_amp_state.as_ref() {
+                                Some(state) => super::mode_name(state.mode).to_string(),
+                                None => "---".to_string(),
+                            };
+                            ui.label(RichText::new(mode_str).monospace());
+                            ui.end_row();
+
+                            ui.label("PTT:");
+                            let (ptt_str, ptt_color) = match self.virtual_amp_state.as_ref() {
+                                Some(state) if state.ptt => ("TX", Color32::RED),
+                                Some(_) => ("RX", Color32::GREEN),
+                                None => ("---", Color32::GRAY),
+                            };
+                            ui.label(RichText::new(ptt_str).monospace().color(ptt_color));
+                            ui.end_row();
+                        });
+                }
             }
         }
 
@@ -292,10 +350,30 @@ impl CatapultApp {
                 ));
             }
             AmplifierConnectionType::Simulated => {
-                let virtual_io = VirtualAmplifier::new(self.amp_protocol, civ_address);
+                // Create duplex stream pair - one end for mux, one for virtual amp actor
+                let (mux_stream, amp_stream) = tokio::io::duplex(4096);
 
+                // Create virtual amplifier
+                let virtual_amp = VirtualAmplifier::new("virtual-amp", self.amp_protocol, civ_address);
+
+                // Create channels for virtual amp actor
+                let (vamp_cmd_tx, vamp_cmd_rx) = tokio_mpsc::channel::<VirtualAmpCommand>(32);
+                let (vamp_state_tx, vamp_state_rx) = broadcast::channel::<cat_sim::VirtualAmpStateEvent>(32);
+
+                // Store senders/receivers for virtual amp
+                self.virtual_amp_cmd_tx = Some(vamp_cmd_tx);
+                self.virtual_amp_state_rx = Some(vamp_state_rx);
+
+                // Spawn the virtual amp actor task
                 self.rt_handle.spawn(async move {
-                    let conn = AsyncAmpConnection::new(virtual_io, mux_tx, event_tx);
+                    if let Err(e) = run_virtual_amp_task(amp_stream, virtual_amp, vamp_cmd_rx, vamp_state_tx).await {
+                        tracing::error!("Virtual amplifier task error: {}", e);
+                    }
+                });
+
+                // Spawn the AsyncAmpConnection with the mux side of the duplex
+                self.rt_handle.spawn(async move {
+                    let conn = AsyncAmpConnection::new(mux_stream, mux_tx, event_tx);
                     conn.run(shutdown_rx, amp_data_rx).await;
                 });
 
@@ -312,12 +390,19 @@ impl CatapultApp {
         // Tell mux actor to stop sending to amp
         self.send_mux_command(MuxActorCommand::DisconnectAmplifier, "DisconnectAmplifier");
 
-        // Send shutdown to amp task
+        // Send shutdown to virtual amp task if connected
+        if let Some(tx) = self.virtual_amp_cmd_tx.take() {
+            let _ = tx.try_send(VirtualAmpCommand::Shutdown);
+        }
+
+        // Send shutdown to amp connection task
         if let Some(tx) = self.amp_shutdown_tx.take() {
             let _ = tx.send(());
         }
 
         self.amp_data_tx = None;
+        self.virtual_amp_state_rx = None;
+        self.virtual_amp_state = None;
         self.set_status("Amplifier disconnected".into());
     }
 }

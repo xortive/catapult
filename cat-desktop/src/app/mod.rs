@@ -26,6 +26,7 @@ use cat_mux::{
     SwitchingMode,
 };
 use cat_protocol::{OperatingMode, Protocol};
+use cat_sim::{VirtualAmpCommand, VirtualAmpStateEvent};
 use eframe::CreationContext;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tracing::Level;
@@ -156,6 +157,12 @@ pub struct CatapultApp {
     pub(super) amp_data_tx: Option<tokio_mpsc::Sender<Vec<u8>>>,
     /// Amplifier shutdown sender
     pub(super) amp_shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Virtual amplifier command sender (for shutdown)
+    pub(super) virtual_amp_cmd_tx: Option<tokio_mpsc::Sender<VirtualAmpCommand>>,
+    /// Virtual amplifier state receiver (broadcast channel)
+    pub(super) virtual_amp_state_rx: Option<tokio::sync::broadcast::Receiver<VirtualAmpStateEvent>>,
+    /// Cached virtual amplifier state (for UI display)
+    pub(super) virtual_amp_state: Option<VirtualAmpStateEvent>,
     /// Selected port for adding a new COM radio
     pub(super) add_radio_port: String,
     /// Selected protocol for adding a new COM radio
@@ -256,6 +263,9 @@ impl CatapultApp {
             amp_connection_type,
             amp_data_tx: None,
             amp_shutdown_tx: None,
+            virtual_amp_cmd_tx: None,
+            virtual_amp_state_rx: None,
+            virtual_amp_state: None,
             add_radio_port: String::new(),
             add_radio_protocol: Protocol::Kenwood,
             add_radio_baud: 9600,
@@ -339,6 +349,7 @@ impl eframe::App for CatapultApp {
         self.process_diagnostic_events();
         self.process_messages();
         self.process_mux_events();
+        self.process_virtual_amp_events();
         self.maybe_sync_radio_states();
 
         // Clear old status messages
