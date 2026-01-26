@@ -33,8 +33,6 @@ pub struct ProbeConfig {
     pub timeout: Duration,
     /// Delay between protocol attempts
     pub inter_probe_delay: Duration,
-    /// Baud rates to try (in order)
-    pub baud_rates: Vec<u32>,
 }
 
 impl Default for ProbeConfig {
@@ -42,7 +40,6 @@ impl Default for ProbeConfig {
         Self {
             timeout: Duration::from_millis(500),
             inter_probe_delay: Duration::from_millis(100),
-            baud_rates: vec![38400, 19200, 9600, 4800, 115200, 57600],
         }
     }
 }
@@ -396,6 +393,5 @@ mod tests {
     fn test_probe_config_default() {
         let config = ProbeConfig::default();
         assert_eq!(config.timeout, Duration::from_millis(500));
-        assert!(!config.baud_rates.is_empty());
     }
 }
