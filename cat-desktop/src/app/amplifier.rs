@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use cat_mux::{AmplifierChannel, AmplifierChannelMeta, AsyncAmpConnection, MuxActorCommand};
 use cat_protocol::Protocol;
-use cat_sim::{run_virtual_amp_task, VirtualAmpCommand, VirtualAmplifier};
+use cat_sim::{run_virtual_amp_task, VirtualAmpCommand, VirtualAmpMode, VirtualAmplifier};
 use egui::{Color32, RichText, Ui};
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, oneshot};
 use tokio_serial::SerialPortBuilderExt;
@@ -172,6 +172,30 @@ impl CatapultApp {
                 });
             }
             AmplifierConnectionType::Simulated => {
+                // Mode selector (only when not connected)
+                if self.amp_data_tx.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.label("Mode:");
+                        egui::ComboBox::from_id_salt("virtual_amp_mode")
+                            .selected_text(match self.virtual_amp_mode {
+                                VirtualAmpMode::AutoInfo => "Auto-Info",
+                                VirtualAmpMode::Polling => "Polling",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.virtual_amp_mode,
+                                    VirtualAmpMode::AutoInfo,
+                                    "Auto-Info",
+                                ).on_hover_text("Receive state updates pushed from radio");
+                                ui.selectable_value(
+                                    &mut self.virtual_amp_mode,
+                                    VirtualAmpMode::Polling,
+                                    "Polling",
+                                ).on_hover_text("Actively poll radio for frequency");
+                            });
+                    });
+                }
+
                 // Connection status and controls
                 ui.horizontal(|ui| {
                     let is_connected = self.amp_data_tx.is_some();
@@ -202,17 +226,13 @@ impl CatapultApp {
                     ui.add_space(8.0);
                     ui.separator();
 
-                    // Polling control
+                    // Show current mode
                     ui.horizontal(|ui| {
-                        if ui.checkbox(&mut self.virtual_amp_polling, "Enable Polling")
-                            .on_hover_text("Actively query the mux for frequency/mode/PTT")
-                            .changed()
-                        {
-                            // Send polling command to virtual amp actor
-                            if let Some(ref tx) = self.virtual_amp_cmd_tx {
-                                let _ = tx.try_send(VirtualAmpCommand::SetPolling(self.virtual_amp_polling));
-                            }
-                        }
+                        ui.label("Mode:");
+                        ui.label(RichText::new(match self.virtual_amp_mode {
+                            VirtualAmpMode::AutoInfo => "Auto-Info",
+                            VirtualAmpMode::Polling => "Polling",
+                        }).strong());
                     });
 
                     ui.add_space(4.0);
@@ -379,9 +399,10 @@ impl CatapultApp {
                 self.virtual_amp_cmd_tx = Some(vamp_cmd_tx);
                 self.virtual_amp_state_rx = Some(vamp_state_rx);
 
-                // Spawn the virtual amp actor task
+                // Spawn the virtual amp actor task with selected mode
+                let amp_mode = self.virtual_amp_mode;
                 self.rt_handle.spawn(async move {
-                    if let Err(e) = run_virtual_amp_task(amp_stream, virtual_amp, vamp_cmd_rx, vamp_state_tx).await {
+                    if let Err(e) = run_virtual_amp_task(amp_stream, virtual_amp, vamp_cmd_rx, vamp_state_tx, amp_mode).await {
                         tracing::error!("Virtual amplifier task error: {}", e);
                     }
                 });
@@ -418,7 +439,6 @@ impl CatapultApp {
         self.amp_data_tx = None;
         self.virtual_amp_state_rx = None;
         self.virtual_amp_state = None;
-        self.virtual_amp_polling = false;
         self.set_status("Amplifier disconnected".into());
     }
 }

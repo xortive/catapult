@@ -20,11 +20,18 @@ use crate::VirtualAmplifier;
 /// Commands that can be sent to a virtual amplifier actor
 #[derive(Debug, Clone)]
 pub enum VirtualAmpCommand {
-    /// Enable or disable polling mode
-    /// When enabled, the virtual amp periodically queries the mux for state
-    SetPolling(bool),
     /// Shutdown the virtual amplifier actor
     Shutdown,
+}
+
+/// Behavior mode for virtual amplifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VirtualAmpMode {
+    /// Receive state via auto-info (mux pushes updates)
+    #[default]
+    AutoInfo,
+    /// Actively poll the mux for frequency
+    Polling,
 }
 
 /// Default polling interval in milliseconds
@@ -48,11 +55,16 @@ pub struct VirtualAmpStateEvent {
 /// 2. Shutdown commands from the command channel
 ///
 /// State changes are emitted via the broadcast channel for UI subscription.
+///
+/// The `mode` parameter determines how the virtual amp gets state:
+/// - `AutoInfo`: Send AI2 to enable auto-info, receive pushed updates
+/// - `Polling`: Actively poll the mux for frequency
 pub async fn run_virtual_amp_task<S>(
     mut stream: S,
     mut amp: VirtualAmplifier,
     mut cmd_rx: mpsc::Receiver<VirtualAmpCommand>,
     state_tx: broadcast::Sender<VirtualAmpStateEvent>,
+    mode: VirtualAmpMode,
 ) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -66,26 +78,31 @@ where
         amp.protocol().name()
     );
 
-    // Send auto-info enable command to mux to start receiving state updates
-    // This makes the mux forward radio frequency/mode/PTT changes to us
-    if let Some(ai_cmd) = encode_query(amp.protocol(), amp.civ_address(), &RadioCommand::EnableAutoInfo { enabled: true }) {
-        debug!(
-            "Virtual amp {} sending auto-info enable: {:02X?}",
-            amp.id(),
-            ai_cmd
-        );
-        if let Err(e) = stream.write_all(&ai_cmd).await {
-            warn!("Failed to send auto-info enable: {}", e);
-        } else {
-            let _ = stream.flush().await;
+    // Set up based on mode
+    let polling_enabled = mode == VirtualAmpMode::Polling;
+    let mut poll_timer: Interval = interval(Duration::from_millis(POLLING_INTERVAL_MS));
+
+    // Send auto-info enable command if in AutoInfo mode
+    if mode == VirtualAmpMode::AutoInfo {
+        if let Some(ai_cmd) = encode_query(amp.protocol(), amp.civ_address(), &RadioCommand::EnableAutoInfo { enabled: true }) {
+            debug!(
+                "Virtual amp {} sending auto-info enable: {:02X?}",
+                amp.id(),
+                ai_cmd
+            );
+            if let Err(e) = stream.write_all(&ai_cmd).await {
+                warn!("Failed to send auto-info enable: {}", e);
+            } else {
+                let _ = stream.flush().await;
+            }
         }
     }
 
-    // Polling state - when enabled, we actively query the mux for state
-    let mut polling_enabled = false;
-    let mut poll_timer: Interval = interval(Duration::from_millis(POLLING_INTERVAL_MS));
-    // Which query to send next (cycles through freq, mode, ptt)
-    let mut poll_index: usize = 0;
+    info!(
+        "Virtual amp {} running in {:?} mode",
+        amp.id(),
+        mode
+    );
 
     // Emit initial state
     let _ = state_tx.send(VirtualAmpStateEvent {
@@ -141,14 +158,6 @@ where
             // Handle commands from the channel
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(VirtualAmpCommand::SetPolling(enabled)) => {
-                        info!("Virtual amp {} polling set to {}", amp.id(), enabled);
-                        polling_enabled = enabled;
-                        if enabled {
-                            // Reset timer when enabling
-                            poll_timer.reset();
-                        }
-                    }
                     Some(VirtualAmpCommand::Shutdown) => {
                         info!("Shutdown requested for virtual amplifier {}", amp.id());
                         break;
@@ -160,23 +169,16 @@ where
                 }
             }
 
-            // Polling timer - send queries when enabled
+            // Polling timer - send frequency query when enabled
             _ = poll_timer.tick(), if polling_enabled => {
-                // Cycle through queries: frequency, mode, ptt
-                let query = match poll_index % 3 {
-                    0 => RadioCommand::GetFrequency,
-                    1 => RadioCommand::GetMode,
-                    _ => RadioCommand::GetPtt,
-                };
-                poll_index = poll_index.wrapping_add(1);
-
-                if let Some(encoded) = encode_query(amp.protocol(), amp.civ_address(), &query) {
+                // Amps only care about frequency for band switching
+                if let Some(encoded) = encode_query(amp.protocol(), amp.civ_address(), &RadioCommand::GetFrequency) {
                     debug!(
-                        "Virtual amp {} polling with {:?}: {:02X?}",
-                        amp.id(), query, encoded
+                        "Virtual amp {} polling frequency: {:02X?}",
+                        amp.id(), encoded
                     );
                     if let Err(e) = stream.write_all(&encoded).await {
-                        warn!("Failed to send poll query: {}", e);
+                        warn!("Failed to send frequency poll: {}", e);
                     } else {
                         let _ = stream.flush().await;
                     }
@@ -224,8 +226,8 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
         let (state_tx, mut state_rx) = broadcast::channel(32);
 
-        // Spawn the task
-        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx));
+        // Spawn the task in AutoInfo mode
+        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx, VirtualAmpMode::AutoInfo));
 
         // Drain the initial state event
         let initial = state_rx.recv().await.unwrap();
@@ -259,7 +261,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
         let (state_tx, mut state_rx) = broadcast::channel(32);
 
-        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx));
+        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx, VirtualAmpMode::AutoInfo));
 
         // Drain initial state
         let _ = state_rx.recv().await.unwrap();
@@ -303,7 +305,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
         let (state_tx, _state_rx) = broadcast::channel(32);
 
-        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx));
+        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx, VirtualAmpMode::AutoInfo));
 
         // Send shutdown command
         cmd_tx.send(VirtualAmpCommand::Shutdown).await.unwrap();

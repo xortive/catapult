@@ -26,7 +26,7 @@ use cat_mux::{
     SwitchingMode,
 };
 use cat_protocol::{OperatingMode, Protocol};
-use cat_sim::{VirtualAmpCommand, VirtualAmpStateEvent};
+use cat_sim::{VirtualAmpCommand, VirtualAmpMode, VirtualAmpStateEvent};
 use eframe::CreationContext;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tracing::Level;
@@ -163,8 +163,8 @@ pub struct CatapultApp {
     pub(super) virtual_amp_state_rx: Option<tokio::sync::broadcast::Receiver<VirtualAmpStateEvent>>,
     /// Cached virtual amplifier state (for UI display)
     pub(super) virtual_amp_state: Option<VirtualAmpStateEvent>,
-    /// Whether virtual amplifier polling is enabled
-    pub(super) virtual_amp_polling: bool,
+    /// Virtual amplifier behavior mode (selected before connecting)
+    pub(super) virtual_amp_mode: VirtualAmpMode,
     /// Selected port for adding a new COM radio
     pub(super) add_radio_port: String,
     /// Selected protocol for adding a new COM radio
@@ -268,7 +268,7 @@ impl CatapultApp {
             virtual_amp_cmd_tx: None,
             virtual_amp_state_rx: None,
             virtual_amp_state: None,
-            virtual_amp_polling: false,
+            virtual_amp_mode: VirtualAmpMode::default(),
             add_radio_port: String::new(),
             add_radio_protocol: Protocol::Kenwood,
             add_radio_baud: 9600,
