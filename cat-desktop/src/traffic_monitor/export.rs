@@ -18,15 +18,10 @@ impl TrafficMonitor {
         }
 
         // Direction filter for data entries
-        let direction_match = entry
+        entry
             .direction()
             .map(|dir| self.filter_direction.is_none_or(|filter| dir == filter))
-            .unwrap_or(true);
-
-        // Simulated filter
-        let sim_match = self.show_simulated || !entry.is_simulated();
-
-        direction_match && sim_match
+            .unwrap_or(true)
     }
 
     /// Format a timestamp for export

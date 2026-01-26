@@ -42,19 +42,6 @@ pub enum TrafficSource {
     FromSimulatedAmplifier,
 }
 
-impl TrafficSource {
-    /// Check if this is a simulated source
-    pub fn is_simulated(&self) -> bool {
-        matches!(
-            self,
-            Self::SimulatedRadio { .. }
-                | Self::ToSimulatedRadio { .. }
-                | Self::SimulatedAmplifier
-                | Self::FromSimulatedAmplifier
-        )
-    }
-}
-
 /// Severity level for diagnostic entries
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
@@ -103,14 +90,6 @@ impl TrafficEntry {
         match self {
             TrafficEntry::Data { direction, .. } => Some(*direction),
             TrafficEntry::Diagnostic { .. } => None,
-        }
-    }
-
-    /// Check if this is a simulated source
-    pub fn is_simulated(&self) -> bool {
-        match self {
-            TrafficEntry::Data { source, .. } => source.is_simulated(),
-            TrafficEntry::Diagnostic { .. } => false,
         }
     }
 }

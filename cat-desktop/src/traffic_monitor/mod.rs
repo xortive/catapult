@@ -31,8 +31,6 @@ pub struct TrafficMonitor {
     auto_scroll: bool,
     /// Filter by direction
     filter_direction: Option<Direction>,
-    /// Show simulated traffic
-    show_simulated: bool,
     /// Pause monitoring
     paused: bool,
     /// Minimum diagnostic level to show (None = off, Some(Level::DEBUG) = all)
@@ -59,7 +57,6 @@ impl TrafficMonitor {
             max_entries,
             auto_scroll: true,
             filter_direction: None,
-            show_simulated: true,
             paused: false,
             diagnostic_level,
             annotation_cache: AnnotationCache::with_capacity(ANNOTATION_CACHE_MAX_SIZE),

@@ -85,11 +85,6 @@ impl TrafficMonitor {
 
             ui.separator();
 
-            // Simulated traffic toggle
-            ui.checkbox(&mut self.show_simulated, "Show SIM");
-
-            ui.separator();
-
             // Diagnostic level selector with dropdown menu
             let level_label = match self.diagnostic_level {
                 Some(Level::DEBUG) | Some(Level::TRACE) => "Logs: Debug",
@@ -260,16 +255,6 @@ impl TrafficMonitor {
                 .unwrap_or_default();
 
             ui.label(RichText::new(time).color(Color32::GRAY).monospace());
-
-            // Simulated badge
-            if source.is_simulated() {
-                ui.label(
-                    RichText::new("[SIM]")
-                        .color(Color32::from_rgb(255, 165, 0)) // Orange
-                        .strong()
-                        .monospace(),
-                );
-            }
 
             // Direction indicator with source info
             match source {
