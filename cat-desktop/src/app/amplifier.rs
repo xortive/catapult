@@ -194,64 +194,54 @@ impl CatapultApp {
         }
     }
 
-    /// Connect to the amplifier (dispatches to COM or virtual based on connection type)
+    /// Connect to the amplifier (handles both COM and virtual based on connection type)
     pub(super) fn connect_amplifier(&mut self) {
-        match self.amp_connection_type {
-            AmplifierConnectionType::ComPort => self.connect_amplifier_com(),
-            AmplifierConnectionType::Simulated => self.connect_amplifier_virtual(),
-        }
-    }
-
-    /// Connect to a physical amplifier via COM port
-    fn connect_amplifier_com(&mut self) {
-        if self.amp_port.is_empty() {
-            self.set_status("No amplifier port selected".into());
-            return;
-        }
-
         let civ_address = if self.amp_protocol == Protocol::IcomCIV {
             Some(self.amp_civ_address)
         } else {
             None
         };
 
-        // Open the serial port
-        let stream = match tokio_serial::new(&self.amp_port, self.amp_baud)
-            .timeout(Duration::from_millis(100))
-            .open_native_async()
-        {
-            Ok(s) => s,
-            Err(e) => {
-                self.set_status(format!("Failed to open {}: {}", self.amp_port, e));
-                return;
+        // Determine port name, baud rate, and metadata based on connection type
+        let (port_name, baud_rate, amp_meta) = match self.amp_connection_type {
+            AmplifierConnectionType::ComPort => {
+                if self.amp_port.is_empty() {
+                    self.set_status("No amplifier port selected".into());
+                    return;
+                }
+                (
+                    self.amp_port.clone(),
+                    self.amp_baud,
+                    AmplifierChannelMeta::new_real(
+                        self.amp_port.clone(),
+                        self.amp_protocol,
+                        self.amp_baud,
+                        civ_address,
+                    ),
+                )
             }
+            AmplifierConnectionType::Simulated => (
+                "[VIRTUAL]".to_string(),
+                0,
+                AmplifierChannelMeta::new_virtual(self.amp_protocol, civ_address),
+            ),
         };
 
         // Send config to mux actor
         self.send_mux_command(
             MuxActorCommand::SetAmplifierConfig {
-                port: self.amp_port.clone(),
+                port: port_name.clone(),
                 protocol: self.amp_protocol,
-                baud_rate: self.amp_baud,
+                baud_rate,
                 civ_address,
             },
             "SetAmplifierConfig",
         );
 
-        // Create channel for sending data to amp task
+        // Create channels
         let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        // Create a dummy response channel (not used in current architecture)
         let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
-
-        // Create amplifier channel metadata
-        let amp_meta = AmplifierChannelMeta::new_real(
-            self.amp_port.clone(),
-            self.amp_protocol,
-            self.amp_baud,
-            civ_address,
-        );
 
         // Create AmplifierChannel and tell mux actor
         let amp_channel = AmplifierChannel::new(amp_meta, amp_data_tx.clone(), response_rx);
@@ -266,77 +256,55 @@ impl CatapultApp {
         self.amp_data_tx = Some(amp_data_tx);
         self.amp_shutdown_tx = Some(shutdown_tx);
 
-        // Spawn the async amp connection
+        // Spawn the async amp connection based on connection type
         let mux_tx = self.mux_cmd_tx.clone();
         let event_tx = self.mux_event_tx.clone();
-        self.rt_handle.spawn(async move {
-            let conn = AsyncAmpConnection::new(stream, mux_tx, event_tx);
-            conn.run(shutdown_rx, amp_data_rx).await;
-        });
 
-        self.set_status(format!(
-            "Connected to amplifier on {} @ {} baud",
-            self.amp_port, self.amp_baud
-        ));
-    }
+        match self.amp_connection_type {
+            AmplifierConnectionType::ComPort => {
+                // Open the serial port
+                let stream = match tokio_serial::new(&self.amp_port, self.amp_baud)
+                    .timeout(Duration::from_millis(100))
+                    .open_native_async()
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.set_status(format!("Failed to open {}: {}", self.amp_port, e));
+                        // Clean up state on failure
+                        self.amp_data_tx = None;
+                        self.amp_shutdown_tx = None;
+                        self.send_mux_command(
+                            MuxActorCommand::DisconnectAmplifier,
+                            "DisconnectAmplifier (cleanup)",
+                        );
+                        return;
+                    }
+                };
 
-    /// Connect to a virtual/simulated amplifier
-    fn connect_amplifier_virtual(&mut self) {
-        let civ_address = if self.amp_protocol == Protocol::IcomCIV {
-            Some(self.amp_civ_address)
-        } else {
-            None
-        };
+                self.rt_handle.spawn(async move {
+                    let conn = AsyncAmpConnection::new(stream, mux_tx, event_tx);
+                    conn.run(shutdown_rx, amp_data_rx).await;
+                });
 
-        // Create the virtual amplifier
-        let virtual_io = VirtualAmplifier::new(self.amp_protocol, civ_address);
+                self.set_status(format!(
+                    "Connected to amplifier on {} @ {} baud",
+                    self.amp_port, self.amp_baud
+                ));
+            }
+            AmplifierConnectionType::Simulated => {
+                let virtual_io = VirtualAmplifier::new(self.amp_protocol, civ_address);
 
-        // Send config to mux actor (use "[VIRTUAL]" as port name)
-        self.send_mux_command(
-            MuxActorCommand::SetAmplifierConfig {
-                port: "[VIRTUAL]".to_string(),
-                protocol: self.amp_protocol,
-                baud_rate: 0,
-                civ_address,
-            },
-            "SetAmplifierConfig (virtual)",
-        );
+                self.rt_handle.spawn(async move {
+                    let conn = AsyncAmpConnection::new(virtual_io, mux_tx, event_tx);
+                    conn.run(shutdown_rx, amp_data_rx).await;
+                });
 
-        // Create channel for sending data to virtual amp task
-        let (amp_data_tx, amp_data_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        // Create a dummy response channel (not used in current architecture)
-        let (_response_tx, response_rx) = tokio_mpsc::channel::<Vec<u8>>(64);
-
-        // Create amplifier channel metadata for virtual amp
-        let amp_meta = AmplifierChannelMeta::new_virtual(self.amp_protocol, civ_address);
-
-        // Create AmplifierChannel and tell mux actor
-        let amp_channel = AmplifierChannel::new(amp_meta, amp_data_tx.clone(), response_rx);
-        self.send_mux_command(
-            MuxActorCommand::ConnectAmplifier {
-                channel: amp_channel,
-            },
-            "ConnectAmplifier (virtual)",
-        );
-
-        // Store senders
-        self.amp_data_tx = Some(amp_data_tx);
-        self.amp_shutdown_tx = Some(shutdown_tx);
-
-        // Spawn the amp connection with virtual I/O
-        let mux_tx = self.mux_cmd_tx.clone();
-        let event_tx = self.mux_event_tx.clone();
-        self.rt_handle.spawn(async move {
-            let conn = AsyncAmpConnection::new(virtual_io, mux_tx, event_tx);
-            conn.run(shutdown_rx, amp_data_rx).await;
-        });
-
-        self.set_status(format!(
-            "Connected to virtual amplifier (protocol: {})",
-            self.amp_protocol.name()
-        ));
+                self.set_status(format!(
+                    "Connected to virtual amplifier (protocol: {})",
+                    self.amp_protocol.name()
+                ));
+            }
+        }
     }
 
     /// Disconnect from the amplifier

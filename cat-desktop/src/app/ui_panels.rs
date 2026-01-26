@@ -1,6 +1,6 @@
 //! UI panel drawing methods
 
-use cat_mux::{MuxActorCommand, RadioHandle, RadioTaskCommand, SwitchingMode};
+use cat_mux::{MuxActorCommand, RadioHandle, SwitchingMode};
 use cat_protocol::{OperatingMode, Protocol};
 use cat_sim::VirtualRadioCommand;
 use egui::{Color32, RichText, Ui};
@@ -534,41 +534,10 @@ impl CatapultApp {
                 .send_command(&sim_id, VirtualRadioCommand::SetPtt(active));
         }
         if let Some(idx) = remove_radio_idx {
-            let Some(panel) = self.radio_panels.get(idx) else {
-                return; // Index no longer valid
-            };
-            // Extract data before mutating
-            let is_virtual = panel.is_virtual();
-            let sim_id = panel.sim_id().map(String::from);
-            let handle = panel.handle;
-
-            if is_virtual {
-                // Virtual radio - remove directly
-                if let Some(sim_id) = sim_id {
-                    self.remove_virtual_radio(&sim_id);
-                }
-            } else {
-                // COM radio - shutdown async task and remove panel, save config
-                if let Some(handle) = handle {
-                    // Remove task sender (keyed by handle.0)
-                    if let Some((_, sender)) = self.radio_task_senders.remove(&handle.0) {
-                        // Send shutdown command to the async task
-                        Self::send_radio_task_command(
-                            &sender,
-                            RadioTaskCommand::Shutdown,
-                            "Shutdown",
-                        );
-                    }
-                    // Send UnregisterRadio to mux actor
-                    self.send_mux_command(
-                        MuxActorCommand::UnregisterRadio { handle },
-                        "UnregisterRadio",
-                    );
-                }
-                // Remove from panels and save
-                self.radio_panels.remove(idx);
-                self.save_configured_radios();
-                self.set_status("Radio removed".into());
+            // Get the handle from the panel
+            if let Some(handle) = self.radio_panels.get(idx).and_then(|p| p.handle) {
+                // Use unified remove_radio method
+                self.remove_radio(handle);
             }
         }
     }

@@ -71,26 +71,12 @@ impl CatapultApp {
                         if let Some(panel) = self.radio_panels.get_mut(panel_idx) {
                             panel.handle = Some(handle);
                             tracing::info!("Radio registered: handle={:?}", handle);
-
-                            // For virtual radios, store handle in sim_radio_ids
-                            if let Some(sim_id) = panel.sim_id() {
-                                self.sim_radio_ids.insert(sim_id.to_string(), handle);
-                            }
-
-                            // For COM radios, spawn the connection task
-                            if let Some(config) = self.pending_radio_configs.remove(&correlation_id)
-                            {
-                                self.spawn_radio_task(
-                                    handle,
-                                    config.port.clone(),
-                                    config.baud_rate,
-                                    config.protocol,
-                                    config.civ_address,
-                                    config.model_name.clone(),
-                                    config.query_initial_state,
-                                );
-                            }
                         }
+                    }
+
+                    // Spawn the connection task (unified for both COM and Virtual)
+                    if let Some(config) = self.pending_radio_configs.remove(&correlation_id) {
+                        self.spawn_radio_connection(handle, config);
                     }
                 }
                 BackgroundMessage::RadioConnected {
@@ -187,7 +173,7 @@ impl CatapultApp {
                 }
                 MuxEvent::RadioDisconnected { handle } => {
                     // Remove the task sender
-                    self.radio_task_senders.remove(&handle.0);
+                    self.radio_task_senders.remove(&handle);
                     tracing::debug!("MuxEvent::RadioDisconnected: handle={}", handle.0);
                 }
                 MuxEvent::Error { source, message } => {

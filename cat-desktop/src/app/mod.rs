@@ -69,6 +69,16 @@ pub(crate) fn mode_name(mode: OperatingMode) -> &'static str {
     }
 }
 
+/// Unified sender for radio task commands (works for both COM and virtual radios)
+pub struct RadioTaskSender {
+    /// Port name (e.g., "COM3" for real, "sim-1" for virtual)
+    pub port_name: String,
+    /// Command sender to the AsyncRadioConnection task
+    pub task_cmd_tx: tokio_mpsc::Sender<RadioTaskCommand>,
+    /// Optional command sender for virtual radio actor (only for virtual radios)
+    pub virtual_cmd_tx: Option<tokio_mpsc::Sender<VirtualRadioCommand>>,
+}
+
 /// Messages from background tasks
 pub enum BackgroundMessage {
     /// Probe completed (from manual probe button)
@@ -116,8 +126,8 @@ pub struct CatapultApp {
     pub(super) available_ports: Vec<SerialPortInfo>,
     /// Radio panels for UI (unified list of COM and Virtual radios)
     pub(super) radio_panels: Vec<RadioPanel>,
-    /// Async radio task command senders (keyed by radio_id) -> (port_name, cmd_sender)
-    pub(super) radio_task_senders: HashMap<u32, (String, tokio_mpsc::Sender<RadioTaskCommand>)>,
+    /// Unified radio task senders (keyed by RadioHandle)
+    pub(super) radio_task_senders: HashMap<RadioHandle, RadioTaskSender>,
     /// Traffic monitor
     pub(super) traffic_monitor: TrafficMonitor,
     /// Status message
@@ -148,8 +158,6 @@ pub struct CatapultApp {
     pub(super) amp_data_tx: Option<tokio_mpsc::Sender<Vec<u8>>>,
     /// Amplifier shutdown sender
     pub(super) amp_shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Maps simulation radio IDs to RadioHandle
-    pub(super) sim_radio_ids: HashMap<String, RadioHandle>,
     /// Selected port for adding a new COM radio
     pub(super) add_radio_port: String,
     /// Selected protocol for adding a new COM radio
@@ -178,10 +186,8 @@ pub struct CatapultApp {
     pub(super) active_radio: Option<RadioHandle>,
     /// Current switching mode (tracked locally from events)
     pub(super) switching_mode: SwitchingMode,
-    /// Pending radio configs awaiting handle from mux actor
-    pub(super) pending_radio_configs: HashMap<u64, ComRadioConfig>,
-    /// Virtual radio task shutdown senders (keyed by sim_id)
-    pub(super) virtual_radio_task_senders: HashMap<String, tokio_mpsc::Sender<RadioTaskCommand>>,
+    /// Pending radio configs awaiting handle from mux actor (both COM and Virtual)
+    pub(super) pending_radio_configs: HashMap<u64, radio::RadioConnectionConfig>,
     /// Next simulation ID counter for virtual radios
     pub(super) next_sim_id: u32,
     /// Last time we synced radio states with mux actor
@@ -252,7 +258,6 @@ impl CatapultApp {
             amp_connection_type,
             amp_data_tx: None,
             amp_shutdown_tx: None,
-            sim_radio_ids: HashMap::new(),
             add_radio_port: String::new(),
             add_radio_protocol: Protocol::Kenwood,
             add_radio_baud: 9600,
@@ -269,7 +274,6 @@ impl CatapultApp {
             active_radio: None,
             switching_mode: SwitchingMode::default(),
             pending_radio_configs: HashMap::new(),
-            virtual_radio_task_senders: HashMap::new(),
             next_sim_id: 1,
             last_state_sync: Instant::now(),
             _runtime: Some(runtime),

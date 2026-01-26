@@ -15,6 +15,19 @@ use crate::radio_panel::RadioPanel;
 
 use super::{BackgroundMessage, CatapultApp, ComRadioConfig, VirtualRadioCommand};
 
+/// Configuration for connecting a radio (unified for COM and Virtual)
+pub(crate) enum RadioConnectionConfig {
+    /// Physical COM port radio
+    Com(ComRadioConfig),
+    /// Virtual/simulated radio
+    Virtual {
+        /// Simulation ID (e.g., "sim-1")
+        sim_id: String,
+        /// Virtual radio config (used to create VirtualRadio when spawning)
+        config: cat_sim::VirtualRadioConfig,
+    },
+}
+
 /// Probe a virtual port by creating a temporary virtual radio and probing it
 ///
 /// This creates a temporary VirtualRadio with the given protocol, connects to it
@@ -87,7 +100,8 @@ impl CatapultApp {
         });
 
         // Store the config so we can spawn the task when the handle arrives
-        self.pending_radio_configs.insert(correlation_id, config);
+        self.pending_radio_configs
+            .insert(correlation_id, RadioConnectionConfig::Com(config));
 
         // Store the panel index for when the handle arrives
         self.pending_registrations
@@ -96,29 +110,51 @@ impl CatapultApp {
         correlation_id
     }
 
-    /// Spawn an async task for a radio connection
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn spawn_radio_task(
+    /// Spawn a radio connection task (unified for both COM and Virtual radios)
+    ///
+    /// This method handles both physical COM port radios and virtual radios,
+    /// creating the appropriate I/O stream and running the common initialization.
+    pub(super) fn spawn_radio_connection(
         &mut self,
         handle: RadioHandle,
-        port: String,
-        baud_rate: u32,
-        protocol: Protocol,
-        civ_address: Option<u8>,
-        model_name: String,
-        query_initial_state: bool,
+        config: RadioConnectionConfig,
     ) {
+        match config {
+            RadioConnectionConfig::Com(com_config) => {
+                self.spawn_com_radio_connection(handle, com_config);
+            }
+            RadioConnectionConfig::Virtual { sim_id, config } => {
+                self.spawn_virtual_radio_connection(handle, sim_id, config);
+            }
+        }
+    }
+
+    /// Spawn connection task for a physical COM port radio
+    fn spawn_com_radio_connection(&mut self, handle: RadioHandle, config: ComRadioConfig) {
         let bg_tx = self.bg_tx.clone();
         let mux_tx = self.mux_cmd_tx.clone();
         let event_tx = self.mux_event_tx.clone();
         let rt = self.rt_handle.clone();
 
+        let port = config.port;
+        let baud_rate = config.baud_rate;
+        let protocol = config.protocol;
+        let civ_address = config.civ_address;
+        let model_name = config.model_name;
+        let query_initial_state = config.query_initial_state;
+
         // Create channel for sending commands to the task
         let (cmd_tx, cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
 
-        // Store the sender so we can send commands to this radio (keyed by handle)
-        self.radio_task_senders
-            .insert(handle.0, (port.clone(), cmd_tx));
+        // Store the sender so we can send commands to this radio
+        self.radio_task_senders.insert(
+            handle,
+            super::RadioTaskSender {
+                port_name: port.clone(),
+                task_cmd_tx: cmd_tx,
+                virtual_cmd_tx: None,
+            },
+        );
 
         // Spawn the async connection task
         rt.spawn(async move {
@@ -185,6 +221,99 @@ impl CatapultApp {
         });
     }
 
+    /// Spawn connection task for a virtual/simulated radio
+    fn spawn_virtual_radio_connection(
+        &mut self,
+        handle: RadioHandle,
+        sim_id: String,
+        config: cat_sim::VirtualRadioConfig,
+    ) {
+        let name = config.id.clone();
+        let protocol = config.protocol;
+        let civ_address = config.civ_address;
+
+        // Create the VirtualRadio from config
+        let radio = VirtualRadio::from_config(config);
+        let model_name = radio.model_name().to_string();
+
+        // Create duplex stream pair for communication
+        let (connection_stream, radio_stream) = tokio::io::duplex(1024);
+
+        // Create UI command channel for SimulationPanel -> actor
+        let (ui_cmd_tx, ui_cmd_rx) = tokio_mpsc::channel::<VirtualRadioCommand>(32);
+
+        // Create channel for task control commands (shutdown)
+        let (task_cmd_tx, task_cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
+
+        // Store the sender so we can send commands to this radio
+        self.radio_task_senders.insert(
+            handle,
+            super::RadioTaskSender {
+                port_name: sim_id.clone(),
+                task_cmd_tx,
+                virtual_cmd_tx: Some(ui_cmd_tx.clone()),
+            },
+        );
+
+        // Register with SimulationPanel for UI display and commands
+        self.simulation_panel
+            .register_radio(sim_id.clone(), name.clone(), protocol, ui_cmd_tx);
+
+        // Spawn the virtual radio actor task
+        self.rt_handle.spawn(async move {
+            if let Err(e) = run_virtual_radio_task(radio_stream, radio, ui_cmd_rx).await {
+                tracing::warn!("Virtual radio actor task error: {}", e);
+            }
+        });
+
+        // Spawn the AsyncRadioConnection task
+        let bg_tx = self.bg_tx.clone();
+        let mux_tx = self.mux_cmd_tx.clone();
+        let event_tx = self.mux_event_tx.clone();
+        self.rt_handle.spawn(async move {
+            // Create the AsyncRadioConnection with the connection stream
+            let mut conn = AsyncRadioConnection::new(
+                handle,
+                sim_id.clone(),
+                connection_stream,
+                protocol,
+                event_tx,
+                mux_tx,
+            );
+
+            // Set CI-V address for Icom radios
+            if let Some(civ_addr) = civ_address {
+                conn.set_civ_address(civ_addr);
+            }
+
+            // Small delay to let the virtual radio actor settle
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            // Query radio ID to get actual model name
+            let actual_model_name = conn.query_id().await.unwrap_or(model_name);
+
+            // Query initial state
+            if let Err(e) = conn.query_initial_state().await {
+                tracing::warn!("Failed to query initial state on {}: {}", sim_id, e);
+            }
+
+            // Enable auto-info mode
+            if let Err(e) = conn.enable_auto_info().await {
+                tracing::warn!("Failed to enable auto-info on {}: {}", sim_id, e);
+            }
+
+            // Notify UI of successful connection
+            let _ = bg_tx.send(BackgroundMessage::RadioConnected {
+                handle,
+                model: actual_model_name,
+                port: format!("Virtual ({})", sim_id),
+            });
+
+            // Start read loop (runs until error or shutdown)
+            conn.run_read_loop(task_cmd_rx).await;
+        });
+    }
+
     /// Restore configured COM radios from settings
     pub(super) fn restore_configured_radios(&mut self) {
         let available_ports: std::collections::HashSet<_> = self
@@ -243,16 +372,24 @@ impl CatapultApp {
 
     /// Internal implementation for adding a virtual radio
     ///
-    /// Takes ownership of the VirtualRadio, creates duplex stream, spawns actor,
-    /// and registers with mux actor.
+    /// Registers the radio with the mux actor and stores config for later spawning.
+    /// The actual connection task is spawned when the handle arrives (via events.rs).
     fn add_virtual_radio_internal(&mut self, radio: VirtualRadio) -> String {
         let sim_id = format!("sim-{}", self.next_sim_id);
         self.next_sim_id += 1;
 
         let name = radio.id().to_string();
         let protocol = radio.protocol();
-        let model_name = radio.model_name().to_string();
-        let civ_address = radio.civ_address();
+
+        // Create config for later spawning
+        let virtual_config = cat_sim::VirtualRadioConfig {
+            id: name.clone(),
+            protocol,
+            model_name: Some(radio.model_name().to_string()),
+            initial_frequency_hz: radio.frequency_hz(),
+            initial_mode: radio.mode(),
+            civ_address: radio.civ_address(),
+        };
 
         // Allocate a correlation_id for tracking the registration
         let correlation_id = self.allocate_correlation_id();
@@ -272,24 +409,14 @@ impl CatapultApp {
             "RegisterRadio (virtual)",
         );
 
-        // Create duplex stream pair for communication
-        // connection_stream -> AsyncRadioConnection
-        // radio_stream -> virtual radio actor task
-        let (connection_stream, radio_stream) = tokio::io::duplex(1024);
-
-        // Create UI command channel for SimulationPanel -> actor
-        let (ui_cmd_tx, ui_cmd_rx) = tokio_mpsc::channel::<VirtualRadioCommand>(32);
-
-        // Create channel for task control commands (shutdown)
-        let (task_cmd_tx, task_cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
-
-        // Store the task shutdown sender
-        self.virtual_radio_task_senders
-            .insert(sim_id.clone(), task_cmd_tx);
-
-        // Register with SimulationPanel for UI display and commands
-        self.simulation_panel
-            .register_radio(sim_id.clone(), name.clone(), protocol, ui_cmd_tx);
+        // Store the config so we can spawn the task when the handle arrives
+        self.pending_radio_configs.insert(
+            correlation_id,
+            RadioConnectionConfig::Virtual {
+                sim_id: sim_id.clone(),
+                config: virtual_config,
+            },
+        );
 
         // Create a RadioPanel with no handle (will be updated when handle arrives)
         self.radio_panels.push(RadioPanel::new_virtual(
@@ -303,66 +430,14 @@ impl CatapultApp {
         // Store the pending registration
         self.pending_registrations.insert(correlation_id, panel_idx);
 
-        // Spawn the virtual radio actor task
-        self.rt_handle.spawn(async move {
-            if let Err(e) = run_virtual_radio_task(radio_stream, radio, ui_cmd_rx).await {
-                tracing::warn!("Virtual radio actor task error: {}", e);
-            }
-        });
-
-        // Spawn a task to await the handle and run AsyncRadioConnection
+        // Spawn a task to await the handle and notify via BackgroundMessage
         let bg_tx = self.bg_tx.clone();
-        let mux_tx = self.mux_cmd_tx.clone();
-        let event_tx = self.mux_event_tx.clone();
-        let sim_id_clone = sim_id.clone();
         self.rt_handle.spawn(async move {
             if let Ok(handle) = resp_rx.await {
-                // Notify UI of registration
                 let _ = bg_tx.send(BackgroundMessage::RadioRegistered {
                     correlation_id,
                     handle,
                 });
-
-                // Create the AsyncRadioConnection with the connection stream
-                let mut conn = AsyncRadioConnection::new(
-                    handle,
-                    sim_id_clone.clone(),
-                    connection_stream,
-                    protocol,
-                    event_tx,
-                    mux_tx,
-                );
-
-                // Set CI-V address for Icom radios
-                if let Some(civ_addr) = civ_address {
-                    conn.set_civ_address(civ_addr);
-                }
-
-                // Small delay to let the virtual radio actor settle
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-                // Query radio ID to get actual model name
-                let actual_model_name = conn.query_id().await.unwrap_or(model_name);
-
-                // Query initial state
-                if let Err(e) = conn.query_initial_state().await {
-                    tracing::warn!("Failed to query initial state on {}: {}", sim_id_clone, e);
-                }
-
-                // Enable auto-info mode
-                if let Err(e) = conn.enable_auto_info().await {
-                    tracing::warn!("Failed to enable auto-info on {}: {}", sim_id_clone, e);
-                }
-
-                // Notify UI of successful connection
-                let _ = bg_tx.send(BackgroundMessage::RadioConnected {
-                    handle,
-                    model: actual_model_name,
-                    port: format!("Virtual ({})", sim_id_clone),
-                });
-
-                // Start read loop (runs until error or shutdown)
-                conn.run_read_loop(task_cmd_rx).await;
             }
         });
 
@@ -372,38 +447,59 @@ impl CatapultApp {
         sim_id
     }
 
-    /// Remove a virtual radio - sends shutdown, unregisters from mux
-    pub(super) fn remove_virtual_radio(&mut self, sim_id: &str) {
-        // Shutdown the virtual radio task
-        if let Some(task_tx) = self.virtual_radio_task_senders.remove(sim_id) {
-            let _ = task_tx.try_send(RadioTaskCommand::Shutdown);
-        }
-
-        // Unregister from SimulationPanel
-        self.simulation_panel.unregister_radio(sim_id);
-
-        // Get the handle from the panel and unregister from mux actor
-        if let Some(panel) = self
+    /// Remove a radio by handle (unified for both COM and Virtual radios)
+    ///
+    /// This method handles shutdown, mux unregistration, and persistence for both
+    /// physical COM radios and virtual/simulated radios.
+    pub(super) fn remove_radio(&mut self, handle: RadioHandle) {
+        // Find the panel to determine if it's virtual and get sim_id if applicable
+        let panel_info = self
             .radio_panels
             .iter()
-            .find(|p| p.sim_id() == Some(sim_id))
-        {
-            if let Some(handle) = panel.handle {
-                self.send_mux_command(
-                    MuxActorCommand::UnregisterRadio { handle },
-                    "UnregisterRadio (virtual)",
-                );
-            }
+            .find(|p| p.handle == Some(handle))
+            .map(|p| (p.is_virtual(), p.sim_id().map(String::from)));
+
+        let Some((is_virtual, sim_id)) = panel_info else {
+            tracing::warn!("remove_radio: no panel found for handle {:?}", handle);
+            return;
+        };
+
+        // Shutdown the radio task via unified sender map
+        if let Some(sender) = self.radio_task_senders.remove(&handle) {
+            Self::send_radio_task_command(
+                &sender.task_cmd_tx,
+                RadioTaskCommand::Shutdown,
+                "Shutdown",
+            );
         }
 
-        // Remove sim_id mapping
-        self.sim_radio_ids.remove(sim_id);
+        // Unregister from mux actor
+        self.send_mux_command(
+            MuxActorCommand::UnregisterRadio { handle },
+            "UnregisterRadio",
+        );
 
-        // Remove from radio_panels
-        self.radio_panels.retain(|p| p.sim_id() != Some(sim_id));
-
-        self.set_status(format!("Virtual radio removed: {}", sim_id));
-        self.save_virtual_radios();
+        // Handle type-specific cleanup
+        if is_virtual {
+            // Virtual radio: unregister from SimulationPanel
+            if let Some(ref sim_id) = sim_id {
+                self.simulation_panel.unregister_radio(sim_id);
+            }
+            // Remove from radio_panels
+            self.radio_panels.retain(|p| p.handle != Some(handle));
+            // Save virtual radios config
+            self.save_virtual_radios();
+            self.set_status(format!(
+                "Virtual radio removed: {}",
+                sim_id.unwrap_or_default()
+            ));
+        } else {
+            // COM radio: remove from radio_panels
+            self.radio_panels.retain(|p| p.handle != Some(handle));
+            // Save configured radios
+            self.save_configured_radios();
+            self.set_status("Radio removed".to_string());
+        }
     }
 
     /// Probe the selected port for radio detection
