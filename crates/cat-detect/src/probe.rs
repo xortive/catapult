@@ -276,7 +276,10 @@ impl RadioProber {
         match timeout(self.config.timeout, stream.read(&mut buf)).await {
             Ok(Ok(n)) if n > 0 => {
                 let response = &buf[..n];
-                trace!("Kenwood ID response: {:?}", String::from_utf8_lossy(response));
+                trace!(
+                    "Kenwood ID response: {:?}",
+                    String::from_utf8_lossy(response)
+                );
 
                 if kenwood::is_valid_id_response(response) {
                     let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
@@ -321,7 +324,10 @@ impl RadioProber {
         match timeout(self.config.timeout, stream.read(&mut buf)).await {
             Ok(Ok(n)) if n > 0 => {
                 let response = &buf[..n];
-                trace!("FlexRadio ID response: {:?}", String::from_utf8_lossy(response));
+                trace!(
+                    "FlexRadio ID response: {:?}",
+                    String::from_utf8_lossy(response)
+                );
 
                 if flex::is_valid_id_response(response) {
                     let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);
@@ -366,7 +372,10 @@ impl RadioProber {
         match timeout(self.config.timeout, stream.read(&mut buf)).await {
             Ok(Ok(n)) if n > 0 => {
                 let response = &buf[..n];
-                trace!("YaesuAscii ID response: {:?}", String::from_utf8_lossy(response));
+                trace!(
+                    "YaesuAscii ID response: {:?}",
+                    String::from_utf8_lossy(response)
+                );
 
                 if yaesu_ascii::is_valid_id_response(response) {
                     let id_str = String::from_utf8_lossy(&response[2..response.len() - 1]);

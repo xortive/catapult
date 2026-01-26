@@ -214,8 +214,16 @@ impl CatapultApp {
                 mux_tx,
             ) {
                 Ok(conn) => {
-                    run_radio_connection(conn, handle, port, model_name, civ_address, bg_tx, cmd_rx)
-                        .await;
+                    run_radio_connection(
+                        conn,
+                        handle,
+                        port,
+                        model_name,
+                        civ_address,
+                        bg_tx,
+                        cmd_rx,
+                    )
+                    .await;
                 }
                 Err(e) => {
                     let _ = event_tx

@@ -347,8 +347,11 @@ where
         }
 
         info!("Read loop ended for radio {:?}", self.handle);
-        let _ = self.event_tx.send(MuxEvent::RadioDisconnected {
-            handle: self.handle,
-        }).await;
+        let _ = self
+            .event_tx
+            .send(MuxEvent::RadioDisconnected {
+                handle: self.handle,
+            })
+            .await;
     }
 }

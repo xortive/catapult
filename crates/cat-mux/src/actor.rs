@@ -390,11 +390,7 @@ fn handle_amp_query(state: &MuxActorState, query: &RadioCommand) -> Option<Radio
 /// Send a RadioCommand to the amplifier
 ///
 /// Translates the command to the amplifier's protocol and sends it.
-async fn send_to_amp(
-    state: &MuxActorState,
-    event_tx: &mpsc::Sender<MuxEvent>,
-    cmd: RadioCommand,
-) {
+async fn send_to_amp(state: &MuxActorState, event_tx: &mpsc::Sender<MuxEvent>, cmd: RadioCommand) {
     let Some(ref tx) = state.amp_tx else {
         return;
     };
@@ -1088,11 +1084,8 @@ mod tests {
         // and amp data out (for auto-info)
         let mut found_auto_info_update = false;
         for _ in 0..10 {
-            if let Ok(event) = tokio::time::timeout(
-                tokio::time::Duration::from_millis(100),
-                event_rx.recv(),
-            )
-            .await
+            if let Ok(event) =
+                tokio::time::timeout(tokio::time::Duration::from_millis(100), event_rx.recv()).await
             {
                 if let Some(MuxEvent::AmpDataOut { data, .. }) = event {
                     let s = String::from_utf8_lossy(&data);
@@ -1105,7 +1098,10 @@ mod tests {
             }
         }
 
-        assert!(found_auto_info_update, "Expected auto-info frequency update");
+        assert!(
+            found_auto_info_update,
+            "Expected auto-info frequency update"
+        );
 
         // Verify amp received the update
         let mut found_in_amp = false;
@@ -1256,7 +1252,10 @@ mod tests {
 
         // Should not get a response (state was reset)
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        assert!(amp_rx2.try_recv().is_err(), "Should not have cached state after reconnect");
+        assert!(
+            amp_rx2.try_recv().is_err(),
+            "Should not have cached state after reconnect"
+        );
 
         cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
         actor_handle.await.unwrap();

@@ -542,7 +542,11 @@ impl CatapultApp {
                     .width(150.0)
                     .show_ui(ui, |ui| {
                         for &baud in &[4800u32, 9600, 19200, 38400, 57600, 115200] {
-                            ui.selectable_value(&mut self.add_radio_baud, baud, format!("{}", baud));
+                            ui.selectable_value(
+                                &mut self.add_radio_baud,
+                                baud,
+                                format!("{}", baud),
+                            );
                         }
                     });
                 ui.end_row();
@@ -554,8 +558,7 @@ impl CatapultApp {
                     let response =
                         ui.add(egui::TextEdit::singleline(&mut addr_str).desired_width(50.0));
                     if response.changed() {
-                        if let Ok(addr) =
-                            u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
+                        if let Ok(addr) = u8::from_str_radix(addr_str.trim_start_matches("0x"), 16)
                         {
                             self.add_radio_civ_address = addr;
                         }

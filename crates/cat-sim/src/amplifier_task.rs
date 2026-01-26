@@ -9,7 +9,9 @@
 use std::io;
 use std::time::Duration;
 
-use cat_protocol::{create_radio_codec, EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand};
+use cat_protocol::{
+    create_radio_codec, EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, Interval};
@@ -84,7 +86,11 @@ where
 
     // Send auto-info enable command if in AutoInfo mode
     if mode == VirtualAmpMode::AutoInfo {
-        if let Some(ai_cmd) = encode_query(amp.protocol(), amp.civ_address(), &RadioCommand::EnableAutoInfo { enabled: true }) {
+        if let Some(ai_cmd) = encode_query(
+            amp.protocol(),
+            amp.civ_address(),
+            &RadioCommand::EnableAutoInfo { enabled: true },
+        ) {
             debug!(
                 "Virtual amp {} sending auto-info enable: {:02X?}",
                 amp.id(),
@@ -98,11 +104,7 @@ where
         }
     }
 
-    info!(
-        "Virtual amp {} running in {:?} mode",
-        amp.id(),
-        mode
-    );
+    info!("Virtual amp {} running in {:?} mode", amp.id(), mode);
 
     // Emit initial state
     let _ = state_tx.send(VirtualAmpStateEvent {
@@ -192,7 +194,11 @@ where
 }
 
 /// Encode a query command for the given protocol
-fn encode_query(protocol: Protocol, civ_address: Option<u8>, query: &RadioCommand) -> Option<Vec<u8>> {
+fn encode_query(
+    protocol: Protocol,
+    civ_address: Option<u8>,
+    query: &RadioCommand,
+) -> Option<Vec<u8>> {
     use cat_protocol::icom::CivCommand;
     use cat_protocol::kenwood::KenwoodCommand;
 
@@ -227,7 +233,13 @@ mod tests {
         let (state_tx, mut state_rx) = broadcast::channel(32);
 
         // Spawn the task in AutoInfo mode
-        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx, VirtualAmpMode::AutoInfo));
+        let task_handle = tokio::spawn(run_virtual_amp_task(
+            amp_stream,
+            amp,
+            cmd_rx,
+            state_tx,
+            VirtualAmpMode::AutoInfo,
+        ));
 
         // Drain the initial state event
         let initial = state_rx.recv().await.unwrap();
@@ -237,13 +249,10 @@ mod tests {
         connection_stream.write_all(b"FA07074000;").await.unwrap();
 
         // Should get a state change event
-        let event = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            state_rx.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_millis(100), state_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(event.frequency_hz, 7_074_000);
 
@@ -261,7 +270,13 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
         let (state_tx, mut state_rx) = broadcast::channel(32);
 
-        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx, VirtualAmpMode::AutoInfo));
+        let task_handle = tokio::spawn(run_virtual_amp_task(
+            amp_stream,
+            amp,
+            cmd_rx,
+            state_tx,
+            VirtualAmpMode::AutoInfo,
+        ));
 
         // Drain initial state
         let _ = state_rx.recv().await.unwrap();
@@ -269,26 +284,20 @@ mod tests {
         // Send TX command
         connection_stream.write_all(b"TX;").await.unwrap();
 
-        let event = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            state_rx.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_millis(100), state_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         assert!(event.ptt);
 
         // Send RX command
         connection_stream.write_all(b"RX;").await.unwrap();
 
-        let event = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            state_rx.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_millis(100), state_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         assert!(!event.ptt);
 
@@ -305,18 +314,21 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
         let (state_tx, _state_rx) = broadcast::channel(32);
 
-        let task_handle = tokio::spawn(run_virtual_amp_task(amp_stream, amp, cmd_rx, state_tx, VirtualAmpMode::AutoInfo));
+        let task_handle = tokio::spawn(run_virtual_amp_task(
+            amp_stream,
+            amp,
+            cmd_rx,
+            state_tx,
+            VirtualAmpMode::AutoInfo,
+        ));
 
         // Send shutdown command
         cmd_tx.send(VirtualAmpCommand::Shutdown).await.unwrap();
 
         // Task should complete
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            task_handle,
-        )
-        .await
-        .unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), task_handle)
+            .await
+            .unwrap();
 
         assert!(result.is_ok());
     }

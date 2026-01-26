@@ -186,12 +186,14 @@ impl CatapultApp {
                                     &mut self.virtual_amp_mode,
                                     VirtualAmpMode::AutoInfo,
                                     "Auto-Info",
-                                ).on_hover_text("Receive state updates pushed from radio");
+                                )
+                                .on_hover_text("Receive state updates pushed from radio");
                                 ui.selectable_value(
                                     &mut self.virtual_amp_mode,
                                     VirtualAmpMode::Polling,
                                     "Polling",
-                                ).on_hover_text("Actively poll radio for frequency");
+                                )
+                                .on_hover_text("Actively poll radio for frequency");
                             });
                     });
                 }
@@ -229,10 +231,13 @@ impl CatapultApp {
                     // Show current mode
                     ui.horizontal(|ui| {
                         ui.label("Mode:");
-                        ui.label(RichText::new(match self.virtual_amp_mode {
-                            VirtualAmpMode::AutoInfo => "Auto-Info",
-                            VirtualAmpMode::Polling => "Polling",
-                        }).strong());
+                        ui.label(
+                            RichText::new(match self.virtual_amp_mode {
+                                VirtualAmpMode::AutoInfo => "Auto-Info",
+                                VirtualAmpMode::Polling => "Polling",
+                            })
+                            .strong(),
+                        );
                     });
 
                     ui.add_space(4.0);
@@ -389,11 +394,13 @@ impl CatapultApp {
                 let (mux_stream, amp_stream) = tokio::io::duplex(4096);
 
                 // Create virtual amplifier
-                let virtual_amp = VirtualAmplifier::new("virtual-amp", self.amp_protocol, civ_address);
+                let virtual_amp =
+                    VirtualAmplifier::new("virtual-amp", self.amp_protocol, civ_address);
 
                 // Create channels for virtual amp actor
                 let (vamp_cmd_tx, vamp_cmd_rx) = tokio_mpsc::channel::<VirtualAmpCommand>(32);
-                let (vamp_state_tx, vamp_state_rx) = broadcast::channel::<cat_sim::VirtualAmpStateEvent>(32);
+                let (vamp_state_tx, vamp_state_rx) =
+                    broadcast::channel::<cat_sim::VirtualAmpStateEvent>(32);
 
                 // Store senders/receivers for virtual amp
                 self.virtual_amp_cmd_tx = Some(vamp_cmd_tx);
@@ -402,7 +409,15 @@ impl CatapultApp {
                 // Spawn the virtual amp actor task with selected mode
                 let amp_mode = self.virtual_amp_mode;
                 self.rt_handle.spawn(async move {
-                    if let Err(e) = run_virtual_amp_task(amp_stream, virtual_amp, vamp_cmd_rx, vamp_state_tx, amp_mode).await {
+                    if let Err(e) = run_virtual_amp_task(
+                        amp_stream,
+                        virtual_amp,
+                        vamp_cmd_rx,
+                        vamp_state_tx,
+                        amp_mode,
+                    )
+                    .await
+                    {
                         tracing::error!("Virtual amplifier task error: {}", e);
                     }
                 });

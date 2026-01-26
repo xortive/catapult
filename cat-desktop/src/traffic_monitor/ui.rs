@@ -25,7 +25,7 @@ struct VisualRow {
 fn lines_for_entry(entry: &TrafficEntry, show_hex: bool, bytes_per_line: usize) -> usize {
     match entry {
         TrafficEntry::Data { data, .. } if show_hex && !data.is_empty() => {
-            (data.len() + bytes_per_line - 1) / bytes_per_line
+            data.len().div_ceil(bytes_per_line)
         }
         _ => 1,
     }
@@ -34,7 +34,8 @@ fn lines_for_entry(entry: &TrafficEntry, show_hex: bool, bytes_per_line: usize) 
 /// Calculate how many bytes can fit per line given available width
 /// Returns (bytes_per_line, char_width) - char_width is for continuation line alignment
 fn calculate_bytes_per_line(ui: &Ui, available_width: f32) -> usize {
-    let char_width = ui.fonts_mut(|f| f.glyph_width(&egui::TextStyle::Monospace.resolve(ui.style()), ' '));
+    let char_width =
+        ui.fonts_mut(|f| f.glyph_width(&egui::TextStyle::Monospace.resolve(ui.style()), ' '));
 
     // Estimate metadata width: timestamp (12 chars) + direction badge (~10) + protocol badge (~8) + spacing
     // This is approximate - first line will have variable metadata, continuation lines just have offset
@@ -442,7 +443,11 @@ impl TrafficMonitor {
                 // Continuation line: show offset prefix aligned with hex position
                 // Format: "         00000010: " (spaces to align with metadata, then offset)
                 let offset_prefix = format!("{:08X}:", start_byte);
-                ui.label(RichText::new(offset_prefix).color(Color32::DARK_GRAY).monospace());
+                ui.label(
+                    RichText::new(offset_prefix)
+                        .color(Color32::DARK_GRAY)
+                        .monospace(),
+                );
             }
 
             // ASCII representation with highlighting (for this line's bytes only)

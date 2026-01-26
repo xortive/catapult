@@ -183,4 +183,3 @@ impl Default for AmplifierConfig {
         }
     }
 }
-

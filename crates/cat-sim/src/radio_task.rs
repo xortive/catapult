@@ -176,7 +176,11 @@ mod tests {
 
         // Should respond with frequency report (FA00014250000;)
         let response_str = String::from_utf8_lossy(&response);
-        assert!(response_str.contains("FA"), "Expected FA response, got: {}", response_str);
+        assert!(
+            response_str.contains("FA"),
+            "Expected FA response, got: {}",
+            response_str
+        );
         assert!(response_str.ends_with(";"), "Expected semicolon terminator");
 
         // Shutdown
@@ -201,7 +205,10 @@ mod tests {
         let task_handle = tokio::spawn(run_virtual_radio_task(radio_stream, radio, cmd_rx));
 
         // Send frequency change via UI command
-        cmd_tx.send(VirtualRadioCommand::SetFrequency(7_074_000)).await.unwrap();
+        cmd_tx
+            .send(VirtualRadioCommand::SetFrequency(7_074_000))
+            .await
+            .unwrap();
 
         // Read the auto-info response from connection_stream
         let mut response = vec![0u8; 64];
@@ -214,8 +221,15 @@ mod tests {
         if let Ok(Ok(n)) = result {
             response.truncate(n);
             let response_str = String::from_utf8_lossy(&response);
-            assert!(response_str.contains("FA"), "Expected FA response, got: {}", response_str);
-            assert!(response_str.contains("7074000"), "Expected frequency in response");
+            assert!(
+                response_str.contains("FA"),
+                "Expected FA response, got: {}",
+                response_str
+            );
+            assert!(
+                response_str.contains("7074000"),
+                "Expected frequency in response"
+            );
         }
 
         // Shutdown
