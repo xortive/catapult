@@ -8,8 +8,8 @@
 
 use std::io;
 
-use cat_protocol::{create_radio_codec, OperatingMode};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use cat_protocol::{create_radio_codec, EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
@@ -57,6 +57,21 @@ where
         amp.id(),
         amp.protocol().name()
     );
+
+    // Send auto-info enable command to mux to start receiving state updates
+    // This makes the mux forward radio frequency/mode/PTT changes to us
+    if let Some(ai_cmd) = encode_auto_info_enable(amp.protocol(), amp.civ_address()) {
+        debug!(
+            "Virtual amp {} sending auto-info enable: {:02X?}",
+            amp.id(),
+            ai_cmd
+        );
+        if let Err(e) = stream.write_all(&ai_cmd).await {
+            warn!("Failed to send auto-info enable: {}", e);
+        } else {
+            let _ = stream.flush().await;
+        }
+    }
 
     // Emit initial state
     let _ = state_tx.send(VirtualAmpStateEvent {
@@ -127,6 +142,29 @@ where
 
     info!("Virtual amplifier task ended for {}", amp.id());
     Ok(())
+}
+
+/// Encode an auto-info enable command for the given protocol
+fn encode_auto_info_enable(protocol: Protocol, civ_address: Option<u8>) -> Option<Vec<u8>> {
+    use cat_protocol::icom::CivCommand;
+    use cat_protocol::kenwood::KenwoodCommand;
+
+    match protocol {
+        Protocol::Kenwood | Protocol::Elecraft => {
+            // AI2; enables auto-info mode
+            Some(KenwoodCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })?.encode())
+        }
+        Protocol::IcomCIV => {
+            // Icom transceive mode enable
+            let civ_cmd = CivCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })?;
+            // Amp sends to radio (0xE0), amp address is typically 0x00 or specified
+            let to_addr = 0xE0; // Controller/radio address
+            let from_addr = civ_address.unwrap_or(0x00); // Amp's CI-V address
+            Some(CivCommand::new(to_addr, from_addr, civ_cmd.command).encode())
+        }
+        // Other protocols don't have a standard auto-info command or aren't supported yet
+        Protocol::Yaesu | Protocol::YaesuAscii | Protocol::FlexRadio => None,
+    }
 }
 
 #[cfg(test)]
