@@ -197,9 +197,7 @@ impl CatapultApp {
         self.radio_task_senders.insert(
             handle,
             super::RadioTaskSender {
-                port_name: port.clone(),
                 task_cmd_tx: cmd_tx,
-                virtual_cmd_tx: None,
             },
         );
 
@@ -265,11 +263,7 @@ impl CatapultApp {
         // Store the sender so we can send commands to this radio
         self.radio_task_senders.insert(
             handle,
-            super::RadioTaskSender {
-                port_name: sim_id.clone(),
-                task_cmd_tx,
-                virtual_cmd_tx: Some(ui_cmd_tx.clone()),
-            },
+            super::RadioTaskSender { task_cmd_tx },
         );
 
         // Register with SimulationPanel for UI display and commands

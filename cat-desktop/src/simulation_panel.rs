@@ -111,23 +111,6 @@ impl SimulationPanel {
         }
     }
 
-    /// Update a radio's model
-    pub fn update_radio_model(&mut self, sim_id: &str, model: Option<RadioModel>) {
-        if let Some(state) = self.radio_states.get_mut(sim_id) {
-            state.model = model;
-        }
-    }
-
-    /// Get the number of registered virtual radios
-    pub fn radio_count(&self) -> usize {
-        self.radio_states.len()
-    }
-
-    /// Check if a sim_id is a registered virtual radio
-    pub fn has_radio(&self, sim_id: &str) -> bool {
-        self.radio_states.contains_key(sim_id)
-    }
-
     /// Get radio configurations for saving to settings
     ///
     /// Returns an iterator of VirtualRadioConfig from the current display state.

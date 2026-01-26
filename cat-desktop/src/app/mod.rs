@@ -72,12 +72,8 @@ pub(crate) fn mode_name(mode: OperatingMode) -> &'static str {
 
 /// Unified sender for radio task commands (works for both COM and virtual radios)
 pub struct RadioTaskSender {
-    /// Port name (e.g., "COM3" for real, "sim-1" for virtual)
-    pub port_name: String,
     /// Command sender to the AsyncRadioConnection task
     pub task_cmd_tx: tokio_mpsc::Sender<RadioTaskCommand>,
-    /// Optional command sender for virtual radio actor (only for virtual radios)
-    pub virtual_cmd_tx: Option<tokio_mpsc::Sender<VirtualRadioCommand>>,
 }
 
 /// Messages from background tasks

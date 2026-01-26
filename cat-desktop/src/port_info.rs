@@ -54,12 +54,4 @@ impl PortInfo {
             PortInfo::Virtual(config) => Some(config.protocol),
         }
     }
-
-    /// Get the USB vendor ID (only for real ports)
-    pub fn vid(&self) -> Option<u16> {
-        match self {
-            PortInfo::Real(info) => info.vid,
-            PortInfo::Virtual(_) => None,
-        }
-    }
 }
