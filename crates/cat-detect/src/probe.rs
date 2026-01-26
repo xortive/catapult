@@ -9,9 +9,8 @@ use std::time::Duration;
 use cat_protocol::{
     elecraft, flex, icom, kenwood, models::RadioDatabase, yaesu, yaesu_ascii, Protocol, RadioModel,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::timeout;
-use tokio_serial::SerialStream;
 use tracing::{debug, info, trace, warn};
 
 /// Result of probing a serial port
@@ -66,26 +65,29 @@ impl RadioProber {
         Self { config }
     }
 
-    /// Probe a serial port to detect any connected radio
-    pub async fn probe(&self, port: &mut SerialStream) -> Option<ProbeResult> {
+    /// Probe a stream to detect any connected radio
+    pub async fn probe<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         // Try protocols in order of popularity/reliability
         // FlexRadio, Kenwood, Elecraft first (ASCII, easy to detect)
         // Then Icom CI-V (framed binary)
         // Finally Yaesu (raw binary, harder to detect)
 
-        if let Some(result) = self.probe_flex_kenwood_elecraft(port).await {
+        if let Some(result) = self.probe_flex_kenwood_elecraft(stream).await {
             return Some(result);
         }
 
         tokio::time::sleep(self.config.inter_probe_delay).await;
 
-        if let Some(result) = self.probe_icom(port).await {
+        if let Some(result) = self.probe_icom(stream).await {
             return Some(result);
         }
 
         tokio::time::sleep(self.config.inter_probe_delay).await;
 
-        if let Some(result) = self.probe_yaesu(port).await {
+        if let Some(result) = self.probe_yaesu(stream).await {
             return Some(result);
         }
 
@@ -94,17 +96,20 @@ impl RadioProber {
     }
 
     /// Probe for FlexRadio, Kenwood, Elecraft, or Yaesu ASCII radios
-    async fn probe_flex_kenwood_elecraft(&self, port: &mut SerialStream) -> Option<ProbeResult> {
+    async fn probe_flex_kenwood_elecraft<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         debug!("Probing for FlexRadio/Kenwood/Elecraft/YaesuAscii...");
 
         // Try Elecraft K3 first
-        if let Some(result) = self.try_elecraft_k3(port).await {
+        if let Some(result) = self.try_elecraft_k3(stream).await {
             return Some(result);
         }
 
         // Try standard ID command (works for FlexRadio and Kenwood)
         // FlexRadio responds with ID904-913, Kenwood with ID019-023 etc
-        if let Some(result) = self.try_kenwood_flex_id(port).await {
+        if let Some(result) = self.try_kenwood_flex_id(stream).await {
             return Some(result);
         }
 
@@ -112,17 +117,20 @@ impl RadioProber {
     }
 
     /// Try Elecraft K3 identification
-    async fn try_elecraft_k3(&self, port: &mut SerialStream) -> Option<ProbeResult> {
+    async fn try_elecraft_k3<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         let probe = b"K3;";
         trace!("Sending K3 probe");
 
-        if let Err(e) = port.write_all(probe).await {
+        if let Err(e) = stream.write_all(probe).await {
             warn!("Failed to write K3 probe: {}", e);
             return None;
         }
 
         let mut buf = [0u8; 64];
-        match timeout(self.config.timeout, port.read(&mut buf)).await {
+        match timeout(self.config.timeout, stream.read(&mut buf)).await {
             Ok(Ok(n)) if n > 0 => {
                 let response = &buf[..n];
                 trace!("K3 response: {:?}", String::from_utf8_lossy(response));
@@ -153,17 +161,20 @@ impl RadioProber {
     }
 
     /// Try standard ID command (works for Kenwood, FlexRadio, and Yaesu ASCII)
-    async fn try_kenwood_flex_id(&self, port: &mut SerialStream) -> Option<ProbeResult> {
+    async fn try_kenwood_flex_id<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         let probe = kenwood::probe_command(); // ID; works for all ASCII protocols
         trace!("Sending Kenwood/FlexRadio/YaesuAscii ID probe");
 
-        if let Err(e) = port.write_all(&probe).await {
+        if let Err(e) = stream.write_all(&probe).await {
             warn!("Failed to write ID probe: {}", e);
             return None;
         }
 
         let mut buf = [0u8; 64];
-        match timeout(self.config.timeout, port.read(&mut buf)).await {
+        match timeout(self.config.timeout, stream.read(&mut buf)).await {
             Ok(Ok(n)) if n > 0 => {
                 let response = &buf[..n];
                 trace!("ID response: {:?}", String::from_utf8_lossy(response));
@@ -231,7 +242,10 @@ impl RadioProber {
     }
 
     /// Probe for Icom CI-V radios
-    async fn probe_icom(&self, port: &mut SerialStream) -> Option<ProbeResult> {
+    async fn probe_icom<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         debug!("Probing for Icom CI-V...");
 
         // Try common Icom addresses
@@ -246,7 +260,7 @@ impl RadioProber {
         ];
 
         for addr in addresses {
-            if let Some(result) = self.try_icom_address(port, addr).await {
+            if let Some(result) = self.try_icom_address(stream, addr).await {
                 return Some(result);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -256,17 +270,20 @@ impl RadioProber {
     }
 
     /// Try a specific Icom CI-V address
-    async fn try_icom_address(&self, port: &mut SerialStream, addr: u8) -> Option<ProbeResult> {
+    async fn try_icom_address<S>(&self, stream: &mut S, addr: u8) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         let probe = icom::probe_command(addr);
         trace!("Sending CI-V probe to 0x{:02X}", addr);
 
-        if let Err(e) = port.write_all(&probe).await {
+        if let Err(e) = stream.write_all(&probe).await {
             warn!("Failed to write CI-V probe: {}", e);
             return None;
         }
 
         let mut buf = [0u8; 64];
-        match timeout(self.config.timeout, port.read(&mut buf)).await {
+        match timeout(self.config.timeout, stream.read(&mut buf)).await {
             Ok(Ok(n)) if n > 0 => {
                 let response = &buf[..n];
                 trace!("CI-V response: {:02X?}", response);
@@ -297,20 +314,23 @@ impl RadioProber {
     }
 
     /// Probe for Yaesu radios
-    async fn probe_yaesu(&self, port: &mut SerialStream) -> Option<ProbeResult> {
+    async fn probe_yaesu<S>(&self, stream: &mut S) -> Option<ProbeResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         debug!("Probing for Yaesu...");
 
         let probe = yaesu::probe_command();
         trace!("Sending Yaesu probe");
 
-        if let Err(e) = port.write_all(&probe).await {
+        if let Err(e) = stream.write_all(&probe).await {
             warn!("Failed to write Yaesu probe: {}", e);
             return None;
         }
 
         // Yaesu radios return 5 bytes: 4 frequency + 1 mode
         let mut buf = [0u8; 5];
-        match timeout(self.config.timeout, port.read_exact(&mut buf)).await {
+        match timeout(self.config.timeout, stream.read_exact(&mut buf)).await {
             Ok(Ok(_)) => {
                 trace!("Yaesu response: {:02X?}", buf);
 
