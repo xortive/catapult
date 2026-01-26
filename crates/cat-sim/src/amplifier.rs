@@ -113,16 +113,14 @@ impl VirtualAmplifier {
             }
         }
         // PTT commands like "TX;" or "RX;" or "TX0;", "TX1;"
-        if data.starts_with(b"TX") && data.ends_with(b";")
-            && !self.ptt {
-                self.ptt = true;
-                changed = true;
-            }
-        if data.starts_with(b"RX") && data.ends_with(b";")
-            && self.ptt {
-                self.ptt = false;
-                changed = true;
-            }
+        if data.starts_with(b"TX") && data.ends_with(b";") && !self.ptt {
+            self.ptt = true;
+            changed = true;
+        }
+        if data.starts_with(b"RX") && data.ends_with(b";") && self.ptt {
+            self.ptt = false;
+            changed = true;
+        }
 
         changed
     }

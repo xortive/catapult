@@ -261,10 +261,8 @@ impl CatapultApp {
         let (task_cmd_tx, task_cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
 
         // Store the sender so we can send commands to this radio
-        self.radio_task_senders.insert(
-            handle,
-            super::RadioTaskSender { task_cmd_tx },
-        );
+        self.radio_task_senders
+            .insert(handle, super::RadioTaskSender { task_cmd_tx });
 
         // Register with SimulationPanel for UI display and commands
         self.simulation_panel

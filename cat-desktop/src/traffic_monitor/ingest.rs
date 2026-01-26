@@ -155,6 +155,7 @@ impl TrafficMonitor {
                 handle,
                 data,
                 protocol,
+                timestamp,
             } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
                 let port = radio_metas(handle)
@@ -162,7 +163,7 @@ impl TrafficMonitor {
                     .unwrap_or_default();
 
                 self.add_entry(TrafficEntry::Data {
-                    timestamp: SystemTime::now(),
+                    timestamp,
                     direction: TrafficDirection::Incoming,
                     source: TrafficSource::RealRadio { handle, port },
                     data,
@@ -174,6 +175,7 @@ impl TrafficMonitor {
                 handle,
                 data,
                 protocol,
+                timestamp,
             } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
                 let port = radio_metas(handle)
@@ -181,7 +183,7 @@ impl TrafficMonitor {
                     .unwrap_or_default();
 
                 self.add_entry(TrafficEntry::Data {
-                    timestamp: SystemTime::now(),
+                    timestamp,
                     direction: TrafficDirection::Outgoing,
                     source: TrafficSource::ToRealRadio { handle, port },
                     data,
@@ -189,10 +191,14 @@ impl TrafficMonitor {
                 });
             }
 
-            MuxEvent::AmpDataOut { data, protocol } => {
+            MuxEvent::AmpDataOut {
+                data,
+                protocol,
+                timestamp,
+            } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
                 self.add_entry(TrafficEntry::Data {
-                    timestamp: SystemTime::now(),
+                    timestamp,
                     direction: TrafficDirection::Outgoing,
                     source: TrafficSource::RealAmplifier {
                         port: String::new(),
@@ -202,10 +208,14 @@ impl TrafficMonitor {
                 });
             }
 
-            MuxEvent::AmpDataIn { data, protocol } => {
+            MuxEvent::AmpDataIn {
+                data,
+                protocol,
+                timestamp,
+            } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
                 self.add_entry(TrafficEntry::Data {
-                    timestamp: SystemTime::now(),
+                    timestamp,
                     direction: TrafficDirection::Incoming,
                     source: TrafficSource::FromRealAmplifier {
                         port: String::new(),
@@ -251,10 +261,14 @@ impl TrafficMonitor {
         }
 
         match event {
-            MuxEvent::AmpDataOut { data, protocol } => {
+            MuxEvent::AmpDataOut {
+                data,
+                protocol,
+                timestamp,
+            } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
                 self.add_entry(TrafficEntry::Data {
-                    timestamp: SystemTime::now(),
+                    timestamp,
                     direction: TrafficDirection::Outgoing,
                     source: TrafficSource::RealAmplifier {
                         port: amp_port.to_string(),
@@ -264,10 +278,14 @@ impl TrafficMonitor {
                 });
             }
 
-            MuxEvent::AmpDataIn { data, protocol } => {
+            MuxEvent::AmpDataIn {
+                data,
+                protocol,
+                timestamp,
+            } => {
                 let decoded = self.get_cached_annotation(&data, Some(protocol));
                 self.add_entry(TrafficEntry::Data {
-                    timestamp: SystemTime::now(),
+                    timestamp,
                     direction: TrafficDirection::Incoming,
                     source: TrafficSource::FromRealAmplifier {
                         port: amp_port.to_string(),

@@ -31,6 +31,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec, RadioCommand};
 
@@ -301,6 +302,7 @@ async fn process_radio_command(
                 .send(MuxEvent::AmpDataOut {
                     data: data.clone(),
                     protocol: amp_protocol,
+                    timestamp: SystemTime::now(),
                 })
                 .await;
 
@@ -411,6 +413,7 @@ async fn send_to_amp(state: &MuxActorState, event_tx: &mpsc::Sender<MuxEvent>, c
         .send(MuxEvent::AmpDataOut {
             data: data.clone(),
             protocol,
+            timestamp: SystemTime::now(),
         })
         .await;
 
@@ -671,6 +674,7 @@ pub async fn run_mux_actor(
                             handle,
                             data: raw_bytes,
                             protocol,
+                            timestamp: SystemTime::now(),
                         })
                         .await;
 
@@ -691,6 +695,7 @@ pub async fn run_mux_actor(
                         handle,
                         data,
                         protocol,
+                        timestamp: SystemTime::now(),
                     })
                     .await;
             }
@@ -720,6 +725,7 @@ pub async fn run_mux_actor(
                         .send(MuxEvent::AmpDataIn {
                             data: raw_bytes,
                             protocol,
+                            timestamp: SystemTime::now(),
                         })
                         .await;
 

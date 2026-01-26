@@ -4,6 +4,8 @@
 //! are emitted through a single event channel. This enables a unified traffic
 //! monitor and simplifies state observation.
 
+use std::time::SystemTime;
+
 use cat_protocol::{OperatingMode, Protocol};
 
 use crate::amplifier::AmplifierChannelMeta;
@@ -64,6 +66,8 @@ pub enum MuxEvent {
         data: Vec<u8>,
         /// Protocol of the radio
         protocol: Protocol,
+        /// Timestamp when the data was received (captured at source for accurate ordering)
+        timestamp: SystemTime,
     },
 
     /// Data sent to a radio (mux -> radio)
@@ -74,6 +78,8 @@ pub enum MuxEvent {
         data: Vec<u8>,
         /// Protocol of the radio
         protocol: Protocol,
+        /// Timestamp when the data was sent (captured at source for accurate ordering)
+        timestamp: SystemTime,
     },
 
     /// Data sent to the amplifier (mux -> amp)
@@ -82,6 +88,8 @@ pub enum MuxEvent {
         data: Vec<u8>,
         /// Protocol used for the amplifier
         protocol: Protocol,
+        /// Timestamp when the data was sent (captured at source for accurate ordering)
+        timestamp: SystemTime,
     },
 
     /// Data received from the amplifier (amp -> mux)
@@ -90,6 +98,8 @@ pub enum MuxEvent {
         data: Vec<u8>,
         /// Protocol used for the amplifier
         protocol: Protocol,
+        /// Timestamp when the data was received (captured at source for accurate ordering)
+        timestamp: SystemTime,
     },
 
     // -------------------------------------------------------------------------
@@ -187,6 +197,7 @@ mod tests {
             handle: RadioHandle(1),
             data: vec![0x01, 0x02],
             protocol: Protocol::Kenwood,
+            timestamp: SystemTime::now(),
         };
         assert!(radio_in.is_traffic());
         assert!(!radio_in.is_radio_lifecycle());
@@ -194,6 +205,7 @@ mod tests {
         let amp_out = MuxEvent::AmpDataOut {
             data: vec![0x03, 0x04],
             protocol: Protocol::Kenwood,
+            timestamp: SystemTime::now(),
         };
         assert!(amp_out.is_traffic());
 
@@ -216,12 +228,14 @@ mod tests {
             handle: RadioHandle(42),
             data: vec![],
             protocol: Protocol::Kenwood,
+            timestamp: SystemTime::now(),
         };
         assert_eq!(event.radio_handle(), Some(RadioHandle(42)));
 
         let amp_event = MuxEvent::AmpDataOut {
             data: vec![],
             protocol: Protocol::Kenwood,
+            timestamp: SystemTime::now(),
         };
         assert_eq!(amp_event.radio_handle(), None);
     }
