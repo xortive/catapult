@@ -109,6 +109,7 @@ pub(super) struct ComRadioConfig {
     pub baud_rate: u32,
     pub civ_address: Option<u8>,
     pub model_name: String,
+    pub flow_control: cat_mux::FlowControl,
 }
 
 /// Main application state
@@ -171,6 +172,8 @@ pub struct CatapultApp {
     pub(super) add_radio_civ_address: u8,
     /// Model name for new radio (from probe or manual entry)
     pub(super) add_radio_model: String,
+    /// Flow control for new COM radio
+    pub(super) add_radio_flow_control: crate::settings::SerialFlowControl,
     /// Is probing in progress
     pub(super) probing: bool,
     /// Diagnostic event receiver (from tracing layer)
@@ -270,6 +273,7 @@ impl CatapultApp {
             add_radio_baud: 9600,
             add_radio_civ_address: 0x00,
             add_radio_model: String::new(),
+            add_radio_flow_control: crate::settings::SerialFlowControl::default(),
             probing: false,
             diag_rx,
             settings,

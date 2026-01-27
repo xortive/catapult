@@ -646,6 +646,17 @@ pub async fn run_mux_actor(
             }
 
             MuxActorCommand::RadioRawData { handle, data } => {
+                // Log raw bytes at DEBUG level for diagnostics
+                let port_name = state
+                    .get_radio_meta(handle)
+                    .and_then(|m| m.port_name.clone())
+                    .unwrap_or_else(|| format!("handle={}", handle.0));
+                debug!(
+                    "IN  <-Radio({}) {:02X?}",
+                    port_name,
+                    &data[..data.len().min(64)]
+                );
+
                 // Look up protocol for this radio
                 let protocol = state
                     .get_radio_meta(handle)

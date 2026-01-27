@@ -1,6 +1,6 @@
 //! Radio panel UI component
 
-use cat_mux::{is_virtual_port, sim_id_from_port, virtual_port_name, RadioHandle};
+use cat_mux::{is_virtual_port, sim_id_from_port, virtual_port_name, FlowControl, RadioHandle};
 use cat_protocol::{OperatingMode, Protocol};
 
 use crate::settings::ConfiguredRadio;
@@ -17,6 +17,8 @@ pub struct RadioPanel {
     pub protocol: Protocol,
     /// Baud rate (for COM port radios)
     pub baud_rate: u32,
+    /// Flow control (for COM port radios)
+    pub flow_control: FlowControl,
     /// CI-V address for Icom radios
     pub civ_address: Option<u8>,
     /// Is expanded in UI (for collapsible virtual radio controls)
@@ -40,6 +42,7 @@ impl RadioPanel {
             port: config.port.clone(),
             protocol: config.protocol,
             baud_rate: config.baud_rate,
+            flow_control: config.flow_control.into(),
             civ_address: config.civ_address,
             expanded: false,
             unavailable: false,
@@ -56,6 +59,7 @@ impl RadioPanel {
         port: String,
         protocol: Protocol,
         baud_rate: u32,
+        flow_control: FlowControl,
         civ_address: Option<u8>,
     ) -> Self {
         Self {
@@ -64,6 +68,7 @@ impl RadioPanel {
             port,
             protocol,
             baud_rate,
+            flow_control,
             civ_address,
             expanded: false,
             unavailable: false,
@@ -86,6 +91,7 @@ impl RadioPanel {
             port: virtual_port_name(&sim_id),
             protocol,
             baud_rate: 0,
+            flow_control: FlowControl::None,
             civ_address: None,
             expanded: false,
             unavailable: false,

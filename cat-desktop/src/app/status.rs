@@ -89,6 +89,7 @@ impl CatapultApp {
                 model_name: p.name.clone(),
                 baud_rate: p.baud_rate,
                 civ_address: p.civ_address,
+                flow_control: p.flow_control.into(),
             })
             .collect();
 

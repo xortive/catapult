@@ -22,7 +22,7 @@ use cat_protocol::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc as tokio_mpsc;
-use tokio_serial::{SerialPortBuilderExt, SerialStream};
+use tokio_serial::{FlowControl, SerialPortBuilderExt, SerialStream};
 use tracing::{debug, info, warn};
 
 use crate::{MuxActorCommand, MuxEvent, RadioHandle};
@@ -55,13 +55,30 @@ impl AsyncRadioConnection<SerialStream> {
         handle: RadioHandle,
         port_name: &str,
         baud_rate: u32,
+        flow_control: FlowControl,
         protocol: Protocol,
         event_tx: tokio_mpsc::Sender<MuxEvent>,
         mux_tx: tokio_mpsc::Sender<MuxActorCommand>,
     ) -> Result<Self, tokio_serial::Error> {
-        let stream = tokio_serial::new(port_name, baud_rate)
+        debug!(
+            "Opening serial port {} at {} baud, flow_control={:?}, protocol={:?}",
+            port_name, baud_rate, flow_control, protocol
+        );
+
+        let stream = match tokio_serial::new(port_name, baud_rate)
+            .flow_control(flow_control)
             .timeout(Duration::from_millis(100))
-            .open_native_async()?;
+            .open_native_async()
+        {
+            Ok(s) => {
+                debug!("Serial port {} opened successfully", port_name);
+                s
+            }
+            Err(e) => {
+                debug!("Failed to open serial port {}: {}", port_name, e);
+                return Err(e);
+            }
+        };
 
         Ok(Self {
             handle,

@@ -5,6 +5,7 @@ use cat_protocol::{OperatingMode, Protocol};
 use cat_sim::VirtualRadioCommand;
 use egui::{Color32, RichText, Ui};
 
+use crate::settings::SerialFlowControl;
 use crate::traffic_monitor::ExportAction;
 
 use super::{mode_name, AmplifierConnectionType, CatapultApp};
@@ -548,6 +549,34 @@ impl CatapultApp {
                                 format!("{}", baud),
                             );
                         }
+                    });
+                ui.end_row();
+
+                // Flow control dropdown
+                ui.label("Flow Ctrl:");
+                egui::ComboBox::from_id_salt("add_radio_flow_control")
+                    .selected_text(match self.add_radio_flow_control {
+                        SerialFlowControl::None => "None",
+                        SerialFlowControl::Software => "Software (XON/XOFF)",
+                        SerialFlowControl::Hardware => "Hardware (RTS/CTS)",
+                    })
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.add_radio_flow_control,
+                            SerialFlowControl::None,
+                            "None",
+                        );
+                        ui.selectable_value(
+                            &mut self.add_radio_flow_control,
+                            SerialFlowControl::Software,
+                            "Software (XON/XOFF)",
+                        );
+                        ui.selectable_value(
+                            &mut self.add_radio_flow_control,
+                            SerialFlowControl::Hardware,
+                            "Hardware (RTS/CTS)",
+                        );
                     });
                 ui.end_row();
 

@@ -17,6 +17,38 @@ pub struct VirtualPortConfig {
     pub protocol: Protocol,
 }
 
+/// Serial port flow control setting (mirrors tokio_serial::FlowControl)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub enum SerialFlowControl {
+    /// No flow control
+    None,
+    /// Software flow control (XON/XOFF)
+    Software,
+    /// Hardware flow control (RTS/CTS)
+    #[default]
+    Hardware,
+}
+
+impl From<SerialFlowControl> for cat_mux::FlowControl {
+    fn from(fc: SerialFlowControl) -> Self {
+        match fc {
+            SerialFlowControl::None => cat_mux::FlowControl::None,
+            SerialFlowControl::Software => cat_mux::FlowControl::Software,
+            SerialFlowControl::Hardware => cat_mux::FlowControl::Hardware,
+        }
+    }
+}
+
+impl From<cat_mux::FlowControl> for SerialFlowControl {
+    fn from(fc: cat_mux::FlowControl) -> Self {
+        match fc {
+            cat_mux::FlowControl::None => SerialFlowControl::None,
+            cat_mux::FlowControl::Software => SerialFlowControl::Software,
+            cat_mux::FlowControl::Hardware => SerialFlowControl::Hardware,
+        }
+    }
+}
+
 /// Saved COM port radio configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConfiguredRadio {
@@ -31,6 +63,9 @@ pub struct ConfiguredRadio {
     /// CI-V address for Icom radios
     #[serde(default)]
     pub civ_address: Option<u8>,
+    /// Flow control setting
+    #[serde(default)]
+    pub flow_control: SerialFlowControl,
 }
 
 /// Saved amplifier configuration

@@ -64,6 +64,7 @@ pub use events::MuxEvent;
 // Re-export async connection types
 pub use async_amp::AsyncAmpConnection;
 pub use async_radio::{AsyncRadioConnection, RadioTaskCommand};
+pub use tokio_serial::FlowControl;
 
 // Re-export engine types
 pub use engine::{Multiplexer, MultiplexerConfig};

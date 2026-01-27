@@ -186,6 +186,7 @@ impl CatapultApp {
 
         let port = config.port;
         let baud_rate = config.baud_rate;
+        let flow_control = config.flow_control;
         let protocol = config.protocol;
         let civ_address = config.civ_address;
         let model_name = config.model_name;
@@ -207,6 +208,7 @@ impl CatapultApp {
                 handle,
                 &port,
                 baud_rate,
+                flow_control,
                 protocol,
                 event_tx.clone(),
                 mux_tx,
@@ -320,6 +322,7 @@ impl CatapultApp {
                 baud_rate: config.baud_rate,
                 civ_address: config.civ_address,
                 model_name: config.model_name.clone(),
+                flow_control: config.flow_control.into(),
             };
 
             if port_available {
@@ -556,6 +559,7 @@ impl CatapultApp {
             baud_rate: self.add_radio_baud,
             civ_address,
             model_name: model_name.clone(),
+            flow_control: self.add_radio_flow_control.into(),
         };
 
         // Create RadioPanel with no handle (will be updated when handle arrives)
@@ -565,6 +569,7 @@ impl CatapultApp {
             self.add_radio_port.clone(),
             self.add_radio_protocol,
             self.add_radio_baud,
+            self.add_radio_flow_control.into(),
             civ_address,
         );
         self.radio_panels.push(panel);
