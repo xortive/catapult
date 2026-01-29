@@ -298,7 +298,8 @@ impl Multiplexer {
             SwitchingMode::Automatic => {
                 matches!(
                     cmd,
-                    RadioCommand::SetPtt { active: true } | RadioCommand::PttReport { active: true }
+                    RadioCommand::SetPtt { active: true }
+                        | RadioCommand::PttReport { active: true }
                 ) || matches!(cmd, RadioCommand::SetFrequency { .. })
                     || (matches!(cmd, RadioCommand::FrequencyReport { .. }) && freq_changed)
             }

@@ -156,6 +156,95 @@ mod switching_tests {
     }
 
     #[test]
+    fn frequency_report_with_change_triggers_switch() {
+        let mut mux = helpers::mux_no_lockout();
+        mux.set_switching_mode(SwitchingMode::FrequencyTriggered);
+
+        let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
+        let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
+
+        assert_eq!(mux.active_radio(), Some(h1));
+
+        // First, establish h2's initial frequency (initial reports don't trigger switch)
+        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 7_000_000 });
+        assert_eq!(
+            mux.active_radio(),
+            Some(h1),
+            "Initial report should not switch"
+        );
+
+        // Now a FrequencyReport with a DIFFERENT frequency should trigger switch
+        // (simulates user changing frequency on the radio)
+        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_250_000 });
+
+        assert_eq!(
+            mux.active_radio(),
+            Some(h2),
+            "Should switch when frequency changes"
+        );
+    }
+
+    #[test]
+    fn frequency_report_unchanged_does_not_trigger_switch() {
+        let mut mux = helpers::mux_no_lockout();
+        mux.set_switching_mode(SwitchingMode::FrequencyTriggered);
+
+        let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
+        let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
+
+        // Set h2's frequency first (initial report doesn't trigger switch)
+        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 7_000_000 });
+        assert_eq!(
+            mux.active_radio(),
+            Some(h1),
+            "Initial report should not switch"
+        );
+
+        // Now change h2's frequency to trigger a switch to h2
+        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_000_000 });
+        assert_eq!(
+            mux.active_radio(),
+            Some(h2),
+            "Frequency change should switch"
+        );
+
+        // Switch back to h1 manually
+        mux.select_radio(h1).unwrap();
+        assert_eq!(mux.active_radio(), Some(h1));
+
+        // Another FrequencyReport with the SAME frequency should NOT switch
+        // (this simulates a poll response returning unchanged frequency)
+        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_000_000 });
+
+        assert_eq!(
+            mux.active_radio(),
+            Some(h1),
+            "Should NOT switch when frequency is unchanged (poll response)"
+        );
+    }
+
+    #[test]
+    fn initial_frequency_report_does_not_trigger_switch() {
+        let mut mux = helpers::mux_no_lockout();
+        mux.set_switching_mode(SwitchingMode::FrequencyTriggered);
+
+        let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
+        let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
+
+        assert_eq!(mux.active_radio(), Some(h1));
+
+        // Initial FrequencyReport (when radio has no known frequency yet)
+        // should NOT trigger a switch - this prevents switching on first poll
+        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_250_000 });
+
+        assert_eq!(
+            mux.active_radio(),
+            Some(h1),
+            "Initial frequency report should NOT trigger switch"
+        );
+    }
+
+    #[test]
     fn inactive_radio_commands_return_none() {
         let mut mux = helpers::mux_no_lockout();
         mux.set_switching_mode(SwitchingMode::Manual);

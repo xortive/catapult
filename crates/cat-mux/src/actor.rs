@@ -296,7 +296,7 @@ async fn process_radio_command(
                         state.cached_split = true;
                         let rx = state.cached_rx_vfo.unwrap_or(0);
                         state.cached_tx_band = Some(1 - rx); // Opposite of RX
-                        // CB stays as current RX VFO
+                                                             // CB stays as current RX VFO
                         debug!(
                             "Split enabled: CB={}, TB={} (RX on {}, TX on opposite)",
                             state.cached_control_band.unwrap_or(0),
