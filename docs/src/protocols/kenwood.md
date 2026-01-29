@@ -77,6 +77,7 @@ When sending to a Kenwood-compatible amplifier:
 ## Compatible Radios
 
 - Kenwood TS-590, TS-890, TS-990
+- Kenwood TS-850S, TS-950SDX, TS-440S, TS-940S (legacy models, 4800 baud)
 - Elecraft K3, K4 (extended Kenwood)
 - Some SDR software
 

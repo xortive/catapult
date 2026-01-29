@@ -90,6 +90,7 @@ For 14.250000 MHz:
 - FT-450, FT-950
 - FTDX-3000, FTDX-5000
 - FT-817, FT-818, FT-857, FT-897
+- FT-847, FT-1000MP, FT-1000D, FT-990 (classic HF transceivers, 4800 baud)
 - Older Yaesu transceivers
 
 **Note:** FT-991, FTDX-101D, FTDX-10, and FT-710 use the [Yaesu ASCII](./yaesu-ascii.md) protocol.

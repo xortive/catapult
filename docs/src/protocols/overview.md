@@ -6,9 +6,9 @@ Catapult supports multiple CAT (Computer Aided Transceiver) protocols used by di
 
 | Protocol | Manufacturer | Format | Example Radios |
 |----------|--------------|--------|----------------|
-| [Kenwood](./kenwood.md) | Kenwood, Elecraft | ASCII | TS-590, TS-890, K3 |
+| [Kenwood](./kenwood.md) | Kenwood, Elecraft | ASCII | TS-590, TS-890, TS-850, TS-940 |
 | [Icom CI-V](./icom.md) | Icom | Binary | IC-7300, IC-7610, IC-705 |
-| [Yaesu Binary](./yaesu.md) | Yaesu | Binary | FT-450, FT-950, FTDX-3000 |
+| [Yaesu Binary](./yaesu.md) | Yaesu | Binary | FT-450, FT-897, FT-1000MP, FT-990 |
 | [Yaesu ASCII](./yaesu-ascii.md) | Yaesu | ASCII | FT-991, FTDX-101D, FTDX-10, FT-710 |
 | [Elecraft](./elecraft.md) | Elecraft | Extended ASCII | K3, K4, KX2 |
 | [FlexRadio](./flexradio.md) | FlexRadio | TCP/Text | FLEX-6400, FLEX-6600 |
