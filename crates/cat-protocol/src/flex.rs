@@ -697,7 +697,7 @@ mod tests {
     fn test_to_radio_command() {
         let cmd = FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(7_074_000)));
         let radio_cmd = cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::SetFrequency { hz: 7_074_000 });
+        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
     }
 
     #[test]

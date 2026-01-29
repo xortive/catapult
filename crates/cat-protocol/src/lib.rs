@@ -28,7 +28,7 @@
 //!
 //! if let Some(cmd) = codec.next_command() {
 //!     let radio_cmd = cmd.to_radio_command();
-//!     assert!(matches!(radio_cmd, RadioCommand::SetFrequency { hz: 14_250_000 }));
+//!     assert!(matches!(radio_cmd, RadioCommand::FrequencyReport { hz: 14_250_000 }));
 //! }
 //! ```
 

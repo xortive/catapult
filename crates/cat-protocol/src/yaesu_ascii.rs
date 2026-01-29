@@ -380,9 +380,9 @@ impl ProtocolCodec for YaesuAsciiCodec {
 impl ToRadioCommand for YaesuAsciiCommand {
     fn to_radio_command(&self) -> RadioCommand {
         match self {
-            YaesuAsciiCommand::FrequencyA(Some(hz)) => RadioCommand::SetFrequency { hz: *hz },
+            YaesuAsciiCommand::FrequencyA(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
             YaesuAsciiCommand::FrequencyA(None) => RadioCommand::GetFrequency,
-            YaesuAsciiCommand::FrequencyB(Some(hz)) => RadioCommand::SetFrequency { hz: *hz },
+            YaesuAsciiCommand::FrequencyB(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
             YaesuAsciiCommand::FrequencyB(None) => RadioCommand::GetFrequency,
             YaesuAsciiCommand::Mode {
                 mode: Some(m),
@@ -780,7 +780,7 @@ mod tests {
     fn test_to_radio_command() {
         let cmd = YaesuAsciiCommand::FrequencyA(Some(7_074_000));
         let radio_cmd = cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::SetFrequency { hz: 7_074_000 });
+        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
     }
 
     #[test]

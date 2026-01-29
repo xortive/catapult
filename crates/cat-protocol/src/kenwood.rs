@@ -329,9 +329,9 @@ impl ProtocolCodec for KenwoodCodec {
 impl ToRadioCommand for KenwoodCommand {
     fn to_radio_command(&self) -> RadioCommand {
         match self {
-            KenwoodCommand::FrequencyA(Some(hz)) => RadioCommand::SetFrequency { hz: *hz },
+            KenwoodCommand::FrequencyA(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
             KenwoodCommand::FrequencyA(None) => RadioCommand::GetFrequency,
-            KenwoodCommand::FrequencyB(Some(hz)) => RadioCommand::SetFrequency { hz: *hz },
+            KenwoodCommand::FrequencyB(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
             KenwoodCommand::FrequencyB(None) => RadioCommand::GetFrequency,
             KenwoodCommand::Mode(Some(m)) => RadioCommand::SetMode {
                 mode: kenwood_mode_to_operating_mode(*m),
@@ -588,7 +588,7 @@ mod tests {
     fn test_to_radio_command() {
         let cmd = KenwoodCommand::FrequencyA(Some(7_074_000));
         let radio_cmd = cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::SetFrequency { hz: 7_074_000 });
+        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
     }
 
     #[test]
