@@ -1,9 +1,23 @@
 //! Radio panel UI component
 
+use std::time::Instant;
+
 use cat_mux::{is_virtual_port, sim_id_from_port, virtual_port_name, FlowControl, RadioHandle};
 use cat_protocol::{OperatingMode, Protocol};
 
 use crate::settings::ConfiguredRadio;
+
+/// Connection health state for a radio
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnectionState {
+    /// Connected and responsive (received data within threshold)
+    #[default]
+    Connected,
+    /// Polling but no response (may be unresponsive)
+    Unresponsive,
+    /// Task ended, radio disconnected
+    Disconnected,
+}
 
 /// UI panel for a single radio
 pub struct RadioPanel {
@@ -31,6 +45,12 @@ pub struct RadioPanel {
     pub mode: Option<OperatingMode>,
     /// Current PTT state (local state updated from MuxEvent)
     pub ptt: bool,
+    /// Last time we received data from this radio (for connection health tracking)
+    pub last_response: Option<Instant>,
+    /// Connection health state for UI display
+    pub connection_state: ConnectionState,
+    /// Last time we attempted to reconnect (for backoff)
+    pub last_reconnect_attempt: Option<Instant>,
 }
 
 impl RadioPanel {
@@ -49,6 +69,9 @@ impl RadioPanel {
             frequency_hz: None,
             mode: None,
             ptt: false,
+            last_response: None,
+            connection_state: ConnectionState::default(),
+            last_reconnect_attempt: None,
         }
     }
 
@@ -75,6 +98,9 @@ impl RadioPanel {
             frequency_hz: None,
             mode: None,
             ptt: false,
+            last_response: None,
+            connection_state: ConnectionState::default(),
+            last_reconnect_attempt: None,
         }
     }
 
@@ -98,6 +124,9 @@ impl RadioPanel {
             frequency_hz: None,
             mode: None,
             ptt: false,
+            last_response: None,
+            connection_state: ConnectionState::default(),
+            last_reconnect_attempt: None,
         }
     }
 

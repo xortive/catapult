@@ -5,6 +5,7 @@ use cat_protocol::{OperatingMode, Protocol};
 use cat_sim::VirtualRadioCommand;
 use egui::{Color32, RichText, Ui};
 
+use crate::radio_panel::ConnectionState;
 use crate::settings::SerialFlowControl;
 use crate::traffic_monitor::ExportAction;
 
@@ -110,6 +111,7 @@ impl CatapultApp {
                     panel.ptt,
                     freq,
                     mode,
+                    panel.connection_state,
                 )
             })
             .collect::<Vec<_>>();
@@ -135,6 +137,7 @@ impl CatapultApp {
             ptt,
             freq_hz,
             mode,
+            connection_state,
         ) in &radio_info
         {
             let is_active = handle.is_some() && active_handle == *handle;
@@ -164,8 +167,25 @@ impl CatapultApp {
                 .inner_margin(8.0)
                 .outer_margin(4.0)
                 .show(ui, |ui| {
-                    // Top row: TX indicator and Select/Expand button
+                    // Top row: Connection indicator, TX indicator, and Select/Expand button
                     ui.horizontal(|ui| {
+                        // Connection state indicator (skip for virtual radios - always connected)
+                        if !*is_virtual {
+                            let (indicator, color, tooltip) = match connection_state {
+                                ConnectionState::Connected => {
+                                    ("●", Color32::GREEN, "Connected and responsive")
+                                }
+                                ConnectionState::Unresponsive => {
+                                    ("●", Color32::YELLOW, "No response - radio may be off")
+                                }
+                                ConnectionState::Disconnected => {
+                                    ("●", Color32::RED, "Disconnected")
+                                }
+                            };
+                            ui.label(RichText::new(indicator).color(color).size(12.0))
+                                .on_hover_text(tooltip);
+                        }
+
                         if *ptt {
                             ui.label(
                                 RichText::new("* TX")

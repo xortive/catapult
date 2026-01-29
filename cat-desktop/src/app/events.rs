@@ -6,6 +6,7 @@ use cat_mux::{MuxActorCommand, MuxEvent, RadioChannelMeta, RadioHandle};
 use tokio::sync::oneshot;
 use tracing::Level;
 
+use crate::radio_panel::ConnectionState;
 use crate::traffic_monitor::DiagnosticSeverity;
 
 use super::{radio::RadioConnectionConfig, BackgroundMessage, CatapultApp};
@@ -103,6 +104,10 @@ impl CatapultApp {
                         .find(|p| p.handle == Some(handle))
                     {
                         panel.name = model.clone();
+                        // Reset connection state on successful connection
+                        panel.connection_state = ConnectionState::Connected;
+                        panel.last_response = Some(Instant::now());
+                        panel.last_reconnect_attempt = None;
                         self.send_mux_command(
                             MuxActorCommand::UpdateRadioMeta {
                                 handle,
@@ -186,6 +191,14 @@ impl CatapultApp {
                 MuxEvent::RadioDisconnected { handle } => {
                     // Remove the task sender
                     self.radio_task_senders.remove(&handle);
+                    // Update panel state to disconnected
+                    if let Some(panel) = self
+                        .radio_panels
+                        .iter_mut()
+                        .find(|p| p.handle == Some(handle))
+                    {
+                        panel.connection_state = ConnectionState::Disconnected;
+                    }
                     tracing::debug!("MuxEvent::RadioDisconnected: handle={}", handle.0);
                 }
                 MuxEvent::Error { source, message } => {
@@ -214,8 +227,19 @@ impl CatapultApp {
                     );
                 }
                 // Traffic events - forward to traffic monitor
-                MuxEvent::RadioDataIn { .. }
-                | MuxEvent::RadioDataOut { .. }
+                MuxEvent::RadioDataIn { handle, .. } => {
+                    // Update last response time for connection health tracking
+                    if let Some(panel) = self
+                        .radio_panels
+                        .iter_mut()
+                        .find(|p| p.handle == Some(handle))
+                    {
+                        panel.last_response = Some(Instant::now());
+                        panel.connection_state = ConnectionState::Connected;
+                    }
+                    self.forward_traffic_event(event);
+                }
+                MuxEvent::RadioDataOut { .. }
                 | MuxEvent::AmpDataOut { .. }
                 | MuxEvent::AmpDataIn { .. } => {
                     self.forward_traffic_event(event);

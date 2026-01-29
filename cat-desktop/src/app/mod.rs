@@ -34,10 +34,16 @@ use tracing::Level;
 use cat_sim::VirtualRadioCommand;
 
 use crate::diagnostics_layer::{DiagnosticEvent, DiagnosticLevelState};
-use crate::radio_panel::RadioPanel;
+use crate::radio_panel::{ConnectionState, RadioPanel};
 use crate::settings::Settings;
 use crate::simulation_panel::SimulationPanel;
 use crate::traffic_monitor::TrafficMonitor;
+
+/// Threshold for marking a radio as unresponsive (no data received)
+const UNRESPONSIVE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Interval between automatic reconnection attempts for disconnected radios
+const RECONNECT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Connection type for amplifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,6 +401,20 @@ impl eframe::App for CatapultApp {
         self.process_mux_events();
         self.process_virtual_amp_events();
         self.maybe_sync_radio_states();
+
+        // Check for unresponsive radios (no data received within threshold)
+        for panel in &mut self.radio_panels {
+            if panel.connection_state == ConnectionState::Connected {
+                if let Some(last) = panel.last_response {
+                    if last.elapsed() > UNRESPONSIVE_THRESHOLD {
+                        panel.connection_state = ConnectionState::Unresponsive;
+                    }
+                }
+            }
+        }
+
+        // Attempt to reconnect disconnected COM radios
+        self.attempt_radio_reconnections();
 
         // Clear old status messages
         if let Some((_, when)) = &self.status_message {

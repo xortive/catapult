@@ -1,6 +1,6 @@
 //! Radio management - COM and virtual radio handling
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cat_detect::{probe_port_with_protocol, ProbeResult, RadioProber};
 use cat_mux::{
@@ -11,9 +11,11 @@ use cat_protocol::Protocol;
 use cat_sim::{run_virtual_radio_task, VirtualRadio};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
-use crate::radio_panel::RadioPanel;
+use crate::radio_panel::{ConnectionState, RadioPanel};
 
-use super::{BackgroundMessage, CatapultApp, ComRadioConfig, VirtualRadioCommand};
+use super::{
+    BackgroundMessage, CatapultApp, ComRadioConfig, VirtualRadioCommand, RECONNECT_INTERVAL,
+};
 
 /// Configuration for connecting a radio (unified for COM and Virtual)
 pub(crate) enum RadioConnectionConfig {
@@ -661,5 +663,92 @@ impl CatapultApp {
             // Real COM port - use existing add_com_radio logic
             self.add_com_radio();
         }
+    }
+
+    /// Attempt to reconnect disconnected COM radios
+    ///
+    /// This method checks for disconnected COM radios and attempts to reconnect
+    /// them if the port is still available and enough time has passed since the
+    /// last reconnection attempt.
+    pub(super) fn attempt_radio_reconnections(&mut self) {
+        // Build set of available ports
+        let available_ports: std::collections::HashSet<_> = self
+            .available_ports
+            .iter()
+            .map(|p| p.port.as_str())
+            .collect();
+
+        // Collect indices of panels that need reconnection
+        let panels_to_reconnect: Vec<usize> = self
+            .radio_panels
+            .iter()
+            .enumerate()
+            .filter(|(_, panel)| {
+                // Only reconnect disconnected COM radios (not virtual)
+                if panel.is_virtual() || panel.connection_state != ConnectionState::Disconnected {
+                    return false;
+                }
+
+                // Check if port is available
+                if !available_ports.contains(panel.port.as_str()) {
+                    return false;
+                }
+
+                // Check if enough time has passed since last attempt
+                match panel.last_reconnect_attempt {
+                    Some(last) => last.elapsed() >= RECONNECT_INTERVAL,
+                    None => true, // First attempt
+                }
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        // Attempt reconnection for each panel
+        for panel_idx in panels_to_reconnect {
+            self.reconnect_radio(panel_idx);
+        }
+    }
+
+    /// Attempt to reconnect a specific radio panel
+    fn reconnect_radio(&mut self, panel_idx: usize) {
+        let panel = &mut self.radio_panels[panel_idx];
+
+        // Update last reconnect attempt time
+        panel.last_reconnect_attempt = Some(Instant::now());
+
+        // Extract the info we need for reconnection
+        let port = panel.port.clone();
+        let protocol = panel.protocol;
+        let baud_rate = panel.baud_rate;
+        let flow_control = panel.flow_control;
+        let civ_address = panel.civ_address;
+        let model_name = panel.name.clone();
+        let old_handle = panel.handle;
+
+        tracing::info!("Attempting to reconnect radio on {}", port);
+
+        // Unregister old handle if it exists
+        if let Some(handle) = old_handle {
+            self.send_mux_command(
+                MuxActorCommand::UnregisterRadio { handle },
+                "UnregisterRadio (reconnect)",
+            );
+        }
+
+        // Clear the old handle from the panel
+        self.radio_panels[panel_idx].handle = None;
+
+        // Create new ComRadioConfig
+        let config = ComRadioConfig {
+            port,
+            protocol,
+            baud_rate,
+            civ_address,
+            model_name,
+            flow_control,
+        };
+
+        // Register with mux actor (handle will arrive via RadioRegistered)
+        let _correlation_id = self.register_com_radio(config, panel_idx);
     }
 }
