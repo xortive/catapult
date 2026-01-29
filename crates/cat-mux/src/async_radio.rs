@@ -305,11 +305,24 @@ where
     }
 
     /// Main read loop - runs until connection fails, shutdown is requested, or channel closed
+    ///
+    /// Includes idle polling: when no data is received for 500ms, polls the radio's
+    /// frequency every 500ms to ensure UI stays in sync during rapid VFO changes.
     pub async fn run_read_loop(mut self, mut cmd_rx: tokio_mpsc::Receiver<RadioTaskCommand>) {
+        use tokio::time::{interval, Instant, MissedTickBehavior};
+
         info!(
             "Starting read loop for radio {:?} on {}",
             self.handle, self.port_name
         );
+
+        // Idle polling configuration
+        const IDLE_THRESHOLD: Duration = Duration::from_millis(500);
+        const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+        let mut last_activity = Instant::now();
+        let mut poll_timer = interval(POLL_INTERVAL);
+        poll_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -332,6 +345,9 @@ where
                         Ok(Ok(n)) if n > 0 => {
                             let data = &self.buffer[..n];
                             debug!("Read {} bytes from {:?}: {:02X?}", n, self.handle, data);
+
+                            // Update last activity time
+                            last_activity = Instant::now();
 
                             // Send raw data to mux actor for parsing and processing
                             let _ = self.mux_tx.send(MuxActorCommand::RadioRawData {
@@ -358,6 +374,20 @@ where
                             break;
                         }
                         Err(_) => {} // Timeout, continue
+                    }
+                }
+
+                // Idle polling timer
+                _ = poll_timer.tick() => {
+                    // Only poll if we've been idle for the threshold duration
+                    if last_activity.elapsed() >= IDLE_THRESHOLD {
+                        // Send frequency query to poll the radio
+                        if let Some(data) = self.encode_radio_command(&RadioCommand::GetFrequency) {
+                            debug!("Idle polling frequency for radio {:?}", self.handle);
+                            if let Err(e) = self.write(&data).await {
+                                warn!("Failed to send poll query to {:?}: {}", self.handle, e);
+                            }
+                        }
                     }
                 }
             }
