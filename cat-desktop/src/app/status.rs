@@ -67,6 +67,7 @@ impl CatapultApp {
             port: self.amp_port.clone(),
             baud_rate: self.amp_baud,
             civ_address: self.amp_civ_address,
+            flow_control: self.amp_flow_control,
         };
 
         if self.settings.amplifier != amp_settings {

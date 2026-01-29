@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use cat_mux::{AmplifierChannel, AmplifierChannelMeta, AsyncAmpConnection, MuxActorCommand};
+use cat_mux::{
+    AmplifierChannel, AmplifierChannelMeta, AsyncAmpConnection, MuxActorCommand, MuxEvent,
+};
 use cat_protocol::Protocol;
 use cat_sim::{run_virtual_amp_task, VirtualAmpCommand, VirtualAmpMode, VirtualAmplifier};
 use egui::{Color32, RichText, Ui};
@@ -20,6 +22,7 @@ impl CatapultApp {
         let prev_port = self.amp_port.clone();
         let prev_baud = self.amp_baud;
         let prev_civ = self.amp_civ_address;
+        let prev_flow_control = self.amp_flow_control;
 
         egui::Grid::new("amp_config")
             .num_columns(2)
@@ -124,6 +127,32 @@ impl CatapultApp {
                             for &baud in &[4800u32, 9600, 19200, 38400, 57600, 115200, 230400] {
                                 ui.selectable_value(&mut self.amp_baud, baud, format!("{}", baud));
                             }
+                        });
+                    ui.end_row();
+
+                    ui.label("Flow Control:");
+                    egui::ComboBox::from_id_salt("amp_flow_control")
+                        .selected_text(match self.amp_flow_control {
+                            crate::settings::SerialFlowControl::None => "None",
+                            crate::settings::SerialFlowControl::Software => "Software",
+                            crate::settings::SerialFlowControl::Hardware => "Hardware",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.amp_flow_control,
+                                crate::settings::SerialFlowControl::None,
+                                "None",
+                            );
+                            ui.selectable_value(
+                                &mut self.amp_flow_control,
+                                crate::settings::SerialFlowControl::Software,
+                                "Software",
+                            );
+                            ui.selectable_value(
+                                &mut self.amp_flow_control,
+                                crate::settings::SerialFlowControl::Hardware,
+                                "Hardware",
+                            );
                         });
                     ui.end_row();
 
@@ -250,6 +279,7 @@ impl CatapultApp {
             || self.amp_port != prev_port
             || self.amp_baud != prev_baud
             || self.amp_civ_address != prev_civ
+            || self.amp_flow_control != prev_flow_control
         {
             self.save_amplifier_settings();
         }
@@ -323,32 +353,47 @@ impl CatapultApp {
 
         match self.amp_connection_type {
             AmplifierConnectionType::ComPort => {
-                // Open the serial port
-                let stream = match tokio_serial::new(&self.amp_port, self.amp_baud)
-                    .timeout(Duration::from_millis(100))
-                    .open_native_async()
-                {
-                    Ok(s) => s,
-                    Err(e) => {
-                        self.set_status(format!("Failed to open {}: {}", self.amp_port, e));
-                        // Clean up state on failure
-                        self.amp_data_tx = None;
-                        self.amp_shutdown_tx = None;
-                        self.send_mux_command(
-                            MuxActorCommand::DisconnectAmplifier,
-                            "DisconnectAmplifier (cleanup)",
-                        );
-                        return;
-                    }
-                };
+                // Clone values needed by the async task
+                let port = self.amp_port.clone();
+                let baud = self.amp_baud;
+                let flow_control: cat_mux::FlowControl = self.amp_flow_control.into();
 
+                // Spawn the async connection task - serial port must be opened inside async context
                 self.rt_handle.spawn(async move {
+                    tracing::debug!(
+                        port = %port,
+                        baud = baud,
+                        flow_control = ?flow_control,
+                        "Opening amplifier serial port"
+                    );
+
+                    // Open the serial port inside the async context
+                    let stream = match tokio_serial::new(&port, baud)
+                        .flow_control(flow_control)
+                        .timeout(Duration::from_millis(100))
+                        .open_native_async()
+                    {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!(port = %port, error = %e, "Failed to open amplifier port");
+                            let _ = event_tx
+                                .send(MuxEvent::Error {
+                                    source: format!("Amplifier {}", port),
+                                    message: format!("Failed to open port: {}", e),
+                                })
+                                .await;
+                            let _ = mux_tx.send(MuxActorCommand::DisconnectAmplifier).await;
+                            return;
+                        }
+                    };
+
+                    tracing::debug!(port = %port, "Amplifier serial port opened successfully");
                     let conn = AsyncAmpConnection::new(stream, mux_tx, event_tx);
                     conn.run(shutdown_rx, amp_data_rx).await;
                 });
 
                 self.set_status(format!(
-                    "Connected to amplifier on {} @ {} baud",
+                    "Connecting to amplifier on {} @ {} baud",
                     self.amp_port, self.amp_baud
                 ));
             }

@@ -148,6 +148,8 @@ pub struct CatapultApp {
     pub(super) amp_baud: u32,
     /// CI-V address for Icom amplifiers (0x00-0xFF)
     pub(super) amp_civ_address: u8,
+    /// Flow control for amplifier serial port
+    pub(super) amp_flow_control: crate::settings::SerialFlowControl,
     /// Amplifier connection type
     pub(super) amp_connection_type: AmplifierConnectionType,
     /// Amplifier data sender (for async amplifier task)
@@ -261,6 +263,7 @@ impl CatapultApp {
             amp_protocol: settings.amplifier.protocol,
             amp_baud: settings.amplifier.baud_rate,
             amp_civ_address: settings.amplifier.civ_address,
+            amp_flow_control: settings.amplifier.flow_control,
             amp_connection_type,
             amp_data_tx: None,
             amp_shutdown_tx: None,

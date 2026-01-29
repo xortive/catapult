@@ -84,6 +84,9 @@ pub struct AmplifierSettings {
     /// CI-V address for Icom amplifiers
     #[serde(default)]
     pub civ_address: u8,
+    /// Flow control setting
+    #[serde(default)]
+    pub flow_control: SerialFlowControl,
 }
 
 fn default_amp_baud() -> u32 {
@@ -98,6 +101,7 @@ impl Default for AmplifierSettings {
             port: String::new(),
             baud_rate: 9600,
             civ_address: 0x00,
+            flow_control: SerialFlowControl::default(),
         }
     }
 }

@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "cat-desktop"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "cat-detect",
  "cat-mux",
@@ -630,11 +630,12 @@ dependencies = [
  "tokio-serial",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "cat-detect"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "cat-protocol",
  "serialport",
@@ -646,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "cat-mux"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "cat-detect",
  "cat-protocol",
@@ -660,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "cat-protocol"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "proptest",
  "serde",
@@ -670,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "cat-sim"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "cat-protocol",
  "proptest",

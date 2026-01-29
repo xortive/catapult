@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 authors = ["M Alonso"]
 license = "MIT"
@@ -47,3 +47,8 @@ egui = "0.33"
 
 # Testing
 proptest = "1.5"
+
+# Include line tables in release builds for meaningful panic backtraces
+# This is much smaller than full debug symbols (debug = true)
+[profile.release]
+debug = "line-tables-only"

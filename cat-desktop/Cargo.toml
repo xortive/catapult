@@ -10,6 +10,9 @@ license.workspace = true
 name = "catapult"
 path = "src/main.rs"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+
 [dependencies]
 cat-protocol.workspace = true
 cat-detect.workspace = true
