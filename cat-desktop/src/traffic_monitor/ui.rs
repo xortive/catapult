@@ -231,8 +231,8 @@ impl TrafficMonitor {
                         }
                     }
                 }
-                // Bottom padding to prevent scroll jitter at boundary
-                ui.add_space(4.0);
+                // Bottom margin to prevent scroll jitter during autoscroll
+                ui.add_space(row_height);
             });
 
         export_action
