@@ -733,9 +733,8 @@ mod tests {
         let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetControlBand).unwrap();
         assert_eq!(cmd, KenwoodCommand::ControlBand(None));
 
-        let cmd =
-            KenwoodCommand::from_radio_command(&RadioCommand::ControlBandReport { band: 1 })
-                .unwrap();
+        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::ControlBandReport { band: 1 })
+            .unwrap();
         assert_eq!(cmd, KenwoodCommand::ControlBand(Some(1)));
     }
 
@@ -744,9 +743,8 @@ mod tests {
         let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetTransmitBand).unwrap();
         assert_eq!(cmd, KenwoodCommand::TransmitBand(None));
 
-        let cmd =
-            KenwoodCommand::from_radio_command(&RadioCommand::TransmitBandReport { band: 1 })
-                .unwrap();
+        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::TransmitBandReport { band: 1 })
+            .unwrap();
         assert_eq!(cmd, KenwoodCommand::TransmitBand(Some(1)));
     }
 }

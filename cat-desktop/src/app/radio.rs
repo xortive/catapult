@@ -231,8 +231,12 @@ impl CatapultApp {
 
         // Store the sender so we can send shutdown commands to this radio
         // (mux actor has a clone for AI2 heartbeat)
-        self.radio_task_senders
-            .insert(handle, super::RadioTaskSender { task_cmd_tx: cmd_tx });
+        self.radio_task_senders.insert(
+            handle,
+            super::RadioTaskSender {
+                task_cmd_tx: cmd_tx,
+            },
+        );
 
         // Spawn the async connection task
         rt.spawn(async move {
@@ -295,8 +299,12 @@ impl CatapultApp {
 
         // Store the sender so we can send shutdown commands to this radio
         // (mux actor has a clone for AI2 heartbeat)
-        self.radio_task_senders
-            .insert(handle, super::RadioTaskSender { task_cmd_tx: cmd_tx });
+        self.radio_task_senders.insert(
+            handle,
+            super::RadioTaskSender {
+                task_cmd_tx: cmd_tx,
+            },
+        );
 
         // Register with SimulationPanel for UI display and commands
         self.simulation_panel
