@@ -207,6 +207,9 @@ impl Multiplexer {
         handle: RadioHandle,
         cmd: RadioCommand,
     ) -> Option<Vec<u8>> {
+        // Capture old frequency before updating state
+        let old_freq = self.radios.get(&handle).and_then(|r| r.frequency_hz);
+
         // Update radio state
         if let Some(radio) = self.radios.get_mut(&handle) {
             match &cmd {
@@ -241,8 +244,12 @@ impl Multiplexer {
             }
         }
 
+        // Determine if frequency changed (ignore initial report when old_freq is None)
+        let new_freq = self.radios.get(&handle).and_then(|r| r.frequency_hz);
+        let freq_changed = old_freq.is_some() && old_freq != new_freq;
+
         // Check if we should switch radios
-        self.check_auto_switch(handle, &cmd);
+        self.check_auto_switch(handle, &cmd, freq_changed);
 
         // Only forward if this is the active radio
         if self.active_radio != Some(handle) {
@@ -263,7 +270,7 @@ impl Multiplexer {
     }
 
     /// Check if we should automatically switch radios
-    fn check_auto_switch(&mut self, handle: RadioHandle, cmd: &RadioCommand) {
+    fn check_auto_switch(&mut self, handle: RadioHandle, cmd: &RadioCommand, freq_changed: bool) {
         // Don't switch to a radio that doesn't exist
         if !self.radios.contains_key(&handle) {
             return;
@@ -283,19 +290,17 @@ impl Multiplexer {
         let should_switch = match self.config.switching_mode {
             SwitchingMode::Manual => false,
             SwitchingMode::FrequencyTriggered => {
-                matches!(
-                    cmd,
-                    RadioCommand::SetFrequency { .. } | RadioCommand::FrequencyReport { .. }
-                )
+                // SetFrequency always triggers switch (explicit command from radio)
+                // FrequencyReport only triggers switch if frequency actually changed
+                matches!(cmd, RadioCommand::SetFrequency { .. })
+                    || (matches!(cmd, RadioCommand::FrequencyReport { .. }) && freq_changed)
             }
             SwitchingMode::Automatic => {
                 matches!(
                     cmd,
-                    RadioCommand::SetPtt { active: true }
-                        | RadioCommand::PttReport { active: true }
-                        | RadioCommand::SetFrequency { .. }
-                        | RadioCommand::FrequencyReport { .. }
-                )
+                    RadioCommand::SetPtt { active: true } | RadioCommand::PttReport { active: true }
+                ) || matches!(cmd, RadioCommand::SetFrequency { .. })
+                    || (matches!(cmd, RadioCommand::FrequencyReport { .. }) && freq_changed)
             }
         };
 

@@ -22,12 +22,13 @@ This is the most "hands-off" mode - Catapult follows your activity.
 
 **Best for:** SO2R contesting where you tune between QSOs
 
-In Frequency Triggered mode, switching only happens when a radio changes frequency. PTT alone does not cause a switch.
+In Frequency Triggered mode, switching only happens when a radio *changes* frequency. PTT alone does not cause a switch.
 
 ### Behavior
 - Tune a radio to change the active selection
 - PTT on an inactive radio does **not** switch (prevents accidental amplifier switching)
 - Good for run/search-and-pounce alternation
+- Polling responses with unchanged frequencies do **not** trigger switching
 
 ### Use Case
 You're running on Radio 1. You tune Radio 2 to find a multiplier. Catapult switches the amplifier to Radio 2. When you're done, tune Radio 1 and it switches back.
