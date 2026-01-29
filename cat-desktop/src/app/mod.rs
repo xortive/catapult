@@ -348,6 +348,44 @@ impl CatapultApp {
 }
 
 impl eframe::App for CatapultApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        tracing::info!("Application closing, shutting down background tasks...");
+
+        // Send shutdown to all radio tasks
+        for (handle, sender) in self.radio_task_senders.drain() {
+            tracing::debug!("Sending shutdown to radio task {:?}", handle);
+            let _ = sender.task_cmd_tx.blocking_send(RadioTaskCommand::Shutdown);
+        }
+
+        // Disconnect amplifier (sends shutdown to amp tasks)
+        if self.amp_data_tx.is_some() {
+            tracing::debug!("Disconnecting amplifier");
+            // Inline the disconnect logic to avoid borrow issues, using blocking_send
+            let _ = self
+                .mux_cmd_tx
+                .blocking_send(MuxActorCommand::DisconnectAmplifier);
+
+            if let Some(tx) = self.virtual_amp_cmd_tx.take() {
+                let _ = tx.blocking_send(VirtualAmpCommand::Shutdown);
+            }
+
+            if let Some(tx) = self.amp_shutdown_tx.take() {
+                let _ = tx.send(());
+            }
+
+            self.amp_data_tx = None;
+        }
+
+        // Send shutdown to mux actor
+        tracing::debug!("Sending shutdown to mux actor");
+        let _ = self.mux_cmd_tx.blocking_send(MuxActorCommand::Shutdown);
+
+        // Give tasks a moment to clean up before runtime is dropped
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        tracing::info!("Shutdown complete");
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Process background messages and events (non-blocking)
         // All I/O data now comes through channels from async tasks
