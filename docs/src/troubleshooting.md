@@ -24,6 +24,26 @@ Common issues and solutions for Catapult.
 2. Verify radio is powered on
 3. Ensure correct protocol is selected (Catapult auto-suggests for known radios)
 4. Verify baud rate matches radio's CAT settings
+5. Try changing flow control (Settings > Flow Control):
+   - Default is Hardware (RTS/CTS)
+   - Try "None" if radio doesn't support hardware flow control
+6. Check the connection indicator color (see below)
+
+### Connection indicator shows yellow/red
+
+**Symptoms:** Radio connected but indicator is yellow (unresponsive) or red (disconnected)
+
+**Yellow (Unresponsive):**
+- Radio hasn't sent data in 2+ seconds
+- Check radio's CAT/AI settings are enabled
+- Verify baud rate matches
+- Try power cycling the radio
+
+**Red (Disconnected):**
+- Serial port error (cable disconnected, radio powered off)
+- Catapult will auto-reconnect when port becomes available
+- Check USB cable connection
+- Verify radio is powered on
 
 ### Wrong protocol detected
 
@@ -112,6 +132,28 @@ sudo usermod -a -G dialout $USER
 3. Some older radios don't support automatic updates
 4. Enable Traffic Monitor to verify AI commands are being sent on connection
 5. Try disconnecting and reconnecting the radio
+6. Catapult sends AI2 heartbeat every second to Kenwood/Elecraft radios to maintain auto-info mode
+
+### No incoming data despite connection
+
+**Symptoms:** Radio shows as connected but no frequency/mode data appears, Traffic Monitor shows no incoming traffic
+
+**Solutions:**
+1. **Flow control mismatch** is the most common cause:
+   - Go to Settings and change Flow Control to "None"
+   - Some radios don't support hardware (RTS/CTS) flow control
+2. Enable debug logging (`RUST_LOG=debug`) to see if bytes are arriving at serial port level
+3. Verify the correct protocol is selected
+4. Check baud rate matches radio's CAT settings
+
+### Frequency display out of sync after rapid tuning
+
+**Symptoms:** After spinning the VFO quickly, displayed frequency doesn't match radio
+
+**Solutions:**
+1. Wait a moment - Catapult auto-polls idle radios every 500ms to resync
+2. Change frequency slightly to trigger an update
+3. This is normal behavior when updates arrive faster than they can be processed
 
 ## GUI Issues
 

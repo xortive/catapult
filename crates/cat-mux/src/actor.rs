@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec, RadioCommand};
+use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec, RadioCommand, Vfo};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{interval, Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
@@ -207,6 +207,10 @@ struct MuxActorState {
     cached_control_band: Option<u8>,
     /// Cached transmit band (0=Main/A, 1=Sub/B) - which VFO is selected for TX
     cached_tx_band: Option<u8>,
+    /// Cached RX VFO (0=A, 1=B) - for inferring CB/TB from VFO commands
+    cached_rx_vfo: Option<u8>,
+    /// Cached split state - for inferring TB from split commands
+    cached_split: bool,
 }
 
 impl MuxActorState {
@@ -225,6 +229,8 @@ impl MuxActorState {
             cached_ptt: false,
             cached_control_band: None,
             cached_tx_band: None,
+            cached_rx_vfo: None,
+            cached_split: false,
         }
     }
 
@@ -263,6 +269,50 @@ async fn process_radio_command(
             RadioCommand::TransmitBandReport { band } => {
                 state.cached_tx_band = Some(*band);
                 debug!("Updated cached transmit band to {}", band);
+            }
+            // Infer CB/TB from VFO commands (for radios that don't report CB/TB directly)
+            RadioCommand::SetVfo { vfo } | RadioCommand::VfoReport { vfo } => {
+                match vfo {
+                    Vfo::A => {
+                        // VFO A selected - RX on A, control on A
+                        state.cached_rx_vfo = Some(0);
+                        state.cached_control_band = Some(0);
+                        // Selecting VFO A/B clears split mode
+                        state.cached_split = false;
+                        state.cached_tx_band = Some(0);
+                        debug!("VFO A selected: CB=0, TB=0, split=false");
+                    }
+                    Vfo::B => {
+                        // VFO B selected - RX on B, control on B
+                        state.cached_rx_vfo = Some(1);
+                        state.cached_control_band = Some(1);
+                        // Selecting VFO A/B clears split mode
+                        state.cached_split = false;
+                        state.cached_tx_band = Some(1);
+                        debug!("VFO B selected: CB=1, TB=1, split=false");
+                    }
+                    Vfo::Split => {
+                        // Split enabled - TX on opposite of current RX VFO
+                        state.cached_split = true;
+                        let rx = state.cached_rx_vfo.unwrap_or(0);
+                        state.cached_tx_band = Some(1 - rx); // Opposite of RX
+                        // CB stays as current RX VFO
+                        debug!(
+                            "Split enabled: CB={}, TB={} (RX on {}, TX on opposite)",
+                            state.cached_control_band.unwrap_or(0),
+                            state.cached_tx_band.unwrap_or(1),
+                            rx
+                        );
+                    }
+                    Vfo::Memory => {
+                        // Memory mode - treat as VFO A, no split
+                        state.cached_rx_vfo = Some(0);
+                        state.cached_control_band = Some(0);
+                        state.cached_tx_band = Some(0);
+                        state.cached_split = false;
+                        debug!("Memory mode: CB=0, TB=0, split=false");
+                    }
+                }
             }
             _ => {}
         }
@@ -660,6 +710,8 @@ pub async fn run_mux_actor(
                 state.cached_ptt = false;
                 state.cached_control_band = None;
                 state.cached_tx_band = None;
+                state.cached_rx_vfo = None;
+                state.cached_split = false;
 
                 let _ = event_tx
                     .send(MuxEvent::AmpConnected { meta: channel.meta })
@@ -678,6 +730,8 @@ pub async fn run_mux_actor(
                 state.cached_ptt = false;
                 state.cached_control_band = None;
                 state.cached_tx_band = None;
+                state.cached_rx_vfo = None;
+                state.cached_split = false;
 
                 let _ = event_tx.send(MuxEvent::AmpDisconnected).await;
 
@@ -1613,6 +1667,528 @@ mod tests {
 
         let amp_data = amp_rx.recv().await.unwrap();
         assert_eq!(String::from_utf8_lossy(&amp_data), "TB1;");
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_vfo_a_infers_cb0_tb0() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+                cmd_tx: None,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Set frequency to make the radio active
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while event_rx.try_recv().is_ok() {}
+
+        // Radio reports VFO A selection
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::A,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Amp queries CB; - should get CB0;
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"CB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "CB0;", "Expected CB0; for VFO A, got: {}", s);
+                break;
+            }
+        }
+        let _ = amp_rx.recv().await.unwrap();
+
+        // Amp queries TB; - should get TB0;
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"TB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "TB0;", "Expected TB0; for VFO A, got: {}", s);
+                break;
+            }
+        }
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_vfo_b_infers_cb1_tb1() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+                cmd_tx: None,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Set frequency to make the radio active
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while event_rx.try_recv().is_ok() {}
+
+        // Radio reports VFO B selection
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::B,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Amp queries CB; - should get CB1;
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"CB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "CB1;", "Expected CB1; for VFO B, got: {}", s);
+                break;
+            }
+        }
+        let _ = amp_rx.recv().await.unwrap();
+
+        // Amp queries TB; - should get TB1;
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"TB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "TB1;", "Expected TB1; for VFO B, got: {}", s);
+                break;
+            }
+        }
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_vfo_a_then_split_infers_cb0_tb1() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+                cmd_tx: None,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Set frequency to make the radio active
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while event_rx.try_recv().is_ok() {}
+
+        // Radio reports VFO A selection first
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::A,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Then radio enables split mode
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::Split,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Amp queries CB; - should get CB0; (RX on A)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"CB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "CB0;", "Expected CB0; for VFO A + Split, got: {}", s);
+                break;
+            }
+        }
+        let _ = amp_rx.recv().await.unwrap();
+
+        // Amp queries TB; - should get TB1; (TX on B, opposite of A)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"TB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "TB1;", "Expected TB1; for VFO A + Split, got: {}", s);
+                break;
+            }
+        }
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_vfo_b_then_split_infers_cb1_tb0() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+                cmd_tx: None,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Set frequency to make the radio active
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while event_rx.try_recv().is_ok() {}
+
+        // Radio reports VFO B selection first
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::B,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Then radio enables split mode
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::Split,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Amp queries CB; - should get CB1; (RX on B)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"CB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "CB1;", "Expected CB1; for VFO B + Split, got: {}", s);
+                break;
+            }
+        }
+        let _ = amp_rx.recv().await.unwrap();
+
+        // Amp queries TB; - should get TB0; (TX on A, opposite of B)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"TB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "TB0;", "Expected TB0; for VFO B + Split, got: {}", s);
+                break;
+            }
+        }
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_split_then_vfo_a_clears_split() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+                cmd_tx: None,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await;
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Set frequency to make the radio active
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while event_rx.try_recv().is_ok() {}
+
+        // Radio selects VFO A, then enables split
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::A,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::Split,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Now radio selects VFO A again (exits split mode)
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetVfo {
+                    vfo: cat_protocol::Vfo::A,
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Amp queries CB; - should get CB0;
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"CB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "CB0;", "Expected CB0; after exiting split, got: {}", s);
+                break;
+            }
+        }
+        let _ = amp_rx.recv().await.unwrap();
+
+        // Amp queries TB; - should get TB0; (split cleared, TX back to A)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"TB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "TB0;", "Expected TB0; after exiting split, got: {}", s);
+                break;
+            }
+        }
 
         cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
         actor_handle.await.unwrap();

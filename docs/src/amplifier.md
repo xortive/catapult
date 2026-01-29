@@ -86,6 +86,43 @@ When the active radio changes state, Catapult sends:
 | PTT on | Set TX state |
 | PTT off | Set RX state |
 
+## Amplifier Queries
+
+When the amplifier queries for information, Catapult responds from its cached state:
+
+| Amplifier Query | Response |
+|----------------|----------|
+| ID query (ID;) | ID022; (TS-990S identification) |
+| Frequency query (FA;) | Current frequency from active radio |
+| Mode query (MD;) | Current mode from active radio |
+| Control Band (CB;) | VFO with front panel control (0=Main, 1=Sub) |
+| Transmit Band (TB;) | VFO selected for TX (0=Main, 1=Sub) |
+
+### Radio Identification
+
+Catapult always identifies as a **Kenwood TS-990S** (ID022) to amplifiers, regardless of the actual connected radios. This ensures maximum compatibility with amplifiers expecting a high-end transceiver.
+
+### VFO/Split Tracking
+
+For radios with dual VFOs (like TS-990S, IC-7610), Catapult tracks which VFO is selected for receive (Control Band) and transmit (Transmit Band). This is critical for split operation where you receive on one VFO and transmit on another.
+
+For radios that don't natively report CB/TB (most radios), Catapult infers this from VFO selection and split mode commands:
+
+| Radio State | Control Band | Transmit Band |
+|-------------|--------------|---------------|
+| VFO A selected, no split | 0 (Main) | 0 (Main) |
+| VFO B selected, no split | 1 (Sub) | 1 (Sub) |
+| VFO A + Split mode | 0 (Main) | 1 (Sub) |
+| VFO B + Split mode | 1 (Sub) | 0 (Main) |
+
+## AI2 Heartbeat
+
+Catapult sends `AI2;` (enable auto-information mode) to all connected Kenwood and Elecraft radios every second. This ensures:
+
+- Radios continue sending automatic frequency/mode updates
+- Recovery if a radio restarts or loses its auto-info setting
+- Consistent behavior across reconnections
+
 ## Band Data vs CAT
 
 Some amplifiers use band data (voltage levels or BCD) instead of CAT. Catapult currently only supports CAT control. For band data, you'll need a separate band decoder.

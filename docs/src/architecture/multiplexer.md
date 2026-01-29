@@ -32,8 +32,14 @@ pub struct RadioState {
     pub frequency_hz: Option<u64>,
     pub mode: Option<OperatingMode>,
     pub ptt: bool,
+    pub control_band: Option<u8>,  // 0=Main/A, 1=Sub/B
+    pub tx_band: Option<u8>,       // 0=Main/A, 1=Sub/B
 }
 ```
+
+The `control_band` and `tx_band` fields track VFO state for split operation. These are updated from:
+- Direct CB/TB reports from radios that support them (e.g., TS-990S)
+- Inferred from VFO selection and split mode commands for other radios
 
 ### SwitchingMode
 
@@ -139,3 +145,30 @@ multiplexer.set_lockout_duration(Duration::from_millis(500));
 ```
 
 During lockout, automatic switches are blocked.
+
+## Amplifier Communication
+
+### Query Handling
+
+When amplifiers query for state (frequency, mode, VFO), the multiplexer responds from cached state rather than forwarding to the radio. This ensures fast, consistent responses.
+
+The multiplexer always identifies as a TS-990S (ID022) to amplifiers, providing compatibility with amplifiers expecting a high-end Kenwood transceiver.
+
+### AI2 Heartbeat
+
+The multiplexer sends `AI2;` (enable auto-information) to all connected Kenwood and Elecraft radios every second. This:
+- Ensures radios continue pushing state updates
+- Recovers auto-info mode if a radio restarts
+- Maintains consistent behavior across reconnections
+
+### VFO/Split Inference
+
+For radios that don't report Control Band (CB) and Transmit Band (TB) directly, the multiplexer infers these from VFO and split commands:
+
+```
+VFO A selected → CB=0, TB=0
+VFO B selected → CB=1, TB=1
+Split enabled  → TB = opposite of CB
+```
+
+This allows amplifiers to track split operation even with radios that don't natively support CB/TB commands.

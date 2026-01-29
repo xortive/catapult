@@ -35,12 +35,33 @@ The detected model helps Catapult optimize settings for your specific radio. If 
 Choose the correct protocol for your radio:
 - **Kenwood** - Kenwood, some Elecraft models
 - **Icom CI-V** - All Icom radios
-- **Yaesu Binary** - Older Yaesu radios (FT-450, FT-950, FTDX-3000)
+- **Yaesu Binary** - Older Yaesu radios (FT-450, FT-897, FT-1000MP, FT-990)
 - **Yaesu ASCII** - Modern Yaesu radios (FT-991, FTDX-101D, FTDX-10, FT-710)
 - **Elecraft** - K3, K4, KX series
 - **FlexRadio** - FlexRadio SDRs via SmartSDR CAT
 
 For Icom radios, you may need to set the CI-V address (default: 0x94).
+
+## Serial Port Settings
+
+### Baud Rate
+
+Common baud rates by manufacturer:
+- **Kenwood**: 4800, 9600, 19200, 38400, 57600, 115200
+- **Icom**: 4800, 9600, 19200 (check radio menu)
+- **Yaesu**: 4800, 9600, 38400
+- **Elecraft**: 38400
+- **FlexRadio**: 115200
+
+### Flow Control
+
+Catapult supports three flow control modes:
+
+- **Hardware (RTS/CTS)** - Default. Uses hardware handshaking lines. Most reliable for modern radios.
+- **Software (XON/XOFF)** - Uses in-band control characters. Rarely needed.
+- **None** - No flow control. Use if you experience connection issues with hardware flow control.
+
+If your radio connects but shows no incoming data, try changing the flow control setting.
 
 ## Virtual Ports
 
@@ -77,6 +98,27 @@ Each radio in the list shows:
 - **Mode** - Operating mode (USB, LSB, CW, etc.)
 - **TX indicator** - Red "TX" when transmitting
 - **Active indicator** - Green dot for the radio controlling the amplifier
+- **Connection indicator** - Shows connection health (COM radios only)
+
+### Connection State Indicators
+
+For radios connected via serial port, a colored indicator shows connection health:
+
+| Color | State | Meaning |
+|-------|-------|---------|
+| 🟢 Green | Connected | Receiving data within last 2 seconds |
+| 🟡 Yellow | Unresponsive | No response for 2+ seconds |
+| 🔴 Red | Disconnected | Connection lost due to I/O error |
+
+Virtual radios don't show connection indicators since they're always responsive.
+
+### Auto-Reconnect
+
+When a radio disconnects (due to USB cable disconnect, radio power cycle, etc.), Catapult automatically attempts to reconnect every 5 seconds if the port becomes available again. This allows for seamless recovery without manual intervention.
+
+### Sync Recovery
+
+After rapid tuning, the displayed frequency may temporarily lag behind the radio. Catapult automatically polls idle radios every 500ms to ensure the display stays synchronized. This polling stops when normal traffic resumes.
 
 ## Switching Active Radio
 

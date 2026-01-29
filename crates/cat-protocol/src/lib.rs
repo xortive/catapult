@@ -43,7 +43,7 @@ pub mod models;
 pub mod yaesu;
 pub mod yaesu_ascii;
 
-pub use command::{OperatingMode, RadioCommand};
+pub use command::{OperatingMode, RadioCommand, Vfo};
 pub use error::{ParseError, ProtocolError};
 pub use models::{ProtocolId, RadioCapabilities, RadioDatabase, RadioModel};
 
