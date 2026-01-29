@@ -18,7 +18,7 @@ impl PortInfo {
     /// Get the port name used for identification
     ///
     /// - Real ports: "/dev/ttyUSB0", "COM3", etc.
-    /// - Virtual ports: "VSIM:<name>"
+    /// - Virtual ports: `VSIM:<name>`
     pub fn port_name(&self) -> String {
         match self {
             PortInfo::Real(info) => info.port.clone(),
@@ -29,7 +29,7 @@ impl PortInfo {
     /// Get a display label for the port dropdown
     ///
     /// - Real ports: "ttyUSB0 (Product Name)" or just the port name
-    /// - Virtual ports: "<name> [SIM - Protocol]"
+    /// - Virtual ports: `<name> [SIM - Protocol]`
     pub fn display_label(&self) -> String {
         match self {
             PortInfo::Real(info) => match &info.product {

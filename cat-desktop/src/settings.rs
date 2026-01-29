@@ -11,7 +11,7 @@ use tracing::Level;
 /// Virtual port configuration (for simulated radios configured in Settings)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VirtualPortConfig {
-    /// Name for the virtual port (displayed as VSIM:<name>)
+    /// Name for the virtual port (displayed as `VSIM:<name>`)
     pub name: String,
     /// Protocol for the virtual radio
     pub protocol: Protocol,
