@@ -142,6 +142,20 @@ pub enum RadioCommand {
     /// Auto-information state report
     AutoInfoReport { enabled: bool },
 
+    /// Get control band (which VFO has front panel control)
+    /// TS-990S specific: CB; query
+    GetControlBand,
+
+    /// Control band report (0=Main/A, 1=Sub/B)
+    ControlBandReport { band: u8 },
+
+    /// Get transmit band (which VFO is selected for transmit)
+    /// Critical for split operation: TB; query
+    GetTransmitBand,
+
+    /// Transmit band report (0=Main/A, 1=Sub/B)
+    TransmitBandReport { band: u8 },
+
     /// Unknown or unparseable command (preserves raw data)
     Unknown { data: Vec<u8> },
 }
@@ -172,6 +186,8 @@ impl RadioCommand {
                 | Self::GetId
                 | Self::GetStatus
                 | Self::GetAutoInfo
+                | Self::GetControlBand
+                | Self::GetTransmitBand
         )
     }
 
@@ -186,6 +202,8 @@ impl RadioCommand {
                 | Self::IdReport { .. }
                 | Self::StatusReport { .. }
                 | Self::AutoInfoReport { .. }
+                | Self::ControlBandReport { .. }
+                | Self::TransmitBandReport { .. }
         )
     }
 

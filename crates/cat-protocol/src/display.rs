@@ -1274,6 +1274,62 @@ impl KenwoodCommand {
                 SegmentType::Command,
                 cmd_range,
             )],
+            KenwoodCommand::ControlBand(Some(band)) => {
+                let band_name = if *band == 0 { "Main" } else { "Sub" };
+                let band_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "band",
+                        value: band_name.to_string(),
+                        segment_type: SegmentType::Status,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("Control Band", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = band_range {
+                        SummaryPart::with_range(band_name, SegmentType::Status, r)
+                    } else {
+                        SummaryPart::typed(band_name, SegmentType::Status)
+                    },
+                ]
+            }
+            KenwoodCommand::ControlBand(None) => vec![SummaryPart::with_range(
+                "Get Control Band",
+                SegmentType::Command,
+                cmd_range,
+            )],
+            KenwoodCommand::TransmitBand(Some(band)) => {
+                let band_name = if *band == 0 { "Main" } else { "Sub" };
+                let band_range = if params_start < params_end {
+                    segments.push(FrameSegment {
+                        range: params_start..params_end,
+                        label: "band",
+                        value: band_name.to_string(),
+                        segment_type: SegmentType::Status,
+                    });
+                    Some(params_start..params_end)
+                } else {
+                    None
+                };
+                vec![
+                    SummaryPart::with_range("TX Band", SegmentType::Command, cmd_range),
+                    SummaryPart::plain(" "),
+                    if let Some(r) = band_range {
+                        SummaryPart::with_range(band_name, SegmentType::Status, r)
+                    } else {
+                        SummaryPart::typed(band_name, SegmentType::Status)
+                    },
+                ]
+            }
+            KenwoodCommand::TransmitBand(None) => vec![SummaryPart::with_range(
+                "Get TX Band",
+                SegmentType::Command,
+                cmd_range,
+            )],
             KenwoodCommand::Unknown(s) => {
                 if params_start < params_end {
                     segments.push(FrameSegment {

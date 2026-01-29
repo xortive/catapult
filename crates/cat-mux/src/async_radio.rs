@@ -32,6 +32,8 @@ use crate::{MuxActorCommand, MuxEvent, RadioHandle};
 pub enum RadioTaskCommand {
     /// Shutdown the task
     Shutdown,
+    /// Send raw data to the radio
+    SendData { data: Vec<u8> },
 }
 
 /// Async radio connection that runs in a spawned task
@@ -332,6 +334,12 @@ where
                         Some(RadioTaskCommand::Shutdown) | None => {
                             info!("Shutdown requested for radio {:?}", self.handle);
                             break;
+                        }
+                        Some(RadioTaskCommand::SendData { data }) => {
+                            debug!("Sending {} bytes to radio {:?}", data.len(), self.handle);
+                            if let Err(e) = self.write(&data).await {
+                                warn!("Failed to send data to radio {:?}: {}", self.handle, e);
+                            }
                         }
                     }
                 }

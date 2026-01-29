@@ -18,13 +18,23 @@ use super::{BackgroundMessage, CatapultApp, ComRadioConfig, VirtualRadioCommand}
 /// Configuration for connecting a radio (unified for COM and Virtual)
 pub(crate) enum RadioConnectionConfig {
     /// Physical COM port radio
-    Com(ComRadioConfig),
+    Com {
+        config: ComRadioConfig,
+        /// Command channel sender for shutdown (stored in radio_task_senders)
+        cmd_tx: tokio_mpsc::Sender<RadioTaskCommand>,
+        /// Command channel receiver for the radio task
+        cmd_rx: tokio_mpsc::Receiver<RadioTaskCommand>,
+    },
     /// Virtual/simulated radio
     Virtual {
         /// Simulation ID (e.g., "sim-1")
         sim_id: String,
         /// Virtual radio config (used to create VirtualRadio when spawning)
         config: cat_sim::VirtualRadioConfig,
+        /// Command channel sender for shutdown (stored in radio_task_senders)
+        cmd_tx: tokio_mpsc::Sender<RadioTaskCommand>,
+        /// Command channel receiver for the radio task
+        cmd_rx: tokio_mpsc::Receiver<RadioTaskCommand>,
     },
 }
 
@@ -124,14 +134,19 @@ impl CatapultApp {
             config.civ_address,
         );
 
+        // Create command channel for the radio task (for AI2 heartbeat and shutdown)
+        let (cmd_tx, cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
+
         // Create oneshot for receiving the handle
         let (resp_tx, resp_rx) = oneshot::channel();
 
-        // Send RegisterRadio to mux actor
+        // Send RegisterRadio to mux actor with a clone of the command channel sender
+        // (mux actor uses it for AI2 heartbeat, app uses the original for shutdown)
         self.send_mux_command(
             MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: Some(cmd_tx.clone()),
             },
             "RegisterRadio",
         );
@@ -148,8 +163,14 @@ impl CatapultApp {
         });
 
         // Store the config so we can spawn the task when the handle arrives
-        self.pending_radio_configs
-            .insert(correlation_id, RadioConnectionConfig::Com(config));
+        self.pending_radio_configs.insert(
+            correlation_id,
+            RadioConnectionConfig::Com {
+                config,
+                cmd_tx,
+                cmd_rx,
+            },
+        );
 
         // Store the panel index for when the handle arrives
         self.pending_registrations
@@ -168,17 +189,32 @@ impl CatapultApp {
         config: RadioConnectionConfig,
     ) {
         match config {
-            RadioConnectionConfig::Com(com_config) => {
-                self.spawn_com_radio_connection(handle, com_config);
+            RadioConnectionConfig::Com {
+                config,
+                cmd_tx,
+                cmd_rx,
+            } => {
+                self.spawn_com_radio_connection(handle, config, cmd_tx, cmd_rx);
             }
-            RadioConnectionConfig::Virtual { sim_id, config } => {
-                self.spawn_virtual_radio_connection(handle, sim_id, config);
+            RadioConnectionConfig::Virtual {
+                sim_id,
+                config,
+                cmd_tx,
+                cmd_rx,
+            } => {
+                self.spawn_virtual_radio_connection(handle, sim_id, config, cmd_tx, cmd_rx);
             }
         }
     }
 
     /// Spawn connection task for a physical COM port radio
-    fn spawn_com_radio_connection(&mut self, handle: RadioHandle, config: ComRadioConfig) {
+    fn spawn_com_radio_connection(
+        &mut self,
+        handle: RadioHandle,
+        config: ComRadioConfig,
+        cmd_tx: tokio_mpsc::Sender<RadioTaskCommand>,
+        cmd_rx: tokio_mpsc::Receiver<RadioTaskCommand>,
+    ) {
         let bg_tx = self.bg_tx.clone();
         let mux_tx = self.mux_cmd_tx.clone();
         let event_tx = self.mux_event_tx.clone();
@@ -191,16 +227,10 @@ impl CatapultApp {
         let civ_address = config.civ_address;
         let model_name = config.model_name;
 
-        // Create channel for sending commands to the task
-        let (cmd_tx, cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
-
-        // Store the sender so we can send commands to this radio
-        self.radio_task_senders.insert(
-            handle,
-            super::RadioTaskSender {
-                task_cmd_tx: cmd_tx,
-            },
-        );
+        // Store the sender so we can send shutdown commands to this radio
+        // (mux actor has a clone for AI2 heartbeat)
+        self.radio_task_senders
+            .insert(handle, super::RadioTaskSender { task_cmd_tx: cmd_tx });
 
         // Spawn the async connection task
         rt.spawn(async move {
@@ -244,6 +274,8 @@ impl CatapultApp {
         handle: RadioHandle,
         sim_id: String,
         config: cat_sim::VirtualRadioConfig,
+        cmd_tx: tokio_mpsc::Sender<RadioTaskCommand>,
+        cmd_rx: tokio_mpsc::Receiver<RadioTaskCommand>,
     ) {
         let name = config.id.clone();
         let protocol = config.protocol;
@@ -259,12 +291,10 @@ impl CatapultApp {
         // Create UI command channel for SimulationPanel -> actor
         let (ui_cmd_tx, ui_cmd_rx) = tokio_mpsc::channel::<VirtualRadioCommand>(32);
 
-        // Create channel for task control commands (shutdown)
-        let (task_cmd_tx, task_cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
-
-        // Store the sender so we can send commands to this radio
+        // Store the sender so we can send shutdown commands to this radio
+        // (mux actor has a clone for AI2 heartbeat)
         self.radio_task_senders
-            .insert(handle, super::RadioTaskSender { task_cmd_tx });
+            .insert(handle, super::RadioTaskSender { task_cmd_tx: cmd_tx });
 
         // Register with SimulationPanel for UI display and commands
         self.simulation_panel
@@ -298,7 +328,7 @@ impl CatapultApp {
                 model_name,
                 civ_address,
                 bg_tx,
-                task_cmd_rx,
+                cmd_rx,
             )
             .await;
         });
@@ -387,14 +417,19 @@ impl CatapultApp {
         // Create metadata for the virtual radio channel
         let meta = RadioChannelMeta::new_virtual(name.clone(), sim_id.clone(), protocol);
 
+        // Create command channel for the radio task (for AI2 heartbeat and shutdown)
+        let (cmd_tx, cmd_rx) = tokio_mpsc::channel::<RadioTaskCommand>(32);
+
         // Create oneshot for receiving the handle
         let (resp_tx, resp_rx) = oneshot::channel();
 
-        // Send RegisterRadio to mux actor
+        // Send RegisterRadio to mux actor with a clone of the command channel sender
+        // (mux actor uses it for AI2 heartbeat, app uses the original for shutdown)
         self.send_mux_command(
             MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: Some(cmd_tx.clone()),
             },
             "RegisterRadio (virtual)",
         );
@@ -405,6 +440,8 @@ impl CatapultApp {
             RadioConnectionConfig::Virtual {
                 sim_id: sim_id.clone(),
                 config: virtual_config,
+                cmd_tx,
+                cmd_rx,
             },
         );
 

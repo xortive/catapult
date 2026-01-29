@@ -49,6 +49,10 @@ pub enum KenwoodCommand {
     Power(Option<bool>),
     /// Auto-information mode: AI0; (off) or AI2; (on) or AI; (query)
     AutoInfo(Option<bool>),
+    /// Control band (which VFO has front panel control): CB; (query), CB0; or CB1;
+    ControlBand(Option<u8>),
+    /// Transmit band (which VFO is selected for TX): TB; (query), TB0; or TB1;
+    TransmitBand(Option<u8>),
     /// Unknown/unrecognized command
     Unknown(String),
 }
@@ -189,6 +193,26 @@ impl KenwoodCodec {
                 } else {
                     let enabled = params != "0";
                     Ok(KenwoodCommand::AutoInfo(Some(enabled)))
+                }
+            }
+            "CB" => {
+                if params.is_empty() {
+                    Ok(KenwoodCommand::ControlBand(None))
+                } else {
+                    let band = params
+                        .parse::<u8>()
+                        .map_err(|_| ParseError::InvalidFrame("invalid control band".into()))?;
+                    Ok(KenwoodCommand::ControlBand(Some(band)))
+                }
+            }
+            "TB" => {
+                if params.is_empty() {
+                    Ok(KenwoodCommand::TransmitBand(None))
+                } else {
+                    let band = params
+                        .parse::<u8>()
+                        .map_err(|_| ParseError::InvalidFrame("invalid transmit band".into()))?;
+                    Ok(KenwoodCommand::TransmitBand(Some(band)))
                 }
             }
             _ => Ok(KenwoodCommand::Unknown(cmd.to_string())),
@@ -339,6 +363,14 @@ impl ToRadioCommand for KenwoodCommand {
                 RadioCommand::EnableAutoInfo { enabled: *enabled }
             }
             KenwoodCommand::AutoInfo(None) => RadioCommand::GetAutoInfo,
+            KenwoodCommand::ControlBand(Some(band)) => {
+                RadioCommand::ControlBandReport { band: *band }
+            }
+            KenwoodCommand::ControlBand(None) => RadioCommand::GetControlBand,
+            KenwoodCommand::TransmitBand(Some(band)) => {
+                RadioCommand::TransmitBandReport { band: *band }
+            }
+            KenwoodCommand::TransmitBand(None) => RadioCommand::GetTransmitBand,
             KenwoodCommand::Unknown(s) => RadioCommand::Unknown {
                 data: s.as_bytes().to_vec(),
             },
@@ -381,6 +413,14 @@ impl FromRadioCommand for KenwoodCommand {
             RadioCommand::AutoInfoReport { enabled } => {
                 Some(KenwoodCommand::AutoInfo(Some(*enabled)))
             }
+            RadioCommand::GetControlBand => Some(KenwoodCommand::ControlBand(None)),
+            RadioCommand::ControlBandReport { band } => {
+                Some(KenwoodCommand::ControlBand(Some(*band)))
+            }
+            RadioCommand::GetTransmitBand => Some(KenwoodCommand::TransmitBand(None)),
+            RadioCommand::TransmitBandReport { band } => {
+                Some(KenwoodCommand::TransmitBand(Some(*band)))
+            }
             _ => None,
         }
     }
@@ -412,6 +452,10 @@ impl EncodeCommand for KenwoodCommand {
                 format!("AI{}", if *enabled { 2 } else { 0 })
             }
             KenwoodCommand::AutoInfo(None) => "AI".to_string(),
+            KenwoodCommand::ControlBand(Some(band)) => format!("CB{}", band),
+            KenwoodCommand::ControlBand(None) => "CB".to_string(),
+            KenwoodCommand::TransmitBand(Some(band)) => format!("TB{}", band),
+            KenwoodCommand::TransmitBand(None) => "TB".to_string(),
             KenwoodCommand::Unknown(s) => s.clone(),
         };
         format!("{};", cmd).into_bytes()
@@ -606,5 +650,103 @@ mod tests {
 
         let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetAutoInfo).unwrap();
         assert_eq!(cmd, KenwoodCommand::AutoInfo(None));
+    }
+
+    #[test]
+    fn test_parse_control_band_query() {
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"CB;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::ControlBand(None));
+        assert_eq!(cmd.to_radio_command(), RadioCommand::GetControlBand);
+    }
+
+    #[test]
+    fn test_parse_control_band_set() {
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"CB0;");
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::ControlBand(Some(0)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::ControlBandReport { band: 0 }
+        );
+
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"CB1;");
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::ControlBand(Some(1)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::ControlBandReport { band: 1 }
+        );
+    }
+
+    #[test]
+    fn test_encode_control_band() {
+        assert_eq!(KenwoodCommand::ControlBand(None).encode(), b"CB;");
+        assert_eq!(KenwoodCommand::ControlBand(Some(0)).encode(), b"CB0;");
+        assert_eq!(KenwoodCommand::ControlBand(Some(1)).encode(), b"CB1;");
+    }
+
+    #[test]
+    fn test_parse_transmit_band_query() {
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"TB;");
+
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::TransmitBand(None));
+        assert_eq!(cmd.to_radio_command(), RadioCommand::GetTransmitBand);
+    }
+
+    #[test]
+    fn test_parse_transmit_band_set() {
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"TB0;");
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::TransmitBand(Some(0)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::TransmitBandReport { band: 0 }
+        );
+
+        let mut codec = KenwoodCodec::new();
+        codec.push_bytes(b"TB1;");
+        let cmd = codec.next_command().unwrap();
+        assert_eq!(cmd, KenwoodCommand::TransmitBand(Some(1)));
+        assert_eq!(
+            cmd.to_radio_command(),
+            RadioCommand::TransmitBandReport { band: 1 }
+        );
+    }
+
+    #[test]
+    fn test_encode_transmit_band() {
+        assert_eq!(KenwoodCommand::TransmitBand(None).encode(), b"TB;");
+        assert_eq!(KenwoodCommand::TransmitBand(Some(0)).encode(), b"TB0;");
+        assert_eq!(KenwoodCommand::TransmitBand(Some(1)).encode(), b"TB1;");
+    }
+
+    #[test]
+    fn test_from_radio_command_control_band() {
+        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetControlBand).unwrap();
+        assert_eq!(cmd, KenwoodCommand::ControlBand(None));
+
+        let cmd =
+            KenwoodCommand::from_radio_command(&RadioCommand::ControlBandReport { band: 1 })
+                .unwrap();
+        assert_eq!(cmd, KenwoodCommand::ControlBand(Some(1)));
+    }
+
+    #[test]
+    fn test_from_radio_command_transmit_band() {
+        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetTransmitBand).unwrap();
+        assert_eq!(cmd, KenwoodCommand::TransmitBand(None));
+
+        let cmd =
+            KenwoodCommand::from_radio_command(&RadioCommand::TransmitBandReport { band: 1 })
+                .unwrap();
+        assert_eq!(cmd, KenwoodCommand::TransmitBand(Some(1)));
     }
 }

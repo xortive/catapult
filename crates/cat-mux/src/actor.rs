@@ -34,17 +34,18 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec, RadioCommand};
-
-use crate::translation::ProtocolTranslator;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::{interval, Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
 use crate::amplifier::AmplifierChannel;
+use crate::async_radio::RadioTaskCommand;
 use crate::channel::RadioChannelMeta;
 use crate::engine::Multiplexer;
 use crate::error::MuxError;
 use crate::events::MuxEvent;
 use crate::state::{AmplifierConfig, RadioHandle, SwitchingMode};
+use crate::translation::ProtocolTranslator;
 
 /// Summary of a radio's state for sync purposes
 ///
@@ -79,6 +80,8 @@ pub enum MuxActorCommand {
         meta: RadioChannelMeta,
         /// Channel to send back the assigned handle
         response: oneshot::Sender<RadioHandle>,
+        /// Optional command channel for sending data to the radio (for AI2 heartbeat)
+        cmd_tx: Option<mpsc::Sender<RadioTaskCommand>>,
     },
 
     /// Unregister a radio from the multiplexer
@@ -186,6 +189,8 @@ struct MuxActorState {
     radio_channels: HashMap<RadioHandle, RadioChannelMeta>,
     /// Protocol codecs for parsing raw data (keyed by handle)
     codecs: HashMap<RadioHandle, Box<dyn RadioCodec>>,
+    /// Command senders for radios (for AI2 heartbeat)
+    radio_cmd_tx: HashMap<RadioHandle, mpsc::Sender<RadioTaskCommand>>,
     /// Amplifier data sender (for sending translated commands)
     amp_tx: Option<mpsc::Sender<Vec<u8>>>,
     /// Amplifier metadata
@@ -198,6 +203,10 @@ struct MuxActorState {
     cached_frequency_hz: Option<u64>,
     cached_mode: Option<OperatingMode>,
     cached_ptt: bool,
+    /// Cached control band (0=Main/A, 1=Sub/B) - which VFO has front panel control
+    cached_control_band: Option<u8>,
+    /// Cached transmit band (0=Main/A, 1=Sub/B) - which VFO is selected for TX
+    cached_tx_band: Option<u8>,
 }
 
 impl MuxActorState {
@@ -206,6 +215,7 @@ impl MuxActorState {
             multiplexer: Multiplexer::new(),
             radio_channels: HashMap::new(),
             codecs: HashMap::new(),
+            radio_cmd_tx: HashMap::new(),
             amp_tx: None,
             amp_meta: None,
             amp_codec: None,
@@ -213,6 +223,8 @@ impl MuxActorState {
             cached_frequency_hz: None,
             cached_mode: None,
             cached_ptt: false,
+            cached_control_band: None,
+            cached_tx_band: None,
         }
     }
 
@@ -240,6 +252,21 @@ async fn process_radio_command(
         "Processing command from radio {} (handle {}): {:?}",
         meta.display_name, handle.0, command
     );
+
+    // Update cached CB/TB state from radio reports (only from active radio)
+    if state.multiplexer.active_radio() == Some(handle) {
+        match &command {
+            RadioCommand::ControlBandReport { band } => {
+                state.cached_control_band = Some(*band);
+                debug!("Updated cached control band to {}", band);
+            }
+            RadioCommand::TransmitBandReport { band } => {
+                state.cached_tx_band = Some(*band);
+                debug!("Updated cached transmit band to {}", band);
+            }
+            _ => {}
+        }
+    }
 
     // Capture old state with a single lookup
     let (old_freq, old_mode, old_ptt) = state
@@ -385,6 +412,21 @@ fn handle_amp_query(state: &MuxActorState, query: &RadioCommand) -> Option<Radio
             enabled: state.auto_info_enabled,
         }),
 
+        // Always identify as TS-990S (ID022) to amplifiers
+        RadioCommand::GetId => Some(RadioCommand::IdReport {
+            id: "022".to_string(), // TS-990S
+        }),
+
+        // Control band query - return cached or default to main (0)
+        RadioCommand::GetControlBand => Some(RadioCommand::ControlBandReport {
+            band: state.cached_control_band.unwrap_or(0),
+        }),
+
+        // Transmit band query - return cached or default to main (0)
+        RadioCommand::GetTransmitBand => Some(RadioCommand::TransmitBandReport {
+            band: state.cached_tx_band.unwrap_or(0),
+        }),
+
         _ => None,
     }
 }
@@ -445,9 +487,20 @@ pub async fn run_mux_actor(
     let mut state = MuxActorState::new();
     info!("Multiplexer actor started");
 
-    while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
-            MuxActorCommand::RegisterRadio { meta, response } => {
+    // AI2 heartbeat timer - sends AI2; to all Kenwood/Elecraft radios every second
+    let mut ai2_timer = interval(Duration::from_secs(1));
+    ai2_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            cmd = cmd_rx.recv() => {
+                let Some(cmd) = cmd else { break; };
+                match cmd {
+            MuxActorCommand::RegisterRadio {
+                meta,
+                response,
+                cmd_tx,
+            } => {
                 let name = meta.display_name.clone();
                 let port = meta
                     .port_name
@@ -466,6 +519,11 @@ pub async fn run_mux_actor(
                 // Create codec for parsing raw data
                 state.codecs.insert(handle, create_radio_codec(protocol));
 
+                // Store the command channel for AI2 heartbeat
+                if let Some(tx) = cmd_tx {
+                    state.radio_cmd_tx.insert(handle, tx);
+                }
+
                 // Send back the handle
                 let _ = response.send(handle);
 
@@ -481,6 +539,7 @@ pub async fn run_mux_actor(
                 if let Some(meta) = state.radio_channels.remove(&handle) {
                     state.multiplexer.remove_radio(handle);
                     state.codecs.remove(&handle);
+                    state.radio_cmd_tx.remove(&handle);
 
                     // Emit event
                     let _ = event_tx.send(MuxEvent::RadioDisconnected { handle }).await;
@@ -599,6 +658,8 @@ pub async fn run_mux_actor(
                 state.cached_frequency_hz = None;
                 state.cached_mode = None;
                 state.cached_ptt = false;
+                state.cached_control_band = None;
+                state.cached_tx_band = None;
 
                 let _ = event_tx
                     .send(MuxEvent::AmpConnected { meta: channel.meta })
@@ -615,6 +676,8 @@ pub async fn run_mux_actor(
                 state.cached_frequency_hz = None;
                 state.cached_mode = None;
                 state.cached_ptt = false;
+                state.cached_control_band = None;
+                state.cached_tx_band = None;
 
                 let _ = event_tx.send(MuxEvent::AmpDisconnected).await;
 
@@ -782,10 +845,35 @@ pub async fn run_mux_actor(
             MuxActorCommand::ReportError { source, message } => {
                 let _ = event_tx.send(MuxEvent::Error { source, message }).await;
             }
+                }
+            }
+            _ = ai2_timer.tick() => {
+                send_ai2_heartbeat(&mut state).await;
+            }
         }
     }
 
     info!("Multiplexer actor stopped");
+}
+
+/// Send AI2; heartbeat to all connected Kenwood/Elecraft radios
+///
+/// This ensures auto-info mode stays enabled even if a radio restarts.
+async fn send_ai2_heartbeat(state: &mut MuxActorState) {
+    let ai2_bytes = b"AI2;".to_vec();
+
+    for (handle, tx) in &state.radio_cmd_tx {
+        // Only send to Kenwood-compatible protocols
+        if let Some(meta) = state.radio_channels.get(handle) {
+            if matches!(meta.protocol, Protocol::Kenwood | Protocol::Elecraft) {
+                let _ = tx
+                    .send(RadioTaskCommand::SendData {
+                        data: ai2_bytes.clone(),
+                    })
+                    .await;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -832,6 +920,7 @@ mod tests {
             .send(MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: None,
             })
             .await
             .unwrap();
@@ -872,6 +961,7 @@ mod tests {
             .send(MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: None,
             })
             .await
             .unwrap();
@@ -920,6 +1010,7 @@ mod tests {
             .send(MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: None,
             })
             .await
             .unwrap();
@@ -1005,6 +1096,7 @@ mod tests {
             .send(MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: None,
             })
             .await
             .unwrap();
@@ -1061,6 +1153,7 @@ mod tests {
             .send(MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: None,
             })
             .await
             .unwrap();
@@ -1151,6 +1244,7 @@ mod tests {
             .send(MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: None,
             })
             .await
             .unwrap();
@@ -1213,6 +1307,7 @@ mod tests {
             .send(MuxActorCommand::RegisterRadio {
                 meta,
                 response: resp_tx,
+                cmd_tx: None,
             })
             .await
             .unwrap();
@@ -1275,6 +1370,249 @@ mod tests {
             amp_rx2.try_recv().is_err(),
             "Should not have cached state after reconnect"
         );
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_amp_id_query_responds_with_ts990s() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Connect an amplifier using the helper (no radio needed for ID query)
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+
+        // Drain the amp connected event
+        let _ = event_rx.recv().await;
+
+        // Send an ID query from the amp (ID;)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"ID;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        // Should get AmpDataIn followed by AmpDataOut with ID022 response
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                // Should be ID022; (TS-990S)
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "ID022;", "Expected ID022; response, got: {}", s);
+                break;
+            }
+        }
+
+        // Verify amp received the response
+        let amp_data = amp_rx.recv().await.unwrap();
+        let s = String::from_utf8_lossy(&amp_data);
+        assert_eq!(s, "ID022;");
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_amp_cb_query_defaults_to_main() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Send a CB query from the amp (CB;)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"CB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        // Should get CB0; response (default to main)
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "CB0;", "Expected CB0; response, got: {}", s);
+                break;
+            }
+        }
+
+        let amp_data = amp_rx.recv().await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&amp_data), "CB0;");
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_amp_tb_query_defaults_to_main() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Send a TB query from the amp (TB;)
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"TB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        // Should get TB0; response (default to main)
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "TB0;", "Expected TB0; response, got: {}", s);
+                break;
+            }
+        }
+
+        let amp_data = amp_rx.recv().await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&amp_data), "TB0;");
+
+        cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
+        actor_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cb_tb_cached_from_active_radio() {
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+
+        let actor_handle = tokio::spawn(run_mux_actor(cmd_rx, event_tx));
+
+        // Register a radio
+        let meta =
+            RadioChannelMeta::new_virtual("Test".to_string(), "sim".to_string(), Protocol::Kenwood);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        cmd_tx
+            .send(MuxActorCommand::RegisterRadio {
+                meta,
+                response: resp_tx,
+                cmd_tx: None,
+            })
+            .await
+            .unwrap();
+        let handle = resp_rx.await.unwrap();
+        let _ = event_rx.recv().await; // Drain connected event
+
+        // Connect an amplifier
+        let (amp_channel, _resp_tx, mut amp_rx) =
+            create_virtual_amp_channel(Protocol::Kenwood, None, 16);
+        cmd_tx
+            .send(MuxActorCommand::ConnectAmplifier {
+                channel: amp_channel,
+            })
+            .await
+            .unwrap();
+        let _ = event_rx.recv().await;
+
+        // Set frequency to make the radio active
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        while event_rx.try_recv().is_ok() {}
+
+        // Radio reports CB1 (Sub band selected)
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::ControlBandReport { band: 1 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Radio reports TB1 (Sub band for TX)
+        cmd_tx
+            .send(MuxActorCommand::RadioCommand {
+                handle,
+                command: RadioCommand::TransmitBandReport { band: 1 },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Now amp queries CB; - should get CB1;
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"CB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "CB1;", "Expected CB1; response, got: {}", s);
+                break;
+            }
+        }
+
+        // Verify amp received CB1
+        let amp_data = amp_rx.recv().await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&amp_data), "CB1;");
+
+        // Amp queries TB; - should get TB1;
+        cmd_tx
+            .send(MuxActorCommand::AmpRawData {
+                data: b"TB;".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if let MuxEvent::AmpDataOut { data, .. } = event {
+                let s = String::from_utf8_lossy(&data);
+                assert_eq!(s, "TB1;", "Expected TB1; response, got: {}", s);
+                break;
+            }
+        }
+
+        let amp_data = amp_rx.recv().await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&amp_data), "TB1;");
 
         cmd_tx.send(MuxActorCommand::Shutdown).await.unwrap();
         actor_handle.await.unwrap();
