@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "cat-desktop"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "cat-detect",
  "cat-mux",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "cat-detect"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "cat-protocol",
  "serialport",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "cat-mux"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "cat-detect",
  "cat-protocol",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "cat-protocol"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "proptest",
  "serde",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "cat-sim"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "cat-protocol",
  "proptest",
