@@ -10,7 +10,7 @@ use std::io;
 use std::time::Duration;
 
 use cat_protocol::{
-    create_radio_codec, EncodeCommand, FromRadioCommand, OperatingMode, Protocol, RadioCommand,
+    create_radio_codec, EncodeCommand, FromRadioRequest, OperatingMode, Protocol, RadioRequest,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
@@ -84,12 +84,12 @@ where
     let polling_enabled = mode == VirtualAmpMode::Polling;
     let mut poll_timer: Interval = interval(Duration::from_millis(POLLING_INTERVAL_MS));
 
-    // Send auto-info enable command if in AutoInfo mode
+    // Send auto-info enable request if in AutoInfo mode
     if mode == VirtualAmpMode::AutoInfo {
-        if let Some(ai_cmd) = encode_query(
+        if let Some(ai_cmd) = encode_request(
             amp.protocol(),
             amp.civ_address(),
-            &RadioCommand::EnableAutoInfo { enabled: true },
+            &RadioRequest::SetAutoInfo { enabled: true },
         ) {
             debug!(
                 "Virtual amp {} sending auto-info enable: {:02X?}",
@@ -129,10 +129,10 @@ where
                             amp.id(), n, data
                         );
 
-                        // Parse bytes into commands using the codec
+                        // Parse bytes into responses using the codec
                         codec.push_bytes(data);
-                        while let Some(cmd) = codec.next_command() {
-                            debug!("Virtual amplifier {} processing command: {:?}", amp.id(), cmd);
+                        while let Some(resp) = codec.next_response() {
+                            debug!("Virtual amplifier {} processing response: {:?}", amp.id(), resp);
                         }
 
                         // Process raw bytes directly through the virtual amplifier
@@ -174,7 +174,7 @@ where
             // Polling timer - send frequency query when enabled
             _ = poll_timer.tick(), if polling_enabled => {
                 // Amps only care about frequency for band switching
-                if let Some(encoded) = encode_query(amp.protocol(), amp.civ_address(), &RadioCommand::GetFrequency) {
+                if let Some(encoded) = encode_request(amp.protocol(), amp.civ_address(), &RadioRequest::GetFrequency) {
                     debug!(
                         "Virtual amp {} polling frequency: {:02X?}",
                         amp.id(), encoded
@@ -193,21 +193,21 @@ where
     Ok(())
 }
 
-/// Encode a query command for the given protocol
-fn encode_query(
+/// Encode a request for the given protocol
+fn encode_request(
     protocol: Protocol,
     civ_address: Option<u8>,
-    query: &RadioCommand,
+    request: &RadioRequest,
 ) -> Option<Vec<u8>> {
     use cat_protocol::icom::CivCommand;
     use cat_protocol::kenwood::KenwoodCommand;
 
     match protocol {
         Protocol::Kenwood | Protocol::Elecraft => {
-            Some(KenwoodCommand::from_radio_command(query)?.encode())
+            Some(KenwoodCommand::from_radio_request(request)?.encode())
         }
         Protocol::IcomCIV => {
-            let civ_cmd = CivCommand::from_radio_command(query)?;
+            let civ_cmd = CivCommand::from_radio_request(request)?;
             let to_addr = 0xE0; // Controller/radio address
             let from_addr = civ_address.unwrap_or(0x00); // Amp's CI-V address
             Some(CivCommand::new(to_addr, from_addr, civ_cmd.command).encode())

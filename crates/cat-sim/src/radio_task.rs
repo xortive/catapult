@@ -70,11 +70,11 @@ where
                             radio.id(), n, data
                         );
 
-                        // Parse bytes into commands using the codec
+                        // Parse bytes into requests using the codec
                         codec.push_bytes(data);
-                        while let Some(cmd) = codec.next_command() {
-                            debug!("Virtual radio {} processing command: {:?}", radio.id(), cmd);
-                            radio.handle_command(&cmd);
+                        while let Some(req) = codec.next_request() {
+                            debug!("Virtual radio {} processing request: {:?}", radio.id(), req);
+                            radio.handle_request(&req);
                         }
 
                         // Write any pending output (responses) to the stream

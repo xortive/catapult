@@ -12,9 +12,12 @@
 //! - `IC;` - Icon status
 //! - Extended parameter ranges and additional commands
 
-use crate::command::{OperatingMode, RadioCommand, Vfo};
+use crate::command::{OperatingMode, RadioRequest, RadioResponse, Vfo};
 use crate::kenwood::{KenwoodCodec, KenwoodCommand};
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
+use crate::{
+    EncodeCommand, FromRadioRequest, FromRadioResponse, ProtocolCodec, ToRadioRequest,
+    ToRadioResponse,
+};
 
 /// Elecraft-specific commands (in addition to Kenwood base)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,51 +151,97 @@ impl ProtocolCodec for ElecraftCodec {
     }
 }
 
-impl ToRadioCommand for ElecraftCommand {
-    fn to_radio_command(&self) -> RadioCommand {
+impl ToRadioResponse for ElecraftCommand {
+    fn to_radio_response(&self) -> RadioResponse {
         match self {
-            ElecraftCommand::Kenwood(kw) => kw.to_radio_command(),
-            ElecraftCommand::K2Id(Some(id)) => RadioCommand::IdReport {
+            ElecraftCommand::Kenwood(kw) => kw.to_radio_response(),
+            ElecraftCommand::K2Id(Some(id)) => RadioResponse::Id {
                 id: format!("K2:{}", id),
             },
-            ElecraftCommand::K2Id(None) => RadioCommand::GetId,
-            ElecraftCommand::K3Id(Some(id)) => RadioCommand::IdReport {
+            ElecraftCommand::K2Id(None) => RadioResponse::Unknown { data: vec![] },
+            ElecraftCommand::K3Id(Some(id)) => RadioResponse::Id {
                 id: format!("K3:{}", id),
             },
-            ElecraftCommand::K3Id(None) => RadioCommand::GetId,
-            ElecraftCommand::KxId(Some(id)) => RadioCommand::IdReport {
+            ElecraftCommand::K3Id(None) => RadioResponse::Unknown { data: vec![] },
+            ElecraftCommand::KxId(Some(id)) => RadioResponse::Id {
                 id: format!("KX:{}", id),
             },
-            ElecraftCommand::KxId(None) => RadioCommand::GetId,
-            ElecraftCommand::Display(Some(s)) => RadioCommand::Unknown {
+            ElecraftCommand::KxId(None) => RadioResponse::Unknown { data: vec![] },
+            ElecraftCommand::Display(Some(s)) => RadioResponse::Unknown {
                 data: s.as_bytes().to_vec(),
             },
-            ElecraftCommand::Display(None) => RadioCommand::GetStatus,
-            ElecraftCommand::VfoAInfo(Some(info)) => RadioCommand::StatusReport {
+            ElecraftCommand::Display(None) => RadioResponse::Unknown { data: vec![] },
+            ElecraftCommand::VfoAInfo(Some(info)) => RadioResponse::Status {
                 frequency_hz: Some(info.frequency_hz),
                 mode: Some(info.mode),
                 ptt: None,
                 vfo: Some(Vfo::A),
             },
-            ElecraftCommand::VfoBInfo(Some(info)) => RadioCommand::StatusReport {
+            ElecraftCommand::VfoBInfo(Some(info)) => RadioResponse::Status {
                 frequency_hz: Some(info.frequency_hz),
                 mode: Some(info.mode),
                 ptt: None,
                 vfo: Some(Vfo::B),
             },
-            _ => RadioCommand::Unknown { data: vec![] },
+            _ => RadioResponse::Unknown { data: vec![] },
         }
     }
 }
 
-impl FromRadioCommand for ElecraftCommand {
-    fn from_radio_command(cmd: &RadioCommand) -> Option<Self> {
+impl ToRadioRequest for ElecraftCommand {
+    fn to_radio_request(&self) -> RadioRequest {
+        match self {
+            ElecraftCommand::Kenwood(kw) => kw.to_radio_request(),
+            ElecraftCommand::K2Id(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            ElecraftCommand::K2Id(None) => RadioRequest::GetId,
+            ElecraftCommand::K3Id(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            ElecraftCommand::K3Id(None) => RadioRequest::GetId,
+            ElecraftCommand::KxId(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            ElecraftCommand::KxId(None) => RadioRequest::GetId,
+            ElecraftCommand::Display(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            ElecraftCommand::Display(None) => RadioRequest::GetStatus,
+            ElecraftCommand::VfoAInfo(Some(info)) => RadioRequest::SetFrequency {
+                hz: info.frequency_hz,
+            },
+            ElecraftCommand::VfoBInfo(Some(info)) => RadioRequest::SetFrequency {
+                hz: info.frequency_hz,
+            },
+            ElecraftCommand::VfoAInfo(None) => RadioRequest::GetStatus,
+            ElecraftCommand::VfoBInfo(None) => RadioRequest::GetStatus,
+            _ => RadioRequest::Unknown { data: vec![] },
+        }
+    }
+}
+
+impl FromRadioRequest for ElecraftCommand {
+    fn from_radio_request(req: &RadioRequest) -> Option<Self> {
         // First try Elecraft-specific mappings
-        match cmd {
-            RadioCommand::GetId => Some(ElecraftCommand::K3Id(None)),
+        match req {
+            RadioRequest::GetId => Some(ElecraftCommand::K3Id(None)),
             _ => {
                 // Fall back to Kenwood
-                KenwoodCommand::from_radio_command(cmd).map(ElecraftCommand::Kenwood)
+                KenwoodCommand::from_radio_request(req).map(ElecraftCommand::Kenwood)
+            }
+        }
+    }
+}
+
+impl FromRadioResponse for ElecraftCommand {
+    fn from_radio_response(resp: &RadioResponse) -> Option<Self> {
+        // First try Elecraft-specific mappings
+        match resp {
+            RadioResponse::Id { id } if id.starts_with("K3:") => Some(ElecraftCommand::K3Id(Some(
+                id.strip_prefix("K3:").unwrap().to_string(),
+            ))),
+            RadioResponse::Id { id } if id.starts_with("K2:") => Some(ElecraftCommand::K2Id(Some(
+                id.strip_prefix("K2:").unwrap().to_string(),
+            ))),
+            RadioResponse::Id { id } if id.starts_with("KX:") => Some(ElecraftCommand::KxId(Some(
+                id.strip_prefix("KX:").unwrap().to_string(),
+            ))),
+            _ => {
+                // Fall back to Kenwood
+                KenwoodCommand::from_radio_response(resp).map(ElecraftCommand::Kenwood)
             }
         }
     }
@@ -340,9 +389,62 @@ mod tests {
     }
 
     #[test]
-    fn test_to_radio_command() {
+    fn test_to_radio_response() {
         let cmd = ElecraftCommand::Kenwood(KenwoodCommand::FrequencyA(Some(7_074_000)));
-        let radio_cmd = cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
+        let response = cmd.to_radio_response();
+        assert_eq!(response, RadioResponse::Frequency { hz: 7_074_000 });
+    }
+
+    #[test]
+    fn test_to_radio_request() {
+        let cmd = ElecraftCommand::K3Id(None);
+        let request = cmd.to_radio_request();
+        assert_eq!(request, RadioRequest::GetId);
+
+        let cmd = ElecraftCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000)));
+        let request = cmd.to_radio_request();
+        assert_eq!(request, RadioRequest::SetFrequency { hz: 14_250_000 });
+    }
+
+    #[test]
+    fn test_from_radio_request() {
+        let req = RadioRequest::GetId;
+        let cmd = ElecraftCommand::from_radio_request(&req).unwrap();
+        assert_eq!(cmd, ElecraftCommand::K3Id(None));
+
+        let req = RadioRequest::SetFrequency { hz: 14_250_000 };
+        let cmd = ElecraftCommand::from_radio_request(&req).unwrap();
+        assert_eq!(
+            cmd,
+            ElecraftCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000)))
+        );
+    }
+
+    #[test]
+    fn test_from_radio_response() {
+        let resp = RadioResponse::Id {
+            id: "K3:123".to_string(),
+        };
+        let cmd = ElecraftCommand::from_radio_response(&resp).unwrap();
+        assert_eq!(cmd, ElecraftCommand::K3Id(Some("123".to_string())));
+
+        let resp = RadioResponse::Frequency { hz: 7_074_000 };
+        let cmd = ElecraftCommand::from_radio_response(&resp).unwrap();
+        assert_eq!(
+            cmd,
+            ElecraftCommand::Kenwood(KenwoodCommand::FrequencyA(Some(7_074_000)))
+        );
+    }
+
+    #[test]
+    fn test_k3_id_response() {
+        let cmd = ElecraftCommand::K3Id(Some("123".to_string()));
+        let response = cmd.to_radio_response();
+        assert_eq!(
+            response,
+            RadioResponse::Id {
+                id: "K3:123".to_string()
+            }
+        );
     }
 }

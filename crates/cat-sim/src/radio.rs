@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use cat_protocol::{
     elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
-    yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand,
-    OperatingMode, Protocol, RadioCommand, RadioDatabase, RadioModel,
+    yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioResponse,
+    OperatingMode, Protocol, RadioDatabase, RadioModel, RadioRequest, RadioResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -193,13 +193,13 @@ impl VirtualRadio {
         self.frequency_hz
     }
 
-    /// Set the frequency and queue a protocol-encoded command if auto-info is enabled
+    /// Set the frequency and queue a protocol-encoded response if auto-info is enabled
     pub fn set_frequency(&mut self, hz: u64) {
         if self.frequency_hz != hz {
             self.frequency_hz = hz;
             self.last_change = Instant::now();
             if self.auto_info_enabled {
-                self.queue_command(RadioCommand::FrequencyReport { hz });
+                self.queue_response(RadioResponse::Frequency { hz });
             }
         }
     }
@@ -209,13 +209,13 @@ impl VirtualRadio {
         self.mode
     }
 
-    /// Set the operating mode and queue a protocol-encoded command if auto-info is enabled
+    /// Set the operating mode and queue a protocol-encoded response if auto-info is enabled
     pub fn set_mode(&mut self, mode: OperatingMode) {
         if self.mode != mode {
             self.mode = mode;
             self.last_change = Instant::now();
             if self.auto_info_enabled {
-                self.queue_command(RadioCommand::ModeReport { mode });
+                self.queue_response(RadioResponse::Mode { mode });
             }
         }
     }
@@ -225,13 +225,13 @@ impl VirtualRadio {
         self.ptt
     }
 
-    /// Set the PTT state and queue a protocol-encoded command if auto-info is enabled
+    /// Set the PTT state and queue a protocol-encoded response if auto-info is enabled
     pub fn set_ptt(&mut self, active: bool) {
         if self.ptt != active {
             self.ptt = active;
             self.last_change = Instant::now();
             if self.auto_info_enabled {
-                self.queue_command(RadioCommand::PttReport { active });
+                self.queue_response(RadioResponse::Ptt { active });
             }
         }
     }
@@ -257,7 +257,7 @@ impl VirtualRadio {
         if self.auto_info_enabled != enabled {
             self.auto_info_enabled = enabled;
             // Send confirmation response
-            self.queue_command(RadioCommand::AutoInfoReport { enabled });
+            self.queue_response(RadioResponse::AutoInfo { enabled });
         }
     }
 
@@ -266,28 +266,28 @@ impl VirtualRadio {
         self.last_change
     }
 
-    /// Queue a RadioCommand, encoding it to the appropriate protocol
-    pub fn queue_command(&mut self, cmd: RadioCommand) {
-        if let Some(encoded) = self.encode_command(&cmd) {
+    /// Queue a RadioResponse, encoding it to the appropriate protocol
+    pub fn queue_response(&mut self, resp: RadioResponse) {
+        if let Some(encoded) = self.encode_response(&resp) {
             self.pending_output.push_back(encoded);
         }
     }
 
     /// Send a full status report
     pub fn send_status_report(&mut self) {
-        let cmd = RadioCommand::StatusReport {
+        let resp = RadioResponse::Status {
             frequency_hz: Some(self.frequency_hz),
             mode: Some(self.mode),
             ptt: Some(self.ptt),
             vfo: None,
         };
-        self.queue_command(cmd);
+        self.queue_response(resp);
     }
 
     /// Send an ID response based on the current model
     pub fn send_id_response(&mut self) {
         let id = self.get_id_string();
-        self.queue_command(RadioCommand::IdReport { id });
+        self.queue_response(RadioResponse::Id { id });
     }
 
     /// Get the ID string based on the current model and protocol
@@ -334,21 +334,23 @@ impl VirtualRadio {
         self.pending_output.len()
     }
 
-    /// Encode a RadioCommand to protocol bytes
-    pub fn encode_command(&self, cmd: &RadioCommand) -> Option<Vec<u8>> {
+    /// Encode a RadioResponse to protocol bytes
+    pub fn encode_response(&self, resp: &RadioResponse) -> Option<Vec<u8>> {
         match self.protocol {
-            Protocol::Kenwood => KenwoodCommand::from_radio_command(cmd).map(|c| c.encode()),
-            Protocol::Elecraft => ElecraftCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::Kenwood => KenwoodCommand::from_radio_response(resp).map(|c| c.encode()),
+            Protocol::Elecraft => ElecraftCommand::from_radio_response(resp).map(|c| c.encode()),
             Protocol::IcomCIV => {
-                CivCommand::from_radio_command(cmd).map(|c| {
+                CivCommand::from_radio_response(resp).map(|c| {
                     // For Icom, set proper addresses
                     let addr = self.civ_address.unwrap_or(0x94); // Default to IC-7300
                     CivCommand::new(0xE0, addr, c.command).encode()
                 })
             }
-            Protocol::Yaesu => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
-            Protocol::YaesuAscii => YaesuAsciiCommand::from_radio_command(cmd).map(|c| c.encode()),
-            Protocol::FlexRadio => FlexCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::Yaesu => YaesuCommand::from_radio_response(resp).map(|c| c.encode()),
+            Protocol::YaesuAscii => {
+                YaesuAsciiCommand::from_radio_response(resp).map(|c| c.encode())
+            }
+            Protocol::FlexRadio => FlexCommand::from_radio_response(resp).map(|c| c.encode()),
         }
     }
 
@@ -375,63 +377,63 @@ impl VirtualRadio {
         )
     }
 
-    /// Handle an incoming RadioCommand and generate appropriate responses
-    /// Returns true if the command was handled
-    pub fn handle_command(&mut self, cmd: &RadioCommand) -> bool {
-        match cmd {
-            RadioCommand::SetFrequency { hz } => {
+    /// Handle an incoming RadioRequest and generate appropriate responses
+    /// Returns true if the request was handled
+    pub fn handle_request(&mut self, req: &RadioRequest) -> bool {
+        match req {
+            RadioRequest::SetFrequency { hz } => {
                 self.frequency_hz = *hz;
                 self.last_change = Instant::now();
                 if self.auto_info_enabled {
-                    self.queue_command(RadioCommand::FrequencyReport { hz: *hz });
+                    self.queue_response(RadioResponse::Frequency { hz: *hz });
                 }
                 true
             }
-            RadioCommand::GetFrequency => {
-                self.queue_command(RadioCommand::FrequencyReport {
+            RadioRequest::GetFrequency => {
+                self.queue_response(RadioResponse::Frequency {
                     hz: self.frequency_hz,
                 });
                 true
             }
-            RadioCommand::SetMode { mode } => {
+            RadioRequest::SetMode { mode } => {
                 self.mode = *mode;
                 self.last_change = Instant::now();
                 if self.auto_info_enabled {
-                    self.queue_command(RadioCommand::ModeReport { mode: *mode });
+                    self.queue_response(RadioResponse::Mode { mode: *mode });
                 }
                 true
             }
-            RadioCommand::GetMode => {
-                self.queue_command(RadioCommand::ModeReport { mode: self.mode });
+            RadioRequest::GetMode => {
+                self.queue_response(RadioResponse::Mode { mode: self.mode });
                 true
             }
-            RadioCommand::SetPtt { active } => {
+            RadioRequest::SetPtt { active } => {
                 self.ptt = *active;
                 self.last_change = Instant::now();
                 if self.auto_info_enabled {
-                    self.queue_command(RadioCommand::PttReport { active: *active });
+                    self.queue_response(RadioResponse::Ptt { active: *active });
                 }
                 true
             }
-            RadioCommand::GetPtt => {
-                self.queue_command(RadioCommand::PttReport { active: self.ptt });
+            RadioRequest::GetPtt => {
+                self.queue_response(RadioResponse::Ptt { active: self.ptt });
                 true
             }
-            RadioCommand::GetId => {
+            RadioRequest::GetId => {
                 self.send_id_response();
                 true
             }
-            RadioCommand::GetStatus => {
+            RadioRequest::GetStatus => {
                 self.send_status_report();
                 true
             }
-            RadioCommand::EnableAutoInfo { enabled } => {
+            RadioRequest::SetAutoInfo { enabled } => {
                 self.auto_info_enabled = *enabled;
-                self.queue_command(RadioCommand::AutoInfoReport { enabled: *enabled });
+                self.queue_response(RadioResponse::AutoInfo { enabled: *enabled });
                 true
             }
-            RadioCommand::GetAutoInfo => {
-                self.queue_command(RadioCommand::AutoInfoReport {
+            RadioRequest::GetAutoInfo => {
+                self.queue_response(RadioResponse::AutoInfo {
                     enabled: self.auto_info_enabled,
                 });
                 true
@@ -551,20 +553,20 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_enable_auto_info_command() {
+    fn test_handle_set_auto_info_request() {
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
 
-        let handled = radio.handle_command(&RadioCommand::EnableAutoInfo { enabled: true });
+        let handled = radio.handle_request(&RadioRequest::SetAutoInfo { enabled: true });
         assert!(handled);
         assert!(radio.auto_info_enabled());
         assert!(radio.has_output());
     }
 
     #[test]
-    fn test_handle_get_frequency_command() {
+    fn test_handle_get_frequency_request() {
         let mut radio = VirtualRadio::new("Test", Protocol::Kenwood);
 
-        let handled = radio.handle_command(&RadioCommand::GetFrequency);
+        let handled = radio.handle_request(&RadioRequest::GetFrequency);
         assert!(handled);
         assert!(radio.has_output());
 

@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use cat_protocol::{
     elecraft::ElecraftCommand, flex::FlexCommand, icom::CivCommand, kenwood::KenwoodCommand,
-    yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioCommand, Protocol,
-    RadioCommand, RadioDatabase,
+    yaesu::YaesuCommand, yaesu_ascii::YaesuAsciiCommand, EncodeCommand, FromRadioRequest, Protocol,
+    RadioDatabase, RadioRequest,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc as tokio_mpsc;
@@ -127,15 +127,15 @@ where
         self.civ_address = Some(addr);
     }
 
-    /// Encode a command for the ID query
-    fn encode_id_command(&self) -> Option<Vec<u8>> {
-        let id_cmd = RadioCommand::GetId;
+    /// Encode a request for the ID query
+    fn encode_id_request(&self) -> Option<Vec<u8>> {
+        let id_req = RadioRequest::GetId;
         match self.protocol {
-            Protocol::Kenwood => KenwoodCommand::from_radio_command(&id_cmd).map(|c| c.encode()),
-            Protocol::Elecraft => ElecraftCommand::from_radio_command(&id_cmd).map(|c| c.encode()),
-            Protocol::FlexRadio => FlexCommand::from_radio_command(&id_cmd).map(|c| c.encode()),
+            Protocol::Kenwood => KenwoodCommand::from_radio_request(&id_req).map(|c| c.encode()),
+            Protocol::Elecraft => ElecraftCommand::from_radio_request(&id_req).map(|c| c.encode()),
+            Protocol::FlexRadio => FlexCommand::from_radio_request(&id_req).map(|c| c.encode()),
             Protocol::YaesuAscii => {
-                YaesuAsciiCommand::from_radio_command(&id_cmd).map(|c| c.encode())
+                YaesuAsciiCommand::from_radio_request(&id_req).map(|c| c.encode())
             }
             Protocol::IcomCIV | Protocol::Yaesu => {
                 // Icom and legacy Yaesu don't use ASCII ID command
@@ -144,20 +144,20 @@ where
         }
     }
 
-    /// Encode a RadioCommand to protocol-specific bytes
-    fn encode_radio_command(&self, cmd: &RadioCommand) -> Option<Vec<u8>> {
+    /// Encode a RadioRequest to protocol-specific bytes
+    fn encode_radio_request(&self, req: &RadioRequest) -> Option<Vec<u8>> {
         match self.protocol {
-            Protocol::Kenwood => KenwoodCommand::from_radio_command(cmd).map(|c| c.encode()),
-            Protocol::Elecraft => ElecraftCommand::from_radio_command(cmd).map(|c| c.encode()),
-            Protocol::FlexRadio => FlexCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::Kenwood => KenwoodCommand::from_radio_request(req).map(|c| c.encode()),
+            Protocol::Elecraft => ElecraftCommand::from_radio_request(req).map(|c| c.encode()),
+            Protocol::FlexRadio => FlexCommand::from_radio_request(req).map(|c| c.encode()),
             Protocol::IcomCIV => {
                 let addr = self.civ_address.unwrap_or(0x94);
-                CivCommand::from_radio_command(cmd).map(|c| {
+                CivCommand::from_radio_request(req).map(|c| {
                     CivCommand::new(cat_protocol::icom::CONTROLLER_ADDR, addr, c.command).encode()
                 })
             }
-            Protocol::Yaesu => YaesuCommand::from_radio_command(cmd).map(|c| c.encode()),
-            Protocol::YaesuAscii => YaesuAsciiCommand::from_radio_command(cmd).map(|c| c.encode()),
+            Protocol::Yaesu => YaesuCommand::from_radio_request(req).map(|c| c.encode()),
+            Protocol::YaesuAscii => YaesuAsciiCommand::from_radio_request(req).map(|c| c.encode()),
         }
     }
 
@@ -214,7 +214,7 @@ where
 
     /// Query the radio's ID and return the model name if identified
     pub async fn query_id(&mut self) -> Option<String> {
-        let id_cmd = self.encode_id_command()?;
+        let id_cmd = self.encode_id_request()?;
 
         debug!(
             "Querying ID on radio {:?} with protocol {:?}",
@@ -256,7 +256,7 @@ where
     /// Query the radio's current frequency and mode
     pub async fn query_initial_state(&mut self) -> Result<(), std::io::Error> {
         // Query frequency
-        if let Some(data) = self.encode_radio_command(&RadioCommand::GetFrequency) {
+        if let Some(data) = self.encode_radio_request(&RadioRequest::GetFrequency) {
             debug!(
                 "Querying frequency on radio {:?} with protocol {:?}",
                 self.handle, self.protocol
@@ -265,7 +265,7 @@ where
         }
 
         // Query mode
-        if let Some(data) = self.encode_radio_command(&RadioCommand::GetMode) {
+        if let Some(data) = self.encode_radio_request(&RadioRequest::GetMode) {
             debug!(
                 "Querying mode on radio {:?} with protocol {:?}",
                 self.handle, self.protocol
@@ -278,8 +278,8 @@ where
 
     /// Enable auto-information mode on the radio
     pub async fn enable_auto_info(&mut self) -> Result<(), std::io::Error> {
-        let cmd = RadioCommand::EnableAutoInfo { enabled: true };
-        if let Some(data) = self.encode_radio_command(&cmd) {
+        let req = RadioRequest::SetAutoInfo { enabled: true };
+        if let Some(data) = self.encode_radio_request(&req) {
             debug!(
                 "Enabling auto-info on radio {:?} with protocol {:?}",
                 self.handle, self.protocol
@@ -390,7 +390,7 @@ where
                     // Only poll if we've been idle for the threshold duration
                     if last_activity.elapsed() >= IDLE_THRESHOLD {
                         // Send frequency query to poll the radio
-                        if let Some(data) = self.encode_radio_command(&RadioCommand::GetFrequency) {
+                        if let Some(data) = self.encode_radio_request(&RadioRequest::GetFrequency) {
                             debug!("Idle polling frequency for radio {:?}", self.handle);
                             if let Err(e) = self.write(&data).await {
                                 warn!("Failed to send poll query to {:?}: {}", self.handle, e);

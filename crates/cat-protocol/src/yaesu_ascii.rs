@@ -13,9 +13,12 @@
 //! - [FT-991A CAT Manual](https://yaesu.com/Files/4CB893D7-1018-01AF-FA97E9E9AD48B50C/FT-991A_CAT_OM_ENG_1711-D.pdf)
 //! - [FTDX-10 CAT Manual](https://www.yaesu.com/Files/4CB893D7-1018-01AF-FA97E9E9AD48B50C/FTDX10_CAT_OM_ENG_2308-F.pdf)
 
-use crate::command::{OperatingMode, RadioCommand, Vfo};
+use crate::command::{OperatingMode, RadioRequest, RadioResponse, Vfo};
 use crate::error::ParseError;
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
+use crate::{
+    EncodeCommand, FromRadioRequest, FromRadioResponse, ProtocolCodec, ToRadioRequest,
+    ToRadioResponse,
+};
 
 /// Maximum command length (reasonable limit to prevent buffer overflow)
 const MAX_COMMAND_LEN: usize = 64;
@@ -377,105 +380,168 @@ impl ProtocolCodec for YaesuAsciiCodec {
     }
 }
 
-impl ToRadioCommand for YaesuAsciiCommand {
-    fn to_radio_command(&self) -> RadioCommand {
+impl ToRadioResponse for YaesuAsciiCommand {
+    fn to_radio_response(&self) -> RadioResponse {
         match self {
-            YaesuAsciiCommand::FrequencyA(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
-            YaesuAsciiCommand::FrequencyA(None) => RadioCommand::GetFrequency,
-            YaesuAsciiCommand::FrequencyB(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
-            YaesuAsciiCommand::FrequencyB(None) => RadioCommand::GetFrequency,
+            YaesuAsciiCommand::FrequencyA(Some(hz)) => RadioResponse::Frequency { hz: *hz },
+            YaesuAsciiCommand::FrequencyA(None) => RadioResponse::Unknown { data: vec![] },
+            YaesuAsciiCommand::FrequencyB(Some(hz)) => RadioResponse::Frequency { hz: *hz },
+            YaesuAsciiCommand::FrequencyB(None) => RadioResponse::Unknown { data: vec![] },
             YaesuAsciiCommand::Mode {
                 mode: Some(m),
                 receiver: _,
-            } => RadioCommand::SetMode {
+            } => RadioResponse::Mode {
                 mode: yaesu_mode_to_operating_mode(*m),
             },
             YaesuAsciiCommand::Mode {
                 mode: None,
                 receiver: _,
-            } => RadioCommand::GetMode,
-            YaesuAsciiCommand::Transmit(Some(tx)) => RadioCommand::SetPtt { active: *tx != 0 },
-            YaesuAsciiCommand::Transmit(None) => RadioCommand::GetPtt,
-            YaesuAsciiCommand::Id(Some(id)) => RadioCommand::IdReport { id: id.clone() },
-            YaesuAsciiCommand::Id(None) => RadioCommand::GetId,
-            YaesuAsciiCommand::Info(Some(info)) => RadioCommand::StatusReport {
+            } => RadioResponse::Unknown { data: vec![] },
+            YaesuAsciiCommand::Transmit(Some(tx)) => RadioResponse::Ptt { active: *tx != 0 },
+            YaesuAsciiCommand::Transmit(None) => RadioResponse::Unknown { data: vec![] },
+            YaesuAsciiCommand::Id(Some(id)) => RadioResponse::Id { id: id.clone() },
+            YaesuAsciiCommand::Id(None) => RadioResponse::Unknown { data: vec![] },
+            YaesuAsciiCommand::Info(Some(info)) => RadioResponse::Status {
                 frequency_hz: Some(info.frequency_hz),
                 mode: Some(yaesu_mode_to_operating_mode(info.mode)),
                 ptt: Some(info.tx),
                 vfo: Some(if info.vfo_memory == 0 { Vfo::A } else { Vfo::B }),
             },
-            YaesuAsciiCommand::Info(None) => RadioCommand::GetStatus,
-            YaesuAsciiCommand::VfoSelect(Some(v)) => RadioCommand::SetVfo {
+            YaesuAsciiCommand::Info(None) => RadioResponse::Unknown { data: vec![] },
+            YaesuAsciiCommand::VfoSelect(Some(v)) => RadioResponse::Vfo {
                 vfo: if *v == 0 { Vfo::A } else { Vfo::B },
             },
-            YaesuAsciiCommand::VfoSelect(None) => RadioCommand::GetVfo,
-            YaesuAsciiCommand::Split(Some(s)) => RadioCommand::SetVfo {
+            YaesuAsciiCommand::VfoSelect(None) => RadioResponse::Unknown { data: vec![] },
+            YaesuAsciiCommand::Split(Some(s)) => RadioResponse::Vfo {
                 vfo: if *s { Vfo::Split } else { Vfo::A },
             },
-            YaesuAsciiCommand::Split(None) => RadioCommand::GetVfo,
-            YaesuAsciiCommand::Power(Some(on)) => RadioCommand::SetPower { on: *on },
-            YaesuAsciiCommand::Power(None) => RadioCommand::Unknown { data: vec![] },
+            YaesuAsciiCommand::Split(None) => RadioResponse::Unknown { data: vec![] },
+            YaesuAsciiCommand::Power(_) => RadioResponse::Unknown { data: vec![] },
             YaesuAsciiCommand::AutoInfo(Some(enabled)) => {
-                RadioCommand::EnableAutoInfo { enabled: *enabled }
+                RadioResponse::AutoInfo { enabled: *enabled }
             }
-            YaesuAsciiCommand::AutoInfo(None) => RadioCommand::GetAutoInfo,
+            YaesuAsciiCommand::AutoInfo(None) => RadioResponse::Unknown { data: vec![] },
             YaesuAsciiCommand::SMeter(_) | YaesuAsciiCommand::RfPower(_) => {
-                RadioCommand::Unknown { data: vec![] }
+                RadioResponse::Unknown { data: vec![] }
             }
-            YaesuAsciiCommand::Unknown(s) => RadioCommand::Unknown {
+            YaesuAsciiCommand::Unknown(s) => RadioResponse::Unknown {
                 data: s.as_bytes().to_vec(),
             },
         }
     }
 }
 
-impl FromRadioCommand for YaesuAsciiCommand {
-    fn from_radio_command(cmd: &RadioCommand) -> Option<Self> {
-        match cmd {
-            RadioCommand::SetFrequency { hz } => Some(YaesuAsciiCommand::FrequencyA(Some(*hz))),
-            RadioCommand::GetFrequency => Some(YaesuAsciiCommand::FrequencyA(None)),
-            RadioCommand::FrequencyReport { hz } => Some(YaesuAsciiCommand::FrequencyA(Some(*hz))),
-            RadioCommand::SetMode { mode } => Some(YaesuAsciiCommand::Mode {
+impl ToRadioRequest for YaesuAsciiCommand {
+    fn to_radio_request(&self) -> RadioRequest {
+        match self {
+            YaesuAsciiCommand::FrequencyA(Some(hz)) => RadioRequest::SetFrequency { hz: *hz },
+            YaesuAsciiCommand::FrequencyA(None) => RadioRequest::GetFrequency,
+            YaesuAsciiCommand::FrequencyB(Some(hz)) => RadioRequest::SetFrequency { hz: *hz },
+            YaesuAsciiCommand::FrequencyB(None) => RadioRequest::GetFrequency,
+            YaesuAsciiCommand::Mode {
+                mode: Some(m),
+                receiver: _,
+            } => RadioRequest::SetMode {
+                mode: yaesu_mode_to_operating_mode(*m),
+            },
+            YaesuAsciiCommand::Mode {
+                mode: None,
+                receiver: _,
+            } => RadioRequest::GetMode,
+            YaesuAsciiCommand::Transmit(Some(tx)) => RadioRequest::SetPtt { active: *tx != 0 },
+            YaesuAsciiCommand::Transmit(None) => RadioRequest::GetPtt,
+            YaesuAsciiCommand::Id(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            YaesuAsciiCommand::Id(None) => RadioRequest::GetId,
+            YaesuAsciiCommand::Info(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            YaesuAsciiCommand::Info(None) => RadioRequest::GetStatus,
+            YaesuAsciiCommand::VfoSelect(Some(v)) => RadioRequest::SetVfo {
+                vfo: if *v == 0 { Vfo::A } else { Vfo::B },
+            },
+            YaesuAsciiCommand::VfoSelect(None) => RadioRequest::GetVfo,
+            YaesuAsciiCommand::Split(Some(s)) => RadioRequest::SetVfo {
+                vfo: if *s { Vfo::Split } else { Vfo::A },
+            },
+            YaesuAsciiCommand::Split(None) => RadioRequest::GetVfo,
+            YaesuAsciiCommand::Power(Some(on)) => RadioRequest::SetPower { on: *on },
+            YaesuAsciiCommand::Power(None) => RadioRequest::Unknown { data: vec![] },
+            YaesuAsciiCommand::AutoInfo(Some(enabled)) => {
+                RadioRequest::SetAutoInfo { enabled: *enabled }
+            }
+            YaesuAsciiCommand::AutoInfo(None) => RadioRequest::GetAutoInfo,
+            YaesuAsciiCommand::SMeter(_) | YaesuAsciiCommand::RfPower(_) => {
+                RadioRequest::Unknown { data: vec![] }
+            }
+            YaesuAsciiCommand::Unknown(s) => RadioRequest::Unknown {
+                data: s.as_bytes().to_vec(),
+            },
+        }
+    }
+}
+
+impl FromRadioRequest for YaesuAsciiCommand {
+    fn from_radio_request(req: &RadioRequest) -> Option<Self> {
+        match req {
+            RadioRequest::SetFrequency { hz } => Some(YaesuAsciiCommand::FrequencyA(Some(*hz))),
+            RadioRequest::GetFrequency => Some(YaesuAsciiCommand::FrequencyA(None)),
+            RadioRequest::SetMode { mode } => Some(YaesuAsciiCommand::Mode {
                 receiver: 0,
                 mode: Some(operating_mode_to_yaesu(*mode)),
             }),
-            RadioCommand::GetMode => Some(YaesuAsciiCommand::Mode {
+            RadioRequest::GetMode => Some(YaesuAsciiCommand::Mode {
                 receiver: 0,
                 mode: None,
             }),
-            RadioCommand::ModeReport { mode } => Some(YaesuAsciiCommand::Mode {
-                receiver: 0,
-                mode: Some(operating_mode_to_yaesu(*mode)),
-            }),
-            RadioCommand::SetPtt { active: true } => Some(YaesuAsciiCommand::Transmit(Some(1))),
-            RadioCommand::SetPtt { active: false } => Some(YaesuAsciiCommand::Transmit(Some(0))),
-            RadioCommand::GetPtt => Some(YaesuAsciiCommand::Transmit(None)),
-            RadioCommand::PttReport { active } => {
-                Some(YaesuAsciiCommand::Transmit(Some(if *active {
-                    1
-                } else {
-                    0
-                })))
-            }
-            RadioCommand::SetVfo { vfo } => match vfo {
+            RadioRequest::SetPtt { active: true } => Some(YaesuAsciiCommand::Transmit(Some(1))),
+            RadioRequest::SetPtt { active: false } => Some(YaesuAsciiCommand::Transmit(Some(0))),
+            RadioRequest::GetPtt => Some(YaesuAsciiCommand::Transmit(None)),
+            RadioRequest::SetVfo { vfo } => match vfo {
                 Vfo::A => Some(YaesuAsciiCommand::VfoSelect(Some(0))),
                 Vfo::B => Some(YaesuAsciiCommand::VfoSelect(Some(1))),
                 Vfo::Split => Some(YaesuAsciiCommand::Split(Some(true))),
                 Vfo::Memory => Some(YaesuAsciiCommand::VfoSelect(Some(0))),
             },
-            RadioCommand::GetVfo => Some(YaesuAsciiCommand::VfoSelect(None)),
-            RadioCommand::GetId => Some(YaesuAsciiCommand::Id(None)),
-            RadioCommand::IdReport { id } => Some(YaesuAsciiCommand::Id(Some(id.clone()))),
-            RadioCommand::GetStatus => Some(YaesuAsciiCommand::Info(None)),
-            RadioCommand::SetPower { on } => Some(YaesuAsciiCommand::Power(Some(*on))),
-            RadioCommand::EnableAutoInfo { enabled } => {
+            RadioRequest::GetVfo => Some(YaesuAsciiCommand::VfoSelect(None)),
+            RadioRequest::GetId => Some(YaesuAsciiCommand::Id(None)),
+            RadioRequest::GetStatus => Some(YaesuAsciiCommand::Info(None)),
+            RadioRequest::SetPower { on } => Some(YaesuAsciiCommand::Power(Some(*on))),
+            RadioRequest::SetAutoInfo { enabled } => {
                 Some(YaesuAsciiCommand::AutoInfo(Some(*enabled)))
             }
-            RadioCommand::GetAutoInfo => Some(YaesuAsciiCommand::AutoInfo(None)),
-            RadioCommand::AutoInfoReport { enabled } => {
+            RadioRequest::GetAutoInfo => Some(YaesuAsciiCommand::AutoInfo(None)),
+            RadioRequest::GetControlBand | RadioRequest::GetTransmitBand => None,
+            RadioRequest::Unknown { .. } => None,
+        }
+    }
+}
+
+impl FromRadioResponse for YaesuAsciiCommand {
+    fn from_radio_response(resp: &RadioResponse) -> Option<Self> {
+        match resp {
+            RadioResponse::Frequency { hz } => Some(YaesuAsciiCommand::FrequencyA(Some(*hz))),
+            RadioResponse::Mode { mode } => Some(YaesuAsciiCommand::Mode {
+                receiver: 0,
+                mode: Some(operating_mode_to_yaesu(*mode)),
+            }),
+            RadioResponse::Ptt { active } => Some(YaesuAsciiCommand::Transmit(Some(if *active {
+                1
+            } else {
+                0
+            }))),
+            RadioResponse::Vfo { vfo } => match vfo {
+                Vfo::A => Some(YaesuAsciiCommand::VfoSelect(Some(0))),
+                Vfo::B => Some(YaesuAsciiCommand::VfoSelect(Some(1))),
+                Vfo::Split => Some(YaesuAsciiCommand::Split(Some(true))),
+                Vfo::Memory => Some(YaesuAsciiCommand::VfoSelect(Some(0))),
+            },
+            RadioResponse::Id { id } => Some(YaesuAsciiCommand::Id(Some(id.clone()))),
+            RadioResponse::Status { frequency_hz, .. } => {
+                frequency_hz.map(|hz| YaesuAsciiCommand::FrequencyA(Some(hz)))
+            }
+            RadioResponse::AutoInfo { enabled } => {
                 Some(YaesuAsciiCommand::AutoInfo(Some(*enabled)))
             }
-            _ => None,
+            RadioResponse::ControlBand { .. } | RadioResponse::TransmitBand { .. } => None,
+            RadioResponse::Unknown { .. } => None,
         }
     }
 }
@@ -659,7 +725,10 @@ mod tests {
     use super::{
         is_known_yaesu_ascii_id, is_valid_id_response, YaesuAsciiCodec, YaesuAsciiCommand,
     };
-    use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCommand, ToRadioCommand};
+    use crate::{
+        EncodeCommand, FromRadioRequest, FromRadioResponse, ProtocolCodec, RadioRequest,
+        RadioResponse, ToRadioRequest, ToRadioResponse,
+    };
 
     #[test]
     fn test_parse_frequency() {
@@ -777,17 +846,31 @@ mod tests {
     }
 
     #[test]
-    fn test_to_radio_command() {
+    fn test_to_radio_response() {
         let cmd = YaesuAsciiCommand::FrequencyA(Some(7_074_000));
-        let radio_cmd = cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
+        let response = cmd.to_radio_response();
+        assert_eq!(response, RadioResponse::Frequency { hz: 7_074_000 });
     }
 
     #[test]
-    fn test_from_radio_command() {
-        let radio_cmd = RadioCommand::SetFrequency { hz: 14_250_000 };
-        let cmd = YaesuAsciiCommand::from_radio_command(&radio_cmd).unwrap();
+    fn test_to_radio_request() {
+        let cmd = YaesuAsciiCommand::FrequencyA(None);
+        let request = cmd.to_radio_request();
+        assert_eq!(request, RadioRequest::GetFrequency);
+    }
+
+    #[test]
+    fn test_from_radio_request() {
+        let req = RadioRequest::SetFrequency { hz: 14_250_000 };
+        let cmd = YaesuAsciiCommand::from_radio_request(&req).unwrap();
         assert_eq!(cmd, YaesuAsciiCommand::FrequencyA(Some(14_250_000)));
+    }
+
+    #[test]
+    fn test_from_radio_response() {
+        let resp = RadioResponse::Frequency { hz: 7_074_000 };
+        let cmd = YaesuAsciiCommand::from_radio_response(&resp).unwrap();
+        assert_eq!(cmd, YaesuAsciiCommand::FrequencyA(Some(7_074_000)));
     }
 
     #[test]
@@ -798,8 +881,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, YaesuAsciiCommand::AutoInfo(Some(true)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::EnableAutoInfo { enabled: true }
+            cmd.to_radio_response(),
+            RadioResponse::AutoInfo { enabled: true }
         );
     }
 

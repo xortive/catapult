@@ -17,9 +17,12 @@
 //! - `ID` - Radio identification
 //! - `IF` - Information (status)
 
-use crate::command::{OperatingMode, RadioCommand, Vfo};
+use crate::command::{OperatingMode, RadioRequest, RadioResponse, Vfo};
 use crate::error::ParseError;
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
+use crate::{
+    EncodeCommand, FromRadioRequest, FromRadioResponse, ProtocolCodec, ToRadioRequest,
+    ToRadioResponse,
+};
 
 /// Maximum command length (reasonable limit to prevent buffer overflow)
 const MAX_COMMAND_LEN: usize = 64;
@@ -326,102 +329,150 @@ impl ProtocolCodec for KenwoodCodec {
     }
 }
 
-impl ToRadioCommand for KenwoodCommand {
-    fn to_radio_command(&self) -> RadioCommand {
+impl ToRadioResponse for KenwoodCommand {
+    fn to_radio_response(&self) -> RadioResponse {
         match self {
-            KenwoodCommand::FrequencyA(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
-            KenwoodCommand::FrequencyA(None) => RadioCommand::GetFrequency,
-            KenwoodCommand::FrequencyB(Some(hz)) => RadioCommand::FrequencyReport { hz: *hz },
-            KenwoodCommand::FrequencyB(None) => RadioCommand::GetFrequency,
-            KenwoodCommand::Mode(Some(m)) => RadioCommand::SetMode {
+            KenwoodCommand::FrequencyA(Some(hz)) => RadioResponse::Frequency { hz: *hz },
+            KenwoodCommand::FrequencyA(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::FrequencyB(Some(hz)) => RadioResponse::Frequency { hz: *hz },
+            KenwoodCommand::FrequencyB(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::Mode(Some(m)) => RadioResponse::Mode {
                 mode: kenwood_mode_to_operating_mode(*m),
             },
-            KenwoodCommand::Mode(None) => RadioCommand::GetMode,
-            KenwoodCommand::Transmit(Some(tx)) => RadioCommand::SetPtt { active: *tx },
-            KenwoodCommand::Transmit(None) => RadioCommand::GetPtt,
-            KenwoodCommand::Receive => RadioCommand::SetPtt { active: false },
-            KenwoodCommand::Id(Some(id)) => RadioCommand::IdReport { id: id.clone() },
-            KenwoodCommand::Id(None) => RadioCommand::GetId,
-            KenwoodCommand::Info(Some(info)) => RadioCommand::StatusReport {
+            KenwoodCommand::Mode(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::Transmit(Some(tx)) => RadioResponse::Ptt { active: *tx },
+            KenwoodCommand::Transmit(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::Receive => RadioResponse::Ptt { active: false },
+            KenwoodCommand::Id(Some(id)) => RadioResponse::Id { id: id.clone() },
+            KenwoodCommand::Id(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::Info(Some(info)) => RadioResponse::Status {
                 frequency_hz: Some(info.frequency_hz),
                 mode: Some(kenwood_mode_to_operating_mode(info.mode)),
                 ptt: Some(info.tx),
                 vfo: Some(if info.vfo == 0 { Vfo::A } else { Vfo::B }),
             },
-            KenwoodCommand::Info(None) => RadioCommand::GetStatus,
-            KenwoodCommand::VfoSelect(Some(v)) => RadioCommand::SetVfo {
+            KenwoodCommand::Info(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::VfoSelect(Some(v)) => RadioResponse::Vfo {
                 vfo: if *v == 0 { Vfo::A } else { Vfo::B },
             },
-            KenwoodCommand::VfoSelect(None) => RadioCommand::GetVfo,
-            KenwoodCommand::Split(Some(s)) => RadioCommand::SetVfo {
+            KenwoodCommand::VfoSelect(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::Split(Some(s)) => RadioResponse::Vfo {
                 vfo: if *s { Vfo::Split } else { Vfo::A },
             },
-            KenwoodCommand::Split(None) => RadioCommand::GetVfo,
-            KenwoodCommand::Power(Some(on)) => RadioCommand::SetPower { on: *on },
-            KenwoodCommand::Power(None) => RadioCommand::Unknown { data: vec![] },
+            KenwoodCommand::Split(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::Power(_) => RadioResponse::Unknown { data: vec![] },
             KenwoodCommand::AutoInfo(Some(enabled)) => {
-                RadioCommand::EnableAutoInfo { enabled: *enabled }
+                RadioResponse::AutoInfo { enabled: *enabled }
             }
-            KenwoodCommand::AutoInfo(None) => RadioCommand::GetAutoInfo,
-            KenwoodCommand::ControlBand(Some(band)) => {
-                RadioCommand::ControlBandReport { band: *band }
-            }
-            KenwoodCommand::ControlBand(None) => RadioCommand::GetControlBand,
-            KenwoodCommand::TransmitBand(Some(band)) => {
-                RadioCommand::TransmitBandReport { band: *band }
-            }
-            KenwoodCommand::TransmitBand(None) => RadioCommand::GetTransmitBand,
-            KenwoodCommand::Unknown(s) => RadioCommand::Unknown {
+            KenwoodCommand::AutoInfo(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::ControlBand(Some(band)) => RadioResponse::ControlBand { band: *band },
+            KenwoodCommand::ControlBand(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::TransmitBand(Some(band)) => RadioResponse::TransmitBand { band: *band },
+            KenwoodCommand::TransmitBand(None) => RadioResponse::Unknown { data: vec![] },
+            KenwoodCommand::Unknown(s) => RadioResponse::Unknown {
                 data: s.as_bytes().to_vec(),
             },
         }
     }
 }
 
-impl FromRadioCommand for KenwoodCommand {
-    fn from_radio_command(cmd: &RadioCommand) -> Option<Self> {
-        match cmd {
-            RadioCommand::SetFrequency { hz } => Some(KenwoodCommand::FrequencyA(Some(*hz))),
-            RadioCommand::GetFrequency => Some(KenwoodCommand::FrequencyA(None)),
-            RadioCommand::FrequencyReport { hz } => Some(KenwoodCommand::FrequencyA(Some(*hz))),
-            RadioCommand::SetMode { mode } => {
+impl ToRadioRequest for KenwoodCommand {
+    fn to_radio_request(&self) -> RadioRequest {
+        match self {
+            KenwoodCommand::FrequencyA(Some(hz)) => RadioRequest::SetFrequency { hz: *hz },
+            KenwoodCommand::FrequencyA(None) => RadioRequest::GetFrequency,
+            KenwoodCommand::FrequencyB(Some(hz)) => RadioRequest::SetFrequency { hz: *hz },
+            KenwoodCommand::FrequencyB(None) => RadioRequest::GetFrequency,
+            KenwoodCommand::Mode(Some(m)) => RadioRequest::SetMode {
+                mode: kenwood_mode_to_operating_mode(*m),
+            },
+            KenwoodCommand::Mode(None) => RadioRequest::GetMode,
+            KenwoodCommand::Transmit(Some(tx)) => RadioRequest::SetPtt { active: *tx },
+            KenwoodCommand::Transmit(None) => RadioRequest::GetPtt,
+            KenwoodCommand::Receive => RadioRequest::SetPtt { active: false },
+            KenwoodCommand::Id(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            KenwoodCommand::Id(None) => RadioRequest::GetId,
+            KenwoodCommand::Info(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            KenwoodCommand::Info(None) => RadioRequest::GetStatus,
+            KenwoodCommand::VfoSelect(Some(v)) => RadioRequest::SetVfo {
+                vfo: if *v == 0 { Vfo::A } else { Vfo::B },
+            },
+            KenwoodCommand::VfoSelect(None) => RadioRequest::GetVfo,
+            KenwoodCommand::Split(Some(s)) => RadioRequest::SetVfo {
+                vfo: if *s { Vfo::Split } else { Vfo::A },
+            },
+            KenwoodCommand::Split(None) => RadioRequest::GetVfo,
+            KenwoodCommand::Power(Some(on)) => RadioRequest::SetPower { on: *on },
+            KenwoodCommand::Power(None) => RadioRequest::Unknown { data: vec![] },
+            KenwoodCommand::AutoInfo(Some(enabled)) => {
+                RadioRequest::SetAutoInfo { enabled: *enabled }
+            }
+            KenwoodCommand::AutoInfo(None) => RadioRequest::GetAutoInfo,
+            KenwoodCommand::ControlBand(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            KenwoodCommand::ControlBand(None) => RadioRequest::GetControlBand,
+            KenwoodCommand::TransmitBand(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            KenwoodCommand::TransmitBand(None) => RadioRequest::GetTransmitBand,
+            KenwoodCommand::Unknown(s) => RadioRequest::Unknown {
+                data: s.as_bytes().to_vec(),
+            },
+        }
+    }
+}
+
+impl FromRadioRequest for KenwoodCommand {
+    fn from_radio_request(req: &RadioRequest) -> Option<Self> {
+        match req {
+            RadioRequest::SetFrequency { hz } => Some(KenwoodCommand::FrequencyA(Some(*hz))),
+            RadioRequest::GetFrequency => Some(KenwoodCommand::FrequencyA(None)),
+            RadioRequest::SetMode { mode } => {
                 Some(KenwoodCommand::Mode(Some(operating_mode_to_kenwood(*mode))))
             }
-            RadioCommand::GetMode => Some(KenwoodCommand::Mode(None)),
-            RadioCommand::ModeReport { mode } => {
-                Some(KenwoodCommand::Mode(Some(operating_mode_to_kenwood(*mode))))
-            }
-            RadioCommand::SetPtt { active: true } => Some(KenwoodCommand::Transmit(Some(true))),
-            RadioCommand::SetPtt { active: false } => Some(KenwoodCommand::Receive),
-            RadioCommand::GetPtt => Some(KenwoodCommand::Transmit(None)),
-            RadioCommand::PttReport { active } => Some(KenwoodCommand::Transmit(Some(*active))),
-            RadioCommand::SetVfo { vfo } => match vfo {
+            RadioRequest::GetMode => Some(KenwoodCommand::Mode(None)),
+            RadioRequest::SetPtt { active: true } => Some(KenwoodCommand::Transmit(Some(true))),
+            RadioRequest::SetPtt { active: false } => Some(KenwoodCommand::Receive),
+            RadioRequest::GetPtt => Some(KenwoodCommand::Transmit(None)),
+            RadioRequest::SetVfo { vfo } => match vfo {
                 Vfo::A => Some(KenwoodCommand::VfoSelect(Some(0))),
                 Vfo::B => Some(KenwoodCommand::VfoSelect(Some(1))),
                 Vfo::Split => Some(KenwoodCommand::Split(Some(true))),
                 Vfo::Memory => Some(KenwoodCommand::VfoSelect(Some(2))),
             },
-            RadioCommand::GetVfo => Some(KenwoodCommand::VfoSelect(None)),
-            RadioCommand::GetId => Some(KenwoodCommand::Id(None)),
-            RadioCommand::IdReport { id } => Some(KenwoodCommand::Id(Some(id.clone()))),
-            RadioCommand::GetStatus => Some(KenwoodCommand::Info(None)),
-            RadioCommand::SetPower { on } => Some(KenwoodCommand::Power(Some(*on))),
-            RadioCommand::EnableAutoInfo { enabled } => {
-                Some(KenwoodCommand::AutoInfo(Some(*enabled)))
+            RadioRequest::GetVfo => Some(KenwoodCommand::VfoSelect(None)),
+            RadioRequest::GetId => Some(KenwoodCommand::Id(None)),
+            RadioRequest::GetStatus => Some(KenwoodCommand::Info(None)),
+            RadioRequest::SetPower { on } => Some(KenwoodCommand::Power(Some(*on))),
+            RadioRequest::SetAutoInfo { enabled } => Some(KenwoodCommand::AutoInfo(Some(*enabled))),
+            RadioRequest::GetAutoInfo => Some(KenwoodCommand::AutoInfo(None)),
+            RadioRequest::GetControlBand => Some(KenwoodCommand::ControlBand(None)),
+            RadioRequest::GetTransmitBand => Some(KenwoodCommand::TransmitBand(None)),
+            RadioRequest::Unknown { .. } => None,
+        }
+    }
+}
+
+impl FromRadioResponse for KenwoodCommand {
+    fn from_radio_response(resp: &RadioResponse) -> Option<Self> {
+        match resp {
+            RadioResponse::Frequency { hz } => Some(KenwoodCommand::FrequencyA(Some(*hz))),
+            RadioResponse::Mode { mode } => {
+                Some(KenwoodCommand::Mode(Some(operating_mode_to_kenwood(*mode))))
             }
-            RadioCommand::GetAutoInfo => Some(KenwoodCommand::AutoInfo(None)),
-            RadioCommand::AutoInfoReport { enabled } => {
-                Some(KenwoodCommand::AutoInfo(Some(*enabled)))
+            RadioResponse::Ptt { active } => Some(KenwoodCommand::Transmit(Some(*active))),
+            RadioResponse::Vfo { vfo } => match vfo {
+                Vfo::A => Some(KenwoodCommand::VfoSelect(Some(0))),
+                Vfo::B => Some(KenwoodCommand::VfoSelect(Some(1))),
+                Vfo::Split => Some(KenwoodCommand::Split(Some(true))),
+                Vfo::Memory => Some(KenwoodCommand::VfoSelect(Some(2))),
+            },
+            RadioResponse::Id { id } => Some(KenwoodCommand::Id(Some(id.clone()))),
+            RadioResponse::Status { frequency_hz, .. } => {
+                // For status, we just send the frequency as the primary info
+                frequency_hz.map(|hz| KenwoodCommand::FrequencyA(Some(hz)))
             }
-            RadioCommand::GetControlBand => Some(KenwoodCommand::ControlBand(None)),
-            RadioCommand::ControlBandReport { band } => {
-                Some(KenwoodCommand::ControlBand(Some(*band)))
-            }
-            RadioCommand::GetTransmitBand => Some(KenwoodCommand::TransmitBand(None)),
-            RadioCommand::TransmitBandReport { band } => {
-                Some(KenwoodCommand::TransmitBand(Some(*band)))
-            }
-            _ => None,
+            RadioResponse::AutoInfo { enabled } => Some(KenwoodCommand::AutoInfo(Some(*enabled))),
+            RadioResponse::ControlBand { band } => Some(KenwoodCommand::ControlBand(Some(*band))),
+            RadioResponse::TransmitBand { band } => Some(KenwoodCommand::TransmitBand(Some(*band))),
+            RadioResponse::Unknown { .. } => None,
         }
     }
 }
@@ -517,7 +568,10 @@ crate::impl_radio_codec!(KenwoodCodec);
 #[cfg(test)]
 mod tests {
     use super::{KenwoodCodec, KenwoodCommand};
-    use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCommand, ToRadioCommand};
+    use crate::{
+        EncodeCommand, FromRadioRequest, FromRadioResponse, ProtocolCodec, RadioRequest,
+        RadioResponse, ToRadioRequest, ToRadioResponse,
+    };
 
     #[test]
     fn test_parse_frequency() {
@@ -585,17 +639,35 @@ mod tests {
     }
 
     #[test]
-    fn test_to_radio_command() {
+    fn test_to_radio_response() {
         let cmd = KenwoodCommand::FrequencyA(Some(7_074_000));
-        let radio_cmd = cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
+        let response = cmd.to_radio_response();
+        assert_eq!(response, RadioResponse::Frequency { hz: 7_074_000 });
     }
 
     #[test]
-    fn test_from_radio_command() {
-        let radio_cmd = RadioCommand::SetFrequency { hz: 14_250_000 };
-        let cmd = KenwoodCommand::from_radio_command(&radio_cmd).unwrap();
+    fn test_to_radio_request() {
+        let cmd = KenwoodCommand::FrequencyA(None);
+        let request = cmd.to_radio_request();
+        assert_eq!(request, RadioRequest::GetFrequency);
+
+        let cmd = KenwoodCommand::FrequencyA(Some(14_250_000));
+        let request = cmd.to_radio_request();
+        assert_eq!(request, RadioRequest::SetFrequency { hz: 14_250_000 });
+    }
+
+    #[test]
+    fn test_from_radio_request() {
+        let req = RadioRequest::SetFrequency { hz: 14_250_000 };
+        let cmd = KenwoodCommand::from_radio_request(&req).unwrap();
         assert_eq!(cmd, KenwoodCommand::FrequencyA(Some(14_250_000)));
+    }
+
+    #[test]
+    fn test_from_radio_response() {
+        let resp = RadioResponse::Frequency { hz: 7_074_000 };
+        let cmd = KenwoodCommand::from_radio_response(&resp).unwrap();
+        assert_eq!(cmd, KenwoodCommand::FrequencyA(Some(7_074_000)));
     }
 
     #[test]
@@ -605,7 +677,7 @@ mod tests {
 
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::AutoInfo(None));
-        assert_eq!(cmd.to_radio_command(), RadioCommand::GetAutoInfo);
+        assert_eq!(cmd.to_radio_request(), RadioRequest::GetAutoInfo);
     }
 
     #[test]
@@ -616,8 +688,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::AutoInfo(Some(true)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::EnableAutoInfo { enabled: true }
+            cmd.to_radio_response(),
+            RadioResponse::AutoInfo { enabled: true }
         );
     }
 
@@ -629,8 +701,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::AutoInfo(Some(false)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::EnableAutoInfo { enabled: false }
+            cmd.to_radio_response(),
+            RadioResponse::AutoInfo { enabled: false }
         );
     }
 
@@ -642,13 +714,12 @@ mod tests {
     }
 
     #[test]
-    fn test_from_radio_command_auto_info() {
-        let cmd =
-            KenwoodCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
-                .unwrap();
+    fn test_from_radio_request_auto_info() {
+        let cmd = KenwoodCommand::from_radio_request(&RadioRequest::SetAutoInfo { enabled: true })
+            .unwrap();
         assert_eq!(cmd, KenwoodCommand::AutoInfo(Some(true)));
 
-        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetAutoInfo).unwrap();
+        let cmd = KenwoodCommand::from_radio_request(&RadioRequest::GetAutoInfo).unwrap();
         assert_eq!(cmd, KenwoodCommand::AutoInfo(None));
     }
 
@@ -659,7 +730,7 @@ mod tests {
 
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::ControlBand(None));
-        assert_eq!(cmd.to_radio_command(), RadioCommand::GetControlBand);
+        assert_eq!(cmd.to_radio_request(), RadioRequest::GetControlBand);
     }
 
     #[test]
@@ -669,8 +740,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::ControlBand(Some(0)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::ControlBandReport { band: 0 }
+            cmd.to_radio_response(),
+            RadioResponse::ControlBand { band: 0 }
         );
 
         let mut codec = KenwoodCodec::new();
@@ -678,8 +749,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::ControlBand(Some(1)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::ControlBandReport { band: 1 }
+            cmd.to_radio_response(),
+            RadioResponse::ControlBand { band: 1 }
         );
     }
 
@@ -697,7 +768,7 @@ mod tests {
 
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::TransmitBand(None));
-        assert_eq!(cmd.to_radio_command(), RadioCommand::GetTransmitBand);
+        assert_eq!(cmd.to_radio_request(), RadioRequest::GetTransmitBand);
     }
 
     #[test]
@@ -707,8 +778,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::TransmitBand(Some(0)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::TransmitBandReport { band: 0 }
+            cmd.to_radio_response(),
+            RadioResponse::TransmitBand { band: 0 }
         );
 
         let mut codec = KenwoodCodec::new();
@@ -716,8 +787,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, KenwoodCommand::TransmitBand(Some(1)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::TransmitBandReport { band: 1 }
+            cmd.to_radio_response(),
+            RadioResponse::TransmitBand { band: 1 }
         );
     }
 
@@ -729,22 +800,28 @@ mod tests {
     }
 
     #[test]
-    fn test_from_radio_command_control_band() {
-        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetControlBand).unwrap();
+    fn test_from_radio_request_control_band() {
+        let cmd = KenwoodCommand::from_radio_request(&RadioRequest::GetControlBand).unwrap();
         assert_eq!(cmd, KenwoodCommand::ControlBand(None));
+    }
 
-        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::ControlBandReport { band: 1 })
-            .unwrap();
+    #[test]
+    fn test_from_radio_response_control_band() {
+        let cmd =
+            KenwoodCommand::from_radio_response(&RadioResponse::ControlBand { band: 1 }).unwrap();
         assert_eq!(cmd, KenwoodCommand::ControlBand(Some(1)));
     }
 
     #[test]
-    fn test_from_radio_command_transmit_band() {
-        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::GetTransmitBand).unwrap();
+    fn test_from_radio_request_transmit_band() {
+        let cmd = KenwoodCommand::from_radio_request(&RadioRequest::GetTransmitBand).unwrap();
         assert_eq!(cmd, KenwoodCommand::TransmitBand(None));
+    }
 
-        let cmd = KenwoodCommand::from_radio_command(&RadioCommand::TransmitBandReport { band: 1 })
-            .unwrap();
+    #[test]
+    fn test_from_radio_response_transmit_band() {
+        let cmd =
+            KenwoodCommand::from_radio_response(&RadioResponse::TransmitBand { band: 1 }).unwrap();
         assert_eq!(cmd, KenwoodCommand::TransmitBand(Some(1)));
     }
 }

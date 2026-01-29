@@ -20,9 +20,12 @@
 //! Frequencies are encoded in BCD (Binary Coded Decimal), little-endian.
 //! Example: 14.250.000 Hz = 00 00 25 41 00 (reversed: 00 14 25 00 00)
 
-use crate::command::{OperatingMode, RadioCommand, Vfo};
+use crate::command::{OperatingMode, RadioRequest, RadioResponse, Vfo};
 use crate::error::ParseError;
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
+use crate::{
+    EncodeCommand, FromRadioRequest, FromRadioResponse, ProtocolCodec, ToRadioRequest,
+    ToRadioResponse,
+};
 
 /// CI-V frame preamble byte
 pub const PREAMBLE: u8 = 0xFE;
@@ -375,36 +378,68 @@ impl ProtocolCodec for CivCodec {
     }
 }
 
-impl ToRadioCommand for CivCommand {
-    fn to_radio_command(&self) -> RadioCommand {
+impl ToRadioResponse for CivCommand {
+    fn to_radio_response(&self) -> RadioResponse {
         match &self.command {
-            CivCommandType::SetFrequency { hz } => RadioCommand::SetFrequency { hz: *hz },
-            CivCommandType::GetFrequency => RadioCommand::GetFrequency,
-            CivCommandType::FrequencyReport { hz } => RadioCommand::FrequencyReport { hz: *hz },
-            CivCommandType::SetMode { mode, .. } => RadioCommand::SetMode {
+            CivCommandType::SetFrequency { hz } => RadioResponse::Frequency { hz: *hz },
+            CivCommandType::GetFrequency => RadioResponse::Unknown { data: vec![] },
+            CivCommandType::FrequencyReport { hz } => RadioResponse::Frequency { hz: *hz },
+            CivCommandType::SetMode { mode, .. } => RadioResponse::Mode {
                 mode: civ_mode_to_operating_mode(*mode),
             },
-            CivCommandType::GetMode => RadioCommand::GetMode,
-            CivCommandType::ModeReport { mode, .. } => RadioCommand::ModeReport {
+            CivCommandType::GetMode => RadioResponse::Unknown { data: vec![] },
+            CivCommandType::ModeReport { mode, .. } => RadioResponse::Mode {
                 mode: civ_mode_to_operating_mode(*mode),
             },
-            CivCommandType::VfoSelect { vfo } => RadioCommand::SetVfo {
+            CivCommandType::VfoSelect { vfo } => RadioResponse::Vfo {
                 vfo: match vfo {
                     0x00 => Vfo::A,
                     0x01 => Vfo::B,
                     _ => Vfo::A,
                 },
             },
-            CivCommandType::SetPtt { on } => RadioCommand::SetPtt { active: *on },
-            CivCommandType::PttReport { on } => RadioCommand::PttReport { active: *on },
-            CivCommandType::Split { on } => RadioCommand::SetVfo {
+            CivCommandType::SetPtt { on } => RadioResponse::Ptt { active: *on },
+            CivCommandType::PttReport { on } => RadioResponse::Ptt { active: *on },
+            CivCommandType::Split { on } => RadioResponse::Vfo {
+                vfo: if *on { Vfo::Split } else { Vfo::A },
+            },
+            CivCommandType::Transceive { enabled } => RadioResponse::AutoInfo { enabled: *enabled },
+            CivCommandType::Ok | CivCommandType::Ng => RadioResponse::Unknown { data: vec![] },
+            CivCommandType::Unknown { cmd, data, .. } => RadioResponse::Unknown {
+                data: std::iter::once(*cmd).chain(data.iter().copied()).collect(),
+            },
+        }
+    }
+}
+
+impl ToRadioRequest for CivCommand {
+    fn to_radio_request(&self) -> RadioRequest {
+        match &self.command {
+            CivCommandType::SetFrequency { hz } => RadioRequest::SetFrequency { hz: *hz },
+            CivCommandType::GetFrequency => RadioRequest::GetFrequency,
+            CivCommandType::FrequencyReport { .. } => RadioRequest::Unknown { data: vec![] },
+            CivCommandType::SetMode { mode, .. } => RadioRequest::SetMode {
+                mode: civ_mode_to_operating_mode(*mode),
+            },
+            CivCommandType::GetMode => RadioRequest::GetMode,
+            CivCommandType::ModeReport { .. } => RadioRequest::Unknown { data: vec![] },
+            CivCommandType::VfoSelect { vfo } => RadioRequest::SetVfo {
+                vfo: match vfo {
+                    0x00 => Vfo::A,
+                    0x01 => Vfo::B,
+                    _ => Vfo::A,
+                },
+            },
+            CivCommandType::SetPtt { on } => RadioRequest::SetPtt { active: *on },
+            CivCommandType::PttReport { .. } => RadioRequest::Unknown { data: vec![] },
+            CivCommandType::Split { on } => RadioRequest::SetVfo {
                 vfo: if *on { Vfo::Split } else { Vfo::A },
             },
             CivCommandType::Transceive { enabled } => {
-                RadioCommand::EnableAutoInfo { enabled: *enabled }
+                RadioRequest::SetAutoInfo { enabled: *enabled }
             }
-            CivCommandType::Ok | CivCommandType::Ng => RadioCommand::Unknown { data: vec![] },
-            CivCommandType::Unknown { cmd, data, .. } => RadioCommand::Unknown {
+            CivCommandType::Ok | CivCommandType::Ng => RadioRequest::Unknown { data: vec![] },
+            CivCommandType::Unknown { cmd, data, .. } => RadioRequest::Unknown {
                 data: std::iter::once(*cmd).chain(data.iter().copied()).collect(),
             },
         }
@@ -432,39 +467,64 @@ impl CivCommand {
     }
 }
 
-impl FromRadioCommand for CivCommand {
-    fn from_radio_command(cmd: &RadioCommand) -> Option<Self> {
-        let civ_cmd = match cmd {
-            RadioCommand::SetFrequency { hz } => CivCommandType::SetFrequency { hz: *hz },
-            RadioCommand::GetFrequency => CivCommandType::GetFrequency,
-            RadioCommand::FrequencyReport { hz } => CivCommandType::FrequencyReport { hz: *hz },
-            RadioCommand::SetMode { mode } => CivCommandType::SetMode {
+impl FromRadioRequest for CivCommand {
+    fn from_radio_request(req: &RadioRequest) -> Option<Self> {
+        let civ_cmd = match req {
+            RadioRequest::SetFrequency { hz } => CivCommandType::SetFrequency { hz: *hz },
+            RadioRequest::GetFrequency => CivCommandType::GetFrequency,
+            RadioRequest::SetMode { mode } => CivCommandType::SetMode {
                 mode: operating_mode_to_civ(*mode),
                 filter: 1,
             },
-            RadioCommand::GetMode => CivCommandType::GetMode,
-            RadioCommand::ModeReport { mode } => CivCommandType::ModeReport {
-                mode: operating_mode_to_civ(*mode),
-                filter: 1,
-            },
-            RadioCommand::SetPtt { active } => CivCommandType::SetPtt { on: *active },
-            RadioCommand::PttReport { active } => CivCommandType::PttReport { on: *active },
-            RadioCommand::SetVfo { vfo } => match vfo {
+            RadioRequest::GetMode => CivCommandType::GetMode,
+            RadioRequest::SetPtt { active } => CivCommandType::SetPtt { on: *active },
+            RadioRequest::GetPtt => return None, // No direct query in CI-V
+            RadioRequest::SetVfo { vfo } => match vfo {
                 Vfo::Split => CivCommandType::Split { on: true },
                 Vfo::A => CivCommandType::VfoSelect { vfo: 0x00 },
                 Vfo::B => CivCommandType::VfoSelect { vfo: 0x01 },
                 Vfo::Memory => CivCommandType::VfoSelect { vfo: 0x02 },
             },
-            RadioCommand::EnableAutoInfo { enabled } => {
+            RadioRequest::GetVfo => return None, // No direct query in CI-V
+            RadioRequest::GetId => return None,
+            RadioRequest::GetStatus => return None,
+            RadioRequest::SetPower { .. } => return None,
+            RadioRequest::SetAutoInfo { enabled } => {
                 CivCommandType::Transceive { enabled: *enabled }
             }
-            RadioCommand::AutoInfoReport { enabled } => {
-                CivCommandType::Transceive { enabled: *enabled }
-            }
-            _ => return None,
+            RadioRequest::GetAutoInfo => return None,
+            RadioRequest::GetControlBand | RadioRequest::GetTransmitBand => return None,
+            RadioRequest::Unknown { .. } => return None,
         };
 
-        // Use broadcast address as placeholder - caller should set real address
+        Some(CivCommand::to_radio(BROADCAST_ADDR, civ_cmd))
+    }
+}
+
+impl FromRadioResponse for CivCommand {
+    fn from_radio_response(resp: &RadioResponse) -> Option<Self> {
+        let civ_cmd = match resp {
+            RadioResponse::Frequency { hz } => CivCommandType::FrequencyReport { hz: *hz },
+            RadioResponse::Mode { mode } => CivCommandType::ModeReport {
+                mode: operating_mode_to_civ(*mode),
+                filter: 1,
+            },
+            RadioResponse::Ptt { active } => CivCommandType::PttReport { on: *active },
+            RadioResponse::Vfo { vfo } => match vfo {
+                Vfo::Split => CivCommandType::Split { on: true },
+                Vfo::A => CivCommandType::VfoSelect { vfo: 0x00 },
+                Vfo::B => CivCommandType::VfoSelect { vfo: 0x01 },
+                Vfo::Memory => CivCommandType::VfoSelect { vfo: 0x02 },
+            },
+            RadioResponse::Id { .. } => return None,
+            RadioResponse::Status { frequency_hz, .. } => {
+                frequency_hz.map(|hz| CivCommandType::FrequencyReport { hz })?
+            }
+            RadioResponse::AutoInfo { enabled } => CivCommandType::Transceive { enabled: *enabled },
+            RadioResponse::ControlBand { .. } | RadioResponse::TransmitBand { .. } => return None,
+            RadioResponse::Unknown { .. } => return None,
+        };
+
         Some(CivCommand::to_radio(BROADCAST_ADDR, civ_cmd))
     }
 }
@@ -646,7 +706,10 @@ crate::impl_radio_codec!(CivCodec);
 #[cfg(test)]
 mod tests {
     use super::{bcd_to_frequency, frequency_to_bcd, CivCodec, CivCommand, CivCommandType};
-    use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, RadioCommand, ToRadioCommand};
+    use crate::{
+        EncodeCommand, FromRadioRequest, ProtocolCodec, RadioRequest, RadioResponse,
+        ToRadioResponse,
+    };
 
     #[test]
     fn test_bcd_to_frequency() {
@@ -724,11 +787,11 @@ mod tests {
     }
 
     #[test]
-    fn test_to_radio_command() {
+    fn test_to_radio_response() {
         let civ_cmd =
             CivCommand::from_radio(0x94, CivCommandType::FrequencyReport { hz: 7_074_000 });
-        let radio_cmd = civ_cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
+        let response = civ_cmd.to_radio_response();
+        assert_eq!(response, RadioResponse::Frequency { hz: 7_074_000 });
     }
 
     #[test]
@@ -745,8 +808,8 @@ mod tests {
             CivCommandType::Transceive { enabled: true }
         ));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::EnableAutoInfo { enabled: true }
+            cmd.to_radio_response(),
+            RadioResponse::AutoInfo { enabled: true }
         );
     }
 
@@ -782,10 +845,9 @@ mod tests {
     }
 
     #[test]
-    fn test_from_radio_command_transceive() {
+    fn test_from_radio_request_transceive() {
         let civ_cmd =
-            CivCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
-                .unwrap();
+            CivCommand::from_radio_request(&RadioRequest::SetAutoInfo { enabled: true }).unwrap();
         assert!(matches!(
             civ_cmd.command,
             CivCommandType::Transceive { enabled: true }

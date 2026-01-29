@@ -6,13 +6,13 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use cat_protocol::{Protocol, RadioCommand};
+use cat_protocol::{Protocol, RadioResponse};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info};
 
 use crate::error::MuxError;
 use crate::state::{AmplifierConfig, RadioHandle, RadioState, SwitchingMode};
-use crate::translation::{filter_for_amplifier, ProtocolTranslator, TranslationConfig};
+use crate::translation::{filter_response_for_amplifier, translate_response, TranslationConfig};
 
 /// Multiplexer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +48,6 @@ pub struct Multiplexer {
     next_handle: u32,
     active_radio: Option<RadioHandle>,
     lockout_until: Option<Instant>,
-    translator: ProtocolTranslator,
 }
 
 impl Multiplexer {
@@ -59,16 +58,12 @@ impl Multiplexer {
 
     /// Create with custom configuration
     pub fn with_config(config: MultiplexerConfig) -> Self {
-        let translator =
-            ProtocolTranslator::with_config(config.amplifier.protocol, config.translation.clone());
-
         Self {
             config,
             radios: HashMap::new(),
             next_handle: 1,
             active_radio: None,
             lockout_until: None,
-            translator,
         }
     }
 
@@ -79,8 +74,6 @@ impl Multiplexer {
 
     /// Update the configuration
     pub fn set_config(&mut self, config: MultiplexerConfig) {
-        self.translator =
-            ProtocolTranslator::with_config(config.amplifier.protocol, config.translation.clone());
         self.config = config;
     }
 
@@ -199,30 +192,30 @@ impl Multiplexer {
         }
     }
 
-    /// Process a command from a radio
+    /// Process a response from a radio
     ///
-    /// Returns the translated command to send to the amplifier (if any)
-    pub fn process_radio_command(
+    /// Returns the translated response to send to the amplifier (if any)
+    pub fn process_radio_response(
         &mut self,
         handle: RadioHandle,
-        cmd: RadioCommand,
+        response: &RadioResponse,
     ) -> Option<Vec<u8>> {
         // Capture old frequency before updating state
         let old_freq = self.radios.get(&handle).and_then(|r| r.frequency_hz);
 
-        // Update radio state
+        // Update radio state based on response
         if let Some(radio) = self.radios.get_mut(&handle) {
-            match &cmd {
-                RadioCommand::SetFrequency { hz } | RadioCommand::FrequencyReport { hz } => {
+            match response {
+                RadioResponse::Frequency { hz } => {
                     radio.set_frequency(*hz);
                 }
-                RadioCommand::SetMode { mode } | RadioCommand::ModeReport { mode } => {
+                RadioResponse::Mode { mode } => {
                     radio.set_mode(*mode);
                 }
-                RadioCommand::SetPtt { active } | RadioCommand::PttReport { active } => {
+                RadioResponse::Ptt { active } => {
                     radio.set_ptt(*active);
                 }
-                RadioCommand::StatusReport {
+                RadioResponse::Status {
                     frequency_hz,
                     mode,
                     ptt,
@@ -249,18 +242,18 @@ impl Multiplexer {
         let freq_changed = old_freq.is_some() && old_freq != new_freq;
 
         // Check if we should switch radios
-        self.check_auto_switch(handle, &cmd, freq_changed);
+        self.check_auto_switch(handle, response, freq_changed);
 
         // Only forward if this is the active radio
         if self.active_radio != Some(handle) {
-            debug!("Ignoring command from non-active radio {}", handle.0);
+            debug!("Ignoring response from non-active radio {}", handle.0);
             return None;
         }
 
         // Filter and translate for amplifier
-        let filtered = filter_for_amplifier(&cmd)?;
+        let filtered = filter_response_for_amplifier(response)?;
 
-        match self.translator.translate(&filtered) {
+        match translate_response(&filtered, self.config.amplifier.protocol) {
             Ok(bytes) => Some(bytes),
             Err(e) => {
                 error!("Translation failed: {}", e);
@@ -270,7 +263,12 @@ impl Multiplexer {
     }
 
     /// Check if we should automatically switch radios
-    fn check_auto_switch(&mut self, handle: RadioHandle, cmd: &RadioCommand, freq_changed: bool) {
+    fn check_auto_switch(
+        &mut self,
+        handle: RadioHandle,
+        response: &RadioResponse,
+        freq_changed: bool,
+    ) {
         // Don't switch to a radio that doesn't exist
         if !self.radios.contains_key(&handle) {
             return;
@@ -290,18 +288,12 @@ impl Multiplexer {
         let should_switch = match self.config.switching_mode {
             SwitchingMode::Manual => false,
             SwitchingMode::FrequencyTriggered => {
-                // SetFrequency always triggers switch (explicit command from radio)
-                // FrequencyReport only triggers switch if frequency actually changed
-                matches!(cmd, RadioCommand::SetFrequency { .. })
-                    || (matches!(cmd, RadioCommand::FrequencyReport { .. }) && freq_changed)
+                // Frequency response triggers switch if frequency actually changed
+                matches!(response, RadioResponse::Frequency { .. }) && freq_changed
             }
             SwitchingMode::Automatic => {
-                matches!(
-                    cmd,
-                    RadioCommand::SetPtt { active: true }
-                        | RadioCommand::PttReport { active: true }
-                ) || matches!(cmd, RadioCommand::SetFrequency { .. })
-                    || (matches!(cmd, RadioCommand::FrequencyReport { .. }) && freq_changed)
+                matches!(response, RadioResponse::Ptt { active: true })
+                    || (matches!(response, RadioResponse::Frequency { .. }) && freq_changed)
             }
         };
 
@@ -309,7 +301,7 @@ impl Multiplexer {
             debug!(
                 "Auto-switching to radio {} due to {:?}",
                 handle.0,
-                std::mem::discriminant(cmd)
+                std::mem::discriminant(response)
             );
             self.switch_to(handle);
         }
@@ -332,11 +324,6 @@ impl Multiplexer {
     pub fn set_amplifier_config(&mut self, config: AmplifierConfig) {
         // Update translation config with CI-V address from amplifier config
         self.config.translation.target_civ_address = config.civ_address;
-
-        // Recreate translator with updated config
-        self.translator =
-            ProtocolTranslator::with_config(config.protocol, self.config.translation.clone());
-
         self.config.amplifier = config;
     }
 
@@ -398,7 +385,7 @@ mod tests {
         assert_eq!(mux.active_radio(), Some(h1));
 
         // PTT from radio 2 should switch (Automatic mode includes PTT)
-        mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
+        mux.process_radio_response(h2, &RadioResponse::Ptt { active: true });
         assert_eq!(mux.active_radio(), Some(h2));
     }
 
@@ -407,20 +394,20 @@ mod tests {
         let mut mux = Multiplexer::new();
         let h1 = mux.add_radio("Radio 1".into(), "/dev/ttyUSB0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         let state = mux.get_radio(h1).unwrap();
         assert_eq!(state.frequency_hz, Some(14_250_000));
     }
 
     #[test]
-    fn test_command_translation() {
+    fn test_response_translation() {
         let mut mux = Multiplexer::new();
         mux.config.amplifier.protocol = Protocol::Kenwood;
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/ttyUSB0".into(), Protocol::Kenwood);
 
-        let result = mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        let result = mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         assert!(result.is_some());
         let bytes = result.unwrap();

@@ -41,9 +41,12 @@
 //! - 912 = FLEX-8400
 //! - 913 = FLEX-8600
 
-use crate::command::{OperatingMode, RadioCommand, Vfo};
+use crate::command::{OperatingMode, RadioRequest, RadioResponse, Vfo};
 use crate::kenwood::{KenwoodCodec, KenwoodCommand};
-use crate::{EncodeCommand, FromRadioCommand, ProtocolCodec, ToRadioCommand};
+use crate::{
+    EncodeCommand, FromRadioRequest, FromRadioResponse, ProtocolCodec, ToRadioRequest,
+    ToRadioResponse,
+};
 
 /// FlexRadio protocol command
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -445,56 +448,89 @@ impl ProtocolCodec for FlexCodec {
     }
 }
 
-impl ToRadioCommand for FlexCommand {
-    fn to_radio_command(&self) -> RadioCommand {
+impl ToRadioResponse for FlexCommand {
+    fn to_radio_response(&self) -> RadioResponse {
         match self {
-            FlexCommand::Kenwood(kw) => kw.to_radio_command(),
-            FlexCommand::Mode(Some(m)) => RadioCommand::SetMode {
+            FlexCommand::Kenwood(kw) => kw.to_radio_response(),
+            FlexCommand::Mode(Some(m)) => RadioResponse::Mode {
                 mode: m.to_operating_mode(),
             },
-            FlexCommand::Mode(None) => RadioCommand::GetMode,
-            FlexCommand::Info(Some(info)) => RadioCommand::StatusReport {
+            FlexCommand::Mode(None) => RadioResponse::Unknown { data: vec![] },
+            FlexCommand::Info(Some(info)) => RadioResponse::Status {
                 frequency_hz: Some(info.frequency_hz),
                 mode: Some(info.mode.to_operating_mode()),
                 ptt: Some(info.tx),
                 vfo: Some(if info.vfo == 0 { Vfo::A } else { Vfo::B }),
             },
-            FlexCommand::Info(None) => RadioCommand::GetStatus,
+            FlexCommand::Info(None) => RadioResponse::Unknown { data: vec![] },
             FlexCommand::AudioGain(_)
             | FlexCommand::RfPower(_)
             | FlexCommand::SMeter(_)
             | FlexCommand::AgcMode(_)
-            | FlexCommand::NoiseReduction(_) => RadioCommand::Unknown { data: vec![] },
-            FlexCommand::AutoInfo(Some(enabled)) => {
-                RadioCommand::EnableAutoInfo { enabled: *enabled }
-            }
-            FlexCommand::AutoInfo(None) => RadioCommand::GetAutoInfo,
-            FlexCommand::Unknown(s) => RadioCommand::Unknown {
+            | FlexCommand::NoiseReduction(_) => RadioResponse::Unknown { data: vec![] },
+            FlexCommand::AutoInfo(Some(enabled)) => RadioResponse::AutoInfo { enabled: *enabled },
+            FlexCommand::AutoInfo(None) => RadioResponse::Unknown { data: vec![] },
+            FlexCommand::Unknown(s) => RadioResponse::Unknown {
                 data: s.as_bytes().to_vec(),
             },
         }
     }
 }
 
-impl FromRadioCommand for FlexCommand {
-    fn from_radio_command(cmd: &RadioCommand) -> Option<Self> {
-        match cmd {
+impl ToRadioRequest for FlexCommand {
+    fn to_radio_request(&self) -> RadioRequest {
+        match self {
+            FlexCommand::Kenwood(kw) => kw.to_radio_request(),
+            FlexCommand::Mode(Some(m)) => RadioRequest::SetMode {
+                mode: m.to_operating_mode(),
+            },
+            FlexCommand::Mode(None) => RadioRequest::GetMode,
+            FlexCommand::Info(Some(_)) => RadioRequest::Unknown { data: vec![] },
+            FlexCommand::Info(None) => RadioRequest::GetStatus,
+            FlexCommand::AudioGain(_)
+            | FlexCommand::RfPower(_)
+            | FlexCommand::SMeter(_)
+            | FlexCommand::AgcMode(_)
+            | FlexCommand::NoiseReduction(_) => RadioRequest::Unknown { data: vec![] },
+            FlexCommand::AutoInfo(Some(enabled)) => RadioRequest::SetAutoInfo { enabled: *enabled },
+            FlexCommand::AutoInfo(None) => RadioRequest::GetAutoInfo,
+            FlexCommand::Unknown(s) => RadioRequest::Unknown {
+                data: s.as_bytes().to_vec(),
+            },
+        }
+    }
+}
+
+impl FromRadioRequest for FlexCommand {
+    fn from_radio_request(req: &RadioRequest) -> Option<Self> {
+        match req {
             // Mode uses FlexMode
-            RadioCommand::SetMode { mode } => Some(FlexCommand::Mode(Some(
+            RadioRequest::SetMode { mode } => Some(FlexCommand::Mode(Some(
                 FlexMode::from_operating_mode(*mode),
             ))),
-            RadioCommand::GetMode => Some(FlexCommand::Mode(None)),
-            RadioCommand::ModeReport { mode } => Some(FlexCommand::Mode(Some(
+            RadioRequest::GetMode => Some(FlexCommand::Mode(None)),
+            // AutoInfo uses Flex-specific encoding
+            RadioRequest::SetAutoInfo { enabled } => Some(FlexCommand::AutoInfo(Some(*enabled))),
+            RadioRequest::GetAutoInfo => Some(FlexCommand::AutoInfo(None)),
+            // Status uses FlexInfo
+            RadioRequest::GetStatus => Some(FlexCommand::Info(None)),
+            // Everything else delegates to Kenwood
+            _ => KenwoodCommand::from_radio_request(req).map(FlexCommand::Kenwood),
+        }
+    }
+}
+
+impl FromRadioResponse for FlexCommand {
+    fn from_radio_response(resp: &RadioResponse) -> Option<Self> {
+        match resp {
+            // Mode uses FlexMode
+            RadioResponse::Mode { mode } => Some(FlexCommand::Mode(Some(
                 FlexMode::from_operating_mode(*mode),
             ))),
             // AutoInfo uses Flex-specific encoding
-            RadioCommand::EnableAutoInfo { enabled } => Some(FlexCommand::AutoInfo(Some(*enabled))),
-            RadioCommand::GetAutoInfo => Some(FlexCommand::AutoInfo(None)),
-            RadioCommand::AutoInfoReport { enabled } => Some(FlexCommand::AutoInfo(Some(*enabled))),
-            // Status uses FlexInfo
-            RadioCommand::GetStatus => Some(FlexCommand::Info(None)),
+            RadioResponse::AutoInfo { enabled } => Some(FlexCommand::AutoInfo(Some(*enabled))),
             // Everything else delegates to Kenwood
-            _ => KenwoodCommand::from_radio_command(cmd).map(FlexCommand::Kenwood),
+            _ => KenwoodCommand::from_radio_response(resp).map(FlexCommand::Kenwood),
         }
     }
 }
@@ -694,16 +730,16 @@ mod tests {
     }
 
     #[test]
-    fn test_to_radio_command() {
+    fn test_to_radio_response() {
         let cmd = FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(7_074_000)));
-        let radio_cmd = cmd.to_radio_command();
-        assert_eq!(radio_cmd, RadioCommand::FrequencyReport { hz: 7_074_000 });
+        let response = cmd.to_radio_response();
+        assert_eq!(response, RadioResponse::Frequency { hz: 7_074_000 });
     }
 
     #[test]
-    fn test_from_radio_command() {
-        let radio_cmd = RadioCommand::SetFrequency { hz: 14_250_000 };
-        let cmd = FlexCommand::from_radio_command(&radio_cmd).unwrap();
+    fn test_from_radio_request() {
+        let req = RadioRequest::SetFrequency { hz: 14_250_000 };
+        let cmd = FlexCommand::from_radio_request(&req).unwrap();
         match cmd {
             FlexCommand::Kenwood(KenwoodCommand::FrequencyA(Some(14_250_000))) => {}
             other => panic!("Expected FrequencyA(14250000), got {:?}", other),
@@ -735,7 +771,7 @@ mod tests {
 
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, FlexCommand::AutoInfo(None));
-        assert_eq!(cmd.to_radio_command(), RadioCommand::GetAutoInfo);
+        assert_eq!(cmd.to_radio_request(), RadioRequest::GetAutoInfo);
     }
 
     #[test]
@@ -746,8 +782,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, FlexCommand::AutoInfo(Some(true)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::EnableAutoInfo { enabled: true }
+            cmd.to_radio_response(),
+            RadioResponse::AutoInfo { enabled: true }
         );
     }
 
@@ -759,8 +795,8 @@ mod tests {
         let cmd = codec.next_command().unwrap();
         assert_eq!(cmd, FlexCommand::AutoInfo(Some(false)));
         assert_eq!(
-            cmd.to_radio_command(),
-            RadioCommand::EnableAutoInfo { enabled: false }
+            cmd.to_radio_response(),
+            RadioResponse::AutoInfo { enabled: false }
         );
     }
 
@@ -782,12 +818,12 @@ mod tests {
     }
 
     #[test]
-    fn test_from_radio_command_auto_info() {
-        let cmd = FlexCommand::from_radio_command(&RadioCommand::EnableAutoInfo { enabled: true })
-            .unwrap();
+    fn test_from_radio_request_auto_info() {
+        let cmd =
+            FlexCommand::from_radio_request(&RadioRequest::SetAutoInfo { enabled: true }).unwrap();
         assert_eq!(cmd, FlexCommand::AutoInfo(Some(true)));
 
-        let cmd = FlexCommand::from_radio_command(&RadioCommand::GetAutoInfo).unwrap();
+        let cmd = FlexCommand::from_radio_request(&RadioRequest::GetAutoInfo).unwrap();
         assert_eq!(cmd, FlexCommand::AutoInfo(None));
     }
 }

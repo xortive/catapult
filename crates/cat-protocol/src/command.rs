@@ -1,7 +1,10 @@
 //! Normalized radio command representation
 //!
-//! This module provides the `RadioCommand` enum which serves as the common
+//! This module provides `RadioRequest` and `RadioResponse` enums as the common
 //! intermediate representation for commands across all CAT protocols.
+//!
+//! - `RadioRequest`: Commands/queries sent TO a radio (from mux or amplifier)
+//! - `RadioResponse`: Reports/responses FROM a radio (to mux or amplifier)
 
 /// Operating modes supported by amateur radio transceivers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,91 +75,96 @@ impl OperatingMode {
     }
 }
 
-/// Normalized radio command that can be translated between protocols
+/// Commands/queries sent TO a radio (from mux or amplifier)
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum RadioCommand {
+pub enum RadioRequest {
     /// Set the VFO frequency in Hz
     SetFrequency { hz: u64 },
-
-    /// Get the current VFO frequency
-    GetFrequency,
-
-    /// Frequency report (response to GetFrequency)
-    FrequencyReport { hz: u64 },
 
     /// Set the operating mode
     SetMode { mode: OperatingMode },
 
-    /// Get the current operating mode
-    GetMode,
-
-    /// Mode report (response to GetMode)
-    ModeReport { mode: OperatingMode },
-
     /// Set PTT state
     SetPtt { active: bool },
-
-    /// Get PTT state
-    GetPtt,
-
-    /// PTT state report
-    PttReport { active: bool },
 
     /// Set VFO (A, B, or split)
     SetVfo { vfo: Vfo },
 
+    /// Power on/off command
+    SetPower { on: bool },
+
+    /// Enable/disable auto-information mode
+    SetAutoInfo { enabled: bool },
+
+    /// Get the current VFO frequency
+    GetFrequency,
+
+    /// Get the current operating mode
+    GetMode,
+
+    /// Get PTT state
+    GetPtt,
+
     /// Get current VFO selection
     GetVfo,
-
-    /// VFO selection report
-    VfoReport { vfo: Vfo },
 
     /// Request radio identification
     GetId,
 
-    /// Radio identification response
-    IdReport { id: String },
-
     /// Request radio status (comprehensive)
     GetStatus,
 
-    /// Radio status report
-    StatusReport {
+    /// Query auto-information state
+    GetAutoInfo,
+
+    /// Get control band (which VFO has front panel control)
+    GetControlBand,
+
+    /// Get transmit band (which VFO is selected for transmit)
+    GetTransmitBand,
+
+    /// Unknown or unparseable request (preserves raw data)
+    Unknown { data: Vec<u8> },
+}
+
+/// Reports/responses FROM a radio (to mux or amplifier)
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RadioResponse {
+    /// Frequency report
+    Frequency { hz: u64 },
+
+    /// Mode report
+    Mode { mode: OperatingMode },
+
+    /// PTT state report
+    Ptt { active: bool },
+
+    /// VFO selection report
+    Vfo { vfo: Vfo },
+
+    /// Radio identification response
+    Id { id: String },
+
+    /// Radio status report (comprehensive)
+    Status {
         frequency_hz: Option<u64>,
         mode: Option<OperatingMode>,
         ptt: Option<bool>,
         vfo: Option<Vfo>,
     },
 
-    /// Power on/off command
-    SetPower { on: bool },
-
-    /// Enable/disable auto-information mode
-    /// When enabled, radio sends unsolicited updates when parameters change
-    EnableAutoInfo { enabled: bool },
-
-    /// Query auto-information state
-    GetAutoInfo,
-
     /// Auto-information state report
-    AutoInfoReport { enabled: bool },
-
-    /// Get control band (which VFO has front panel control)
-    /// TS-990S specific: CB; query
-    GetControlBand,
+    AutoInfo { enabled: bool },
 
     /// Control band report (0=Main/A, 1=Sub/B)
-    ControlBandReport { band: u8 },
-
-    /// Get transmit band (which VFO is selected for transmit)
-    /// Critical for split operation: TB; query
-    GetTransmitBand,
+    ControlBand { band: u8 },
 
     /// Transmit band report (0=Main/A, 1=Sub/B)
-    TransmitBandReport { band: u8 },
+    TransmitBand { band: u8 },
 
-    /// Unknown or unparseable command (preserves raw data)
+    /// Unknown or unparseable response (preserves raw data)
     Unknown { data: Vec<u8> },
 }
 
@@ -174,8 +182,8 @@ pub enum Vfo {
     Memory,
 }
 
-impl RadioCommand {
-    /// Returns true if this is a query/request command
+impl RadioRequest {
+    /// Returns true if this is a query command (Get*)
     pub fn is_query(&self) -> bool {
         matches!(
             self,
@@ -191,22 +199,6 @@ impl RadioCommand {
         )
     }
 
-    /// Returns true if this is a response/report command
-    pub fn is_report(&self) -> bool {
-        matches!(
-            self,
-            Self::FrequencyReport { .. }
-                | Self::ModeReport { .. }
-                | Self::PttReport { .. }
-                | Self::VfoReport { .. }
-                | Self::IdReport { .. }
-                | Self::StatusReport { .. }
-                | Self::AutoInfoReport { .. }
-                | Self::ControlBandReport { .. }
-                | Self::TransmitBandReport { .. }
-        )
-    }
-
     /// Returns true if this is a set/action command
     pub fn is_set(&self) -> bool {
         matches!(
@@ -216,33 +208,68 @@ impl RadioCommand {
                 | Self::SetPtt { .. }
                 | Self::SetVfo { .. }
                 | Self::SetPower { .. }
-                | Self::EnableAutoInfo { .. }
+                | Self::SetAutoInfo { .. }
         )
     }
 
-    /// Extract frequency from command if present
+    /// Extract frequency from request if present
     pub fn frequency(&self) -> Option<u64> {
         match self {
-            Self::SetFrequency { hz } | Self::FrequencyReport { hz } => Some(*hz),
-            Self::StatusReport { frequency_hz, .. } => *frequency_hz,
+            Self::SetFrequency { hz } => Some(*hz),
             _ => None,
         }
     }
 
-    /// Extract mode from command if present
+    /// Extract mode from request if present
     pub fn mode(&self) -> Option<OperatingMode> {
         match self {
-            Self::SetMode { mode } | Self::ModeReport { mode } => Some(*mode),
-            Self::StatusReport { mode, .. } => *mode,
+            Self::SetMode { mode } => Some(*mode),
             _ => None,
         }
     }
 
-    /// Extract PTT state from command if present
+    /// Extract PTT state from request if present
     pub fn ptt(&self) -> Option<bool> {
         match self {
-            Self::SetPtt { active } | Self::PttReport { active } => Some(*active),
-            Self::StatusReport { ptt, .. } => *ptt,
+            Self::SetPtt { active } => Some(*active),
+            _ => None,
+        }
+    }
+}
+
+impl RadioResponse {
+    /// Extract frequency from response if present
+    pub fn frequency(&self) -> Option<u64> {
+        match self {
+            Self::Frequency { hz } => Some(*hz),
+            Self::Status { frequency_hz, .. } => *frequency_hz,
+            _ => None,
+        }
+    }
+
+    /// Extract mode from response if present
+    pub fn mode(&self) -> Option<OperatingMode> {
+        match self {
+            Self::Mode { mode } => Some(*mode),
+            Self::Status { mode, .. } => *mode,
+            _ => None,
+        }
+    }
+
+    /// Extract PTT state from response if present
+    pub fn ptt(&self) -> Option<bool> {
+        match self {
+            Self::Ptt { active } => Some(*active),
+            Self::Status { ptt, .. } => *ptt,
+            _ => None,
+        }
+    }
+
+    /// Extract VFO from response if present
+    pub fn vfo(&self) -> Option<Vfo> {
+        match self {
+            Self::Vfo { vfo } => Some(*vfo),
+            Self::Status { vfo, .. } => *vfo,
             _ => None,
         }
     }

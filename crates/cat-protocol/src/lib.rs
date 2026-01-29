@@ -14,21 +14,26 @@
 //! Each protocol module provides:
 //! - A streaming frame parser that handles partial data
 //! - Command encoding to protocol-specific bytes
-//! - Conversion to/from the normalized `RadioCommand` enum
+//! - Conversion to/from normalized `RadioRequest` and `RadioResponse` enums
+//!
+//! The same protocol bytes can mean different things based on direction:
+//! - `FA00014250000;` FROM radio = Response (frequency report)
+//! - `FA00014250000;` TO radio = Request (set frequency)
+//! - `FA;` FROM amplifier = Request (query frequency)
 //!
 //! # Example
 //!
 //! ```rust
-//! use cat_protocol::{RadioCommand, OperatingMode, ProtocolCodec, ToRadioCommand};
+//! use cat_protocol::{RadioResponse, OperatingMode, ProtocolCodec, ToRadioResponse};
 //! use cat_protocol::kenwood::{KenwoodCodec, KenwoodCommand};
 //!
-//! // Parse a Kenwood frequency command
+//! // Parse a Kenwood frequency response from a radio
 //! let mut codec = KenwoodCodec::new();
 //! codec.push_bytes(b"FA00014250000;");
 //!
 //! if let Some(cmd) = codec.next_command() {
-//!     let radio_cmd = cmd.to_radio_command();
-//!     assert!(matches!(radio_cmd, RadioCommand::FrequencyReport { hz: 14_250_000 }));
+//!     let response = cmd.to_radio_response();
+//!     assert!(matches!(response, RadioResponse::Frequency { hz: 14_250_000 }));
 //! }
 //! ```
 
@@ -43,7 +48,7 @@ pub mod models;
 pub mod yaesu;
 pub mod yaesu_ascii;
 
-pub use command::{OperatingMode, RadioCommand, Vfo};
+pub use command::{OperatingMode, RadioRequest, RadioResponse, Vfo};
 pub use error::{ParseError, ProtocolError};
 pub use models::{ProtocolId, RadioCapabilities, RadioDatabase, RadioModel};
 
@@ -100,16 +105,28 @@ pub trait ProtocolCodec {
     fn clear(&mut self);
 }
 
-/// Trait for commands that can be converted to normalized RadioCommand
-pub trait ToRadioCommand {
-    /// Convert this protocol-specific command to a normalized RadioCommand
-    fn to_radio_command(&self) -> RadioCommand;
+/// Parse protocol command as a response (radio → mux)
+pub trait ToRadioResponse {
+    /// Convert this protocol-specific command to a RadioResponse
+    fn to_radio_response(&self) -> RadioResponse;
 }
 
-/// Trait for commands that can be created from a normalized RadioCommand
-pub trait FromRadioCommand: Sized {
-    /// Try to create a protocol-specific command from a RadioCommand
-    fn from_radio_command(cmd: &RadioCommand) -> Option<Self>;
+/// Parse protocol command as a request (amplifier → mux)
+pub trait ToRadioRequest {
+    /// Convert this protocol-specific command to a RadioRequest
+    fn to_radio_request(&self) -> RadioRequest;
+}
+
+/// Encode request to protocol bytes (mux → radio)
+pub trait FromRadioRequest: Sized {
+    /// Try to create a protocol-specific command from a RadioRequest
+    fn from_radio_request(req: &RadioRequest) -> Option<Self>;
+}
+
+/// Encode response to protocol bytes (mux → amplifier)
+pub trait FromRadioResponse: Sized {
+    /// Try to create a protocol-specific command from a RadioResponse
+    fn from_radio_response(resp: &RadioResponse) -> Option<Self>;
 }
 
 /// Trait for commands that can be encoded to bytes
@@ -118,29 +135,35 @@ pub trait EncodeCommand {
     fn encode(&self) -> Vec<u8>;
 }
 
-/// Object-safe trait for codecs that parse raw bytes into [`RadioCommand`]s
+/// Object-safe trait for codecs that parse raw bytes into [`RadioResponse`]s
 ///
-/// Unlike [`ProtocolCodec`], this trait returns the normalized `RadioCommand`
+/// Unlike [`ProtocolCodec`], this trait returns the normalized `RadioResponse`
 /// directly, making it object-safe and usable as `Box<dyn RadioCodec>`.
+///
+/// This is used for data FROM radios (radio → mux direction).
 pub trait RadioCodec: Send + Sync {
     /// Push raw bytes into the codec's buffer
     fn push_bytes(&mut self, data: &[u8]);
 
-    /// Try to extract the next complete command from the buffer
-    fn next_command(&mut self) -> Option<RadioCommand>;
+    /// Try to extract the next complete response from the buffer
+    fn next_response(&mut self) -> Option<RadioResponse>;
 
-    /// Try to extract the next complete command along with its raw bytes
-    ///
-    /// This is useful for traffic monitoring where we want to show the exact
-    /// bytes that were parsed for each command, rather than the entire buffer.
-    fn next_command_with_bytes(&mut self) -> Option<(RadioCommand, Vec<u8>)>;
+    /// Try to extract the next complete response along with its raw bytes
+    fn next_response_with_bytes(&mut self) -> Option<(RadioResponse, Vec<u8>)>;
+
+    /// Try to extract the next complete request from the buffer
+    /// (used for parsing amplifier → mux direction)
+    fn next_request(&mut self) -> Option<RadioRequest>;
+
+    /// Try to extract the next complete request along with its raw bytes
+    fn next_request_with_bytes(&mut self) -> Option<(RadioRequest, Vec<u8>)>;
 
     /// Clear the internal buffer
     fn clear(&mut self);
 }
 
 /// Implements [`RadioCodec`] for a type that already implements [`ProtocolCodec`]
-/// with a command type implementing [`ToRadioCommand`].
+/// with a command type implementing [`ToRadioResponse`] and [`ToRadioRequest`].
 #[macro_export]
 macro_rules! impl_radio_codec {
     ($codec:ty) => {
@@ -149,13 +172,22 @@ macro_rules! impl_radio_codec {
                 $crate::ProtocolCodec::push_bytes(self, data);
             }
 
-            fn next_command(&mut self) -> Option<$crate::RadioCommand> {
-                $crate::ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_command())
+            fn next_response(&mut self) -> Option<$crate::RadioResponse> {
+                $crate::ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_response())
             }
 
-            fn next_command_with_bytes(&mut self) -> Option<($crate::RadioCommand, Vec<u8>)> {
+            fn next_response_with_bytes(&mut self) -> Option<($crate::RadioResponse, Vec<u8>)> {
                 $crate::ProtocolCodec::next_command_with_bytes(self)
-                    .map(|(cmd, bytes)| (cmd.to_radio_command(), bytes))
+                    .map(|(cmd, bytes)| (cmd.to_radio_response(), bytes))
+            }
+
+            fn next_request(&mut self) -> Option<$crate::RadioRequest> {
+                $crate::ProtocolCodec::next_command(self).map(|cmd| cmd.to_radio_request())
+            }
+
+            fn next_request_with_bytes(&mut self) -> Option<($crate::RadioRequest, Vec<u8>)> {
+                $crate::ProtocolCodec::next_command_with_bytes(self)
+                    .map(|(cmd, bytes)| (cmd.to_radio_request(), bytes))
             }
 
             fn clear(&mut self) {

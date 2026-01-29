@@ -7,7 +7,7 @@
 //! - Lockout behavior and edge cases
 
 use cat_mux::{Multiplexer, MultiplexerConfig, MuxError, SwitchingMode};
-use cat_protocol::{OperatingMode, Protocol, RadioCommand};
+use cat_protocol::{OperatingMode, Protocol, RadioResponse};
 
 // ============================================================================
 // Helper Functions
@@ -86,7 +86,7 @@ mod switching_tests {
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
 
         // PTT from inactive radio should not switch
-        mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
+        mux.process_radio_response(h2, &RadioResponse::Ptt { active: true });
 
         assert_eq!(mux.active_radio(), Some(h1));
     }
@@ -102,31 +102,39 @@ mod switching_tests {
         assert_eq!(mux.active_radio(), Some(h1));
 
         // PTT from h2 should trigger switch in automatic mode
-        mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
+        mux.process_radio_response(h2, &RadioResponse::Ptt { active: true });
 
         assert_eq!(mux.active_radio(), Some(h2));
     }
 
     #[test]
-    fn automatic_mode_switches_on_frequency() {
+    fn automatic_mode_switches_on_frequency_change() {
         let mut mux = helpers::mux_no_lockout();
         mux.set_switching_mode(SwitchingMode::Automatic);
 
-        let _h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
+        let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
 
-        // Frequency change from h2 should switch in automatic mode
-        mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 14_250_000 });
+        // Initial frequency report does NOT trigger switch
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 14_250_000 });
+        assert_eq!(
+            mux.active_radio(),
+            Some(h1),
+            "Initial report should not switch"
+        );
+
+        // Frequency CHANGE from h2 should switch in automatic mode
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 7_074_000 });
 
         assert_eq!(
             mux.active_radio(),
             Some(h2),
-            "Should switch on frequency in automatic mode"
+            "Should switch on frequency change in automatic mode"
         );
     }
 
     #[test]
-    fn frequency_triggered_switches_on_frequency() {
+    fn frequency_triggered_switches_on_frequency_change() {
         let mut mux = helpers::mux_no_lockout();
         mux.set_switching_mode(SwitchingMode::FrequencyTriggered);
 
@@ -135,8 +143,16 @@ mod switching_tests {
 
         assert_eq!(mux.active_radio(), Some(h1), "Should start on first radio");
 
-        // Frequency change from h2 should trigger switch
-        mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 7_150_000 });
+        // Initial frequency report does NOT trigger switch
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 7_150_000 });
+        assert_eq!(
+            mux.active_radio(),
+            Some(h1),
+            "Initial report should not switch"
+        );
+
+        // Frequency CHANGE from h2 should trigger switch
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 14_074_000 });
 
         assert_eq!(mux.active_radio(), Some(h2));
     }
@@ -150,7 +166,7 @@ mod switching_tests {
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
 
         // PTT from h2 should NOT switch
-        mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
+        mux.process_radio_response(h2, &RadioResponse::Ptt { active: true });
 
         assert_eq!(mux.active_radio(), Some(h1), "Should remain on first radio");
     }
@@ -166,7 +182,7 @@ mod switching_tests {
         assert_eq!(mux.active_radio(), Some(h1));
 
         // First, establish h2's initial frequency (initial reports don't trigger switch)
-        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 7_000_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 7_000_000 });
         assert_eq!(
             mux.active_radio(),
             Some(h1),
@@ -175,7 +191,7 @@ mod switching_tests {
 
         // Now a FrequencyReport with a DIFFERENT frequency should trigger switch
         // (simulates user changing frequency on the radio)
-        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_250_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 14_250_000 });
 
         assert_eq!(
             mux.active_radio(),
@@ -193,7 +209,7 @@ mod switching_tests {
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
 
         // Set h2's frequency first (initial report doesn't trigger switch)
-        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 7_000_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 7_000_000 });
         assert_eq!(
             mux.active_radio(),
             Some(h1),
@@ -201,7 +217,7 @@ mod switching_tests {
         );
 
         // Now change h2's frequency to trigger a switch to h2
-        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_000_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 14_000_000 });
         assert_eq!(
             mux.active_radio(),
             Some(h2),
@@ -214,7 +230,7 @@ mod switching_tests {
 
         // Another FrequencyReport with the SAME frequency should NOT switch
         // (this simulates a poll response returning unchanged frequency)
-        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_000_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 14_000_000 });
 
         assert_eq!(
             mux.active_radio(),
@@ -235,7 +251,7 @@ mod switching_tests {
 
         // Initial FrequencyReport (when radio has no known frequency yet)
         // should NOT trigger a switch - this prevents switching on first poll
-        mux.process_radio_command(h2, RadioCommand::FrequencyReport { hz: 14_250_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 14_250_000 });
 
         assert_eq!(
             mux.active_radio(),
@@ -253,7 +269,7 @@ mod switching_tests {
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
 
         // Command from inactive radio should return None (not forwarded to amp)
-        let result = mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 14_250_000 });
+        let result = mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 14_250_000 });
 
         assert!(result.is_none());
     }
@@ -265,7 +281,7 @@ mod switching_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        let result = mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        let result = mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         assert!(result.is_some());
         let bytes = result.unwrap();
@@ -344,11 +360,11 @@ mod lockout_tests {
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
 
         // PTT from h2 triggers switch
-        mux.process_radio_command(h2, RadioCommand::SetPtt { active: true });
+        mux.process_radio_response(h2, &RadioResponse::Ptt { active: true });
         assert_eq!(mux.active_radio(), Some(h2));
 
         // PTT from h1 during lockout should not switch
-        mux.process_radio_command(h1, RadioCommand::SetPtt { active: true });
+        mux.process_radio_response(h1, &RadioResponse::Ptt { active: true });
         assert_eq!(mux.active_radio(), Some(h2));
     }
 
@@ -384,7 +400,7 @@ mod state_tracking_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         let state = mux.get_radio(h1).unwrap();
         assert_eq!(state.frequency_hz, Some(14_250_000));
@@ -396,7 +412,7 @@ mod state_tracking_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(h1, RadioCommand::FrequencyReport { hz: 7_074_000 });
+        mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 7_074_000 });
 
         let state = mux.get_radio(h1).unwrap();
         assert_eq!(state.frequency_hz, Some(7_074_000));
@@ -408,9 +424,9 @@ mod state_tracking_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(
+        mux.process_radio_response(
             h1,
-            RadioCommand::SetMode {
+            &RadioResponse::Mode {
                 mode: OperatingMode::Usb,
             },
         );
@@ -425,9 +441,9 @@ mod state_tracking_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(
+        mux.process_radio_response(
             h1,
-            RadioCommand::ModeReport {
+            &RadioResponse::Mode {
                 mode: OperatingMode::Cw,
             },
         );
@@ -444,11 +460,11 @@ mod state_tracking_tests {
 
         assert!(!mux.get_radio(h1).unwrap().ptt);
 
-        mux.process_radio_command(h1, RadioCommand::SetPtt { active: true });
+        mux.process_radio_response(h1, &RadioResponse::Ptt { active: true });
 
         assert!(mux.get_radio(h1).unwrap().ptt);
 
-        mux.process_radio_command(h1, RadioCommand::SetPtt { active: false });
+        mux.process_radio_response(h1, &RadioResponse::Ptt { active: false });
 
         assert!(!mux.get_radio(h1).unwrap().ptt);
     }
@@ -459,9 +475,9 @@ mod state_tracking_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(
+        mux.process_radio_response(
             h1,
-            RadioCommand::StatusReport {
+            &RadioResponse::Status {
                 frequency_hz: Some(28_500_000),
                 mode: Some(OperatingMode::Fm),
                 ptt: Some(true),
@@ -482,18 +498,18 @@ mod state_tracking_tests {
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::IcomCIV);
 
-        mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
-        mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 7_074_000 });
+        mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 7_074_000 });
 
-        mux.process_radio_command(
+        mux.process_radio_response(
             h1,
-            RadioCommand::SetMode {
+            &RadioResponse::Mode {
                 mode: OperatingMode::Usb,
             },
         );
-        mux.process_radio_command(
+        mux.process_radio_response(
             h2,
-            RadioCommand::SetMode {
+            &RadioResponse::Mode {
                 mode: OperatingMode::Lsb,
             },
         );
@@ -517,7 +533,7 @@ mod state_tracking_tests {
         let h2 = mux.add_radio("Radio 2".into(), "/dev/tty1".into(), Protocol::Kenwood);
 
         // h2 is inactive, but state should still be tracked
-        mux.process_radio_command(h2, RadioCommand::SetFrequency { hz: 21_300_000 });
+        mux.process_radio_response(h2, &RadioResponse::Frequency { hz: 21_300_000 });
 
         let state = mux.get_radio(h2).unwrap();
         assert_eq!(state.frequency_hz, Some(21_300_000));
@@ -539,7 +555,7 @@ mod translation_tests {
         let h1 = mux.add_radio("IC-7300".into(), "/dev/tty0".into(), Protocol::IcomCIV);
 
         let result = mux
-            .process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 })
+            .process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 })
             .unwrap();
 
         // Kenwood format: FA00014250000;
@@ -560,7 +576,7 @@ mod translation_tests {
         let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::IcomCIV);
 
         let result = mux
-            .process_radio_command(h1, RadioCommand::SetPtt { active: true })
+            .process_radio_response(h1, &RadioResponse::Ptt { active: true })
             .unwrap();
 
         assert_eq!(result, b"TX1;");
@@ -573,7 +589,7 @@ mod translation_tests {
         let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::IcomCIV);
 
         let result = mux
-            .process_radio_command(h1, RadioCommand::SetPtt { active: false })
+            .process_radio_response(h1, &RadioResponse::Ptt { active: false })
             .unwrap();
 
         // Kenwood uses RX; or TX0; for PTT off
@@ -593,7 +609,7 @@ mod translation_tests {
         let h1 = mux.add_radio("TS-590".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
         let result = mux
-            .process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 })
+            .process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 })
             .unwrap();
 
         // CI-V format: FE FE <to> <from> <cmd> <data...> FD
@@ -610,12 +626,12 @@ mod translation_tests {
         let h1 = mux.add_radio("TS-590".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
         let result = mux
-            .process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 })
+            .process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 })
             .unwrap();
 
-        // Yaesu format: 5 bytes, last byte is command
+        // Yaesu format: 5 bytes (BCD frequency + mode for responses)
         assert_eq!(result.len(), 5, "Yaesu commands are 5 bytes");
-        assert_eq!(result[4], 0x01, "Yaesu set frequency command is 0x01");
+        // For responses, last byte is the mode (0 for unknown), not a command byte
     }
 
     // Elecraft as target
@@ -626,7 +642,7 @@ mod translation_tests {
         let h1 = mux.add_radio("IC-7300".into(), "/dev/tty0".into(), Protocol::IcomCIV);
 
         let result = mux
-            .process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 })
+            .process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 })
             .unwrap();
 
         // Elecraft uses Kenwood-compatible format
@@ -643,9 +659,9 @@ mod translation_tests {
         let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::IcomCIV);
 
         let result = mux
-            .process_radio_command(
+            .process_radio_response(
                 h1,
-                RadioCommand::SetMode {
+                &RadioResponse::Mode {
                     mode: OperatingMode::Usb,
                 },
             )
@@ -664,13 +680,13 @@ mod translation_tests {
 
         let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        let result = mux.process_radio_command(h1, RadioCommand::GetFrequency);
+        let result = mux.process_radio_response(h1, &RadioResponse::Unknown { data: vec![] });
         assert!(result.is_none(), "GetFrequency should not be forwarded");
 
-        let result = mux.process_radio_command(h1, RadioCommand::GetMode);
+        let result = mux.process_radio_response(h1, &RadioResponse::Unknown { data: vec![] });
         assert!(result.is_none(), "GetMode should not be forwarded");
 
-        let result = mux.process_radio_command(h1, RadioCommand::GetId);
+        let result = mux.process_radio_response(h1, &RadioResponse::Unknown { data: vec![] });
         assert!(result.is_none(), "GetId should not be forwarded");
     }
 }
@@ -710,7 +726,7 @@ mod radio_management_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         let state = mux.get_radio(h1).unwrap();
         assert_eq!(state.frequency_hz, Some(14_250_000));
@@ -722,7 +738,7 @@ mod radio_management_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        let result = mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        let result = mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         assert!(result.is_some());
         assert!(result.unwrap().ends_with(b";"));
@@ -786,7 +802,7 @@ mod edge_case_tests {
         mux.remove_radio(h1);
 
         // This should not panic or cause issues
-        let result = mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        let result = mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         assert!(result.is_none());
     }
@@ -809,9 +825,9 @@ mod edge_case_tests {
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-        let result = mux.process_radio_command(
+        let result = mux.process_radio_response(
             h1,
-            RadioCommand::Unknown {
+            &RadioResponse::Unknown {
                 data: vec![0x01, 0x02, 0x03],
             },
         );
@@ -824,7 +840,7 @@ mod edge_case_tests {
         let mut mux = helpers::mux_no_lockout();
 
         let h1 = mux.add_radio("Radio 1".into(), "/dev/tty0".into(), Protocol::Kenwood);
-        mux.process_radio_command(h1, RadioCommand::SetFrequency { hz: 14_250_000 });
+        mux.process_radio_response(h1, &RadioResponse::Frequency { hz: 14_250_000 });
 
         let state = mux.get_radio(h1).unwrap();
         let display = state.frequency_display();
@@ -897,7 +913,7 @@ mod proptest_tests {
             let mut mux = helpers::mux_no_lockout();
             let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-            mux.process_radio_command(h1, RadioCommand::SetFrequency { hz });
+            mux.process_radio_response(h1, &RadioResponse::Frequency { hz });
 
             let state = mux.get_radio(h1).unwrap();
             // Frequency may be rounded by translator, but should be close
@@ -910,7 +926,7 @@ mod proptest_tests {
             let mut mux = helpers::mux_no_lockout();
             let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-            mux.process_radio_command(h1, RadioCommand::SetMode { mode });
+            mux.process_radio_response(h1, &RadioResponse::Mode { mode });
 
             let state = mux.get_radio(h1).unwrap();
             prop_assert_eq!(state.mode, Some(mode));
@@ -921,7 +937,7 @@ mod proptest_tests {
             let mut mux = helpers::mux_no_lockout();
             let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-            mux.process_radio_command(h1, RadioCommand::SetPtt { active });
+            mux.process_radio_response(h1, &RadioResponse::Ptt { active });
 
             let state = mux.get_radio(h1).unwrap();
             prop_assert_eq!(state.ptt, active);
@@ -935,7 +951,7 @@ mod proptest_tests {
             let mut mux = helpers::mux_with_amp_protocol(target);
             let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
-            let result = mux.process_radio_command(h1, RadioCommand::SetFrequency { hz });
+            let result = mux.process_radio_response(h1, &RadioResponse::Frequency { hz });
 
             // Should produce Some output for frequency commands
             prop_assert!(result.is_some());
@@ -966,7 +982,7 @@ mod proptest_tests {
             let h1 = mux.add_radio("Radio".into(), "/dev/tty0".into(), Protocol::Kenwood);
 
             for &hz in &freqs {
-                mux.process_radio_command(h1, RadioCommand::SetFrequency { hz });
+                mux.process_radio_response(h1, &RadioResponse::Frequency { hz });
             }
 
             let state = mux.get_radio(h1).unwrap();

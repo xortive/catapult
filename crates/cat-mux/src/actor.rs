@@ -33,7 +33,9 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use cat_protocol::{create_radio_codec, OperatingMode, Protocol, RadioCodec, RadioCommand, Vfo};
+use cat_protocol::{
+    create_radio_codec, OperatingMode, Protocol, RadioCodec, RadioRequest, RadioResponse, Vfo,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{interval, Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
@@ -45,7 +47,7 @@ use crate::engine::Multiplexer;
 use crate::error::MuxError;
 use crate::events::MuxEvent;
 use crate::state::{AmplifierConfig, RadioHandle, SwitchingMode};
-use crate::translation::ProtocolTranslator;
+use crate::translation::translate_response;
 
 /// Summary of a radio's state for sync purposes
 ///
@@ -90,12 +92,12 @@ pub enum MuxActorCommand {
         handle: RadioHandle,
     },
 
-    /// Process a radio command (from radio data parsing)
-    RadioCommand {
+    /// Process a radio response (from radio data parsing)
+    RadioResponse {
         /// Handle of the source radio
         handle: RadioHandle,
-        /// The parsed command
-        command: RadioCommand,
+        /// The parsed response
+        response: RadioResponse,
     },
 
     /// Raw data received from a radio (emits RadioDataIn event, then parses)
@@ -239,81 +241,82 @@ impl MuxActorState {
     }
 }
 
-/// Process a radio command through the multiplexer and emit events
+/// Process a radio response through the multiplexer and emit events
 ///
-/// This helper is used by both the RadioCommand handler (for direct command injection)
-/// and the RadioRawData handler (after parsing commands from raw bytes).
-async fn process_radio_command(
+/// This helper is used by both the RadioResponse handler (for direct response injection)
+/// and the RadioRawData handler (after parsing responses from raw bytes).
+async fn process_radio_response(
     state: &mut MuxActorState,
     event_tx: &mpsc::Sender<MuxEvent>,
     handle: RadioHandle,
-    command: RadioCommand,
+    response: RadioResponse,
 ) {
     let Some(meta) = state.get_radio_meta(handle) else {
-        warn!("Unknown radio handle {} in process_radio_command", handle.0);
+        warn!(
+            "Unknown radio handle {} in process_radio_response",
+            handle.0
+        );
         return;
     };
 
     debug!(
-        "Processing command from radio {} (handle {}): {:?}",
-        meta.display_name, handle.0, command
+        "Processing response from radio {} (handle {}): {:?}",
+        meta.display_name, handle.0, response
     );
 
     // Update cached CB/TB state from radio reports (only from active radio)
     if state.multiplexer.active_radio() == Some(handle) {
-        match &command {
-            RadioCommand::ControlBandReport { band } => {
+        match &response {
+            RadioResponse::ControlBand { band } => {
                 state.cached_control_band = Some(*band);
                 debug!("Updated cached control band to {}", band);
             }
-            RadioCommand::TransmitBandReport { band } => {
+            RadioResponse::TransmitBand { band } => {
                 state.cached_tx_band = Some(*band);
                 debug!("Updated cached transmit band to {}", band);
             }
-            // Infer CB/TB from VFO commands (for radios that don't report CB/TB directly)
-            RadioCommand::SetVfo { vfo } | RadioCommand::VfoReport { vfo } => {
-                match vfo {
-                    Vfo::A => {
-                        // VFO A selected - RX on A, control on A
-                        state.cached_rx_vfo = Some(0);
-                        state.cached_control_band = Some(0);
-                        // Selecting VFO A/B clears split mode
-                        state.cached_split = false;
-                        state.cached_tx_band = Some(0);
-                        debug!("VFO A selected: CB=0, TB=0, split=false");
-                    }
-                    Vfo::B => {
-                        // VFO B selected - RX on B, control on B
-                        state.cached_rx_vfo = Some(1);
-                        state.cached_control_band = Some(1);
-                        // Selecting VFO A/B clears split mode
-                        state.cached_split = false;
-                        state.cached_tx_band = Some(1);
-                        debug!("VFO B selected: CB=1, TB=1, split=false");
-                    }
-                    Vfo::Split => {
-                        // Split enabled - TX on opposite of current RX VFO
-                        state.cached_split = true;
-                        let rx = state.cached_rx_vfo.unwrap_or(0);
-                        state.cached_tx_band = Some(1 - rx); // Opposite of RX
-                                                             // CB stays as current RX VFO
-                        debug!(
-                            "Split enabled: CB={}, TB={} (RX on {}, TX on opposite)",
-                            state.cached_control_band.unwrap_or(0),
-                            state.cached_tx_band.unwrap_or(1),
-                            rx
-                        );
-                    }
-                    Vfo::Memory => {
-                        // Memory mode - treat as VFO A, no split
-                        state.cached_rx_vfo = Some(0);
-                        state.cached_control_band = Some(0);
-                        state.cached_tx_band = Some(0);
-                        state.cached_split = false;
-                        debug!("Memory mode: CB=0, TB=0, split=false");
-                    }
+            // Infer CB/TB from VFO responses (for radios that don't report CB/TB directly)
+            RadioResponse::Vfo { vfo } => match vfo {
+                Vfo::A => {
+                    // VFO A selected - RX on A, control on A
+                    state.cached_rx_vfo = Some(0);
+                    state.cached_control_band = Some(0);
+                    // Selecting VFO A/B clears split mode
+                    state.cached_split = false;
+                    state.cached_tx_band = Some(0);
+                    debug!("VFO A selected: CB=0, TB=0, split=false");
                 }
-            }
+                Vfo::B => {
+                    // VFO B selected - RX on B, control on B
+                    state.cached_rx_vfo = Some(1);
+                    state.cached_control_band = Some(1);
+                    // Selecting VFO A/B clears split mode
+                    state.cached_split = false;
+                    state.cached_tx_band = Some(1);
+                    debug!("VFO B selected: CB=1, TB=1, split=false");
+                }
+                Vfo::Split => {
+                    // Split enabled - TX on opposite of current RX VFO
+                    state.cached_split = true;
+                    let rx = state.cached_rx_vfo.unwrap_or(0);
+                    state.cached_tx_band = Some(1 - rx); // Opposite of RX
+                                                         // CB stays as current RX VFO
+                    debug!(
+                        "Split enabled: CB={}, TB={} (RX on {}, TX on opposite)",
+                        state.cached_control_band.unwrap_or(0),
+                        state.cached_tx_band.unwrap_or(1),
+                        rx
+                    );
+                }
+                Vfo::Memory => {
+                    // Memory mode - treat as VFO A, no split
+                    state.cached_rx_vfo = Some(0);
+                    state.cached_control_band = Some(0);
+                    state.cached_tx_band = Some(0);
+                    state.cached_split = false;
+                    debug!("Memory mode: CB=0, TB=0, split=false");
+                }
+            },
             _ => {}
         }
     }
@@ -327,7 +330,7 @@ async fn process_radio_command(
     let old_active = state.multiplexer.active_radio();
 
     // Process through multiplexer
-    let amp_data = state.multiplexer.process_radio_command(handle, command);
+    let amp_data = state.multiplexer.process_radio_response(handle, &response);
 
     // Capture new state with a single lookup
     let (new_freq, new_mode, new_ptt) = state
@@ -417,7 +420,7 @@ async fn process_radio_command(
                 // Only send if different from what amp already knows
                 if state.cached_frequency_hz != Some(hz) {
                     state.cached_frequency_hz = Some(hz);
-                    send_to_amp(state, event_tx, RadioCommand::FrequencyReport { hz }).await;
+                    send_to_amp(state, event_tx, RadioResponse::Frequency { hz }).await;
                 }
             }
         }
@@ -425,7 +428,7 @@ async fn process_radio_command(
             if let Some(mode) = new_mode {
                 if state.cached_mode != Some(mode) {
                     state.cached_mode = Some(mode);
-                    send_to_amp(state, event_tx, RadioCommand::ModeReport { mode }).await;
+                    send_to_amp(state, event_tx, RadioResponse::Mode { mode }).await;
                 }
             }
         }
@@ -433,7 +436,7 @@ async fn process_radio_command(
             if let Some(ptt) = new_ptt {
                 if state.cached_ptt != ptt {
                     state.cached_ptt = ptt;
-                    send_to_amp(state, event_tx, RadioCommand::PttReport { active: ptt }).await;
+                    send_to_amp(state, event_tx, RadioResponse::Ptt { active: ptt }).await;
                 }
             }
         }
@@ -442,38 +445,36 @@ async fn process_radio_command(
 
 /// Handle a query from the amplifier using cached state
 ///
-/// Returns `Some(RadioCommand)` with the response if we can answer,
+/// Returns `Some(RadioResponse)` with the response if we can answer,
 /// or `None` if we don't have the state to answer (amp should retry later).
-fn handle_amp_query(state: &MuxActorState, query: &RadioCommand) -> Option<RadioCommand> {
+fn handle_amp_query(state: &MuxActorState, query: &RadioRequest) -> Option<RadioResponse> {
     match query {
-        RadioCommand::GetFrequency => state
+        RadioRequest::GetFrequency => state
             .cached_frequency_hz
-            .map(|hz| RadioCommand::FrequencyReport { hz }),
+            .map(|hz| RadioResponse::Frequency { hz }),
 
-        RadioCommand::GetMode => state
-            .cached_mode
-            .map(|mode| RadioCommand::ModeReport { mode }),
+        RadioRequest::GetMode => state.cached_mode.map(|mode| RadioResponse::Mode { mode }),
 
-        RadioCommand::GetPtt => Some(RadioCommand::PttReport {
+        RadioRequest::GetPtt => Some(RadioResponse::Ptt {
             active: state.cached_ptt,
         }),
 
-        RadioCommand::GetAutoInfo => Some(RadioCommand::AutoInfoReport {
+        RadioRequest::GetAutoInfo => Some(RadioResponse::AutoInfo {
             enabled: state.auto_info_enabled,
         }),
 
         // Always identify as TS-990S (ID022) to amplifiers
-        RadioCommand::GetId => Some(RadioCommand::IdReport {
+        RadioRequest::GetId => Some(RadioResponse::Id {
             id: "022".to_string(), // TS-990S
         }),
 
         // Control band query - return cached or default to main (0)
-        RadioCommand::GetControlBand => Some(RadioCommand::ControlBandReport {
+        RadioRequest::GetControlBand => Some(RadioResponse::ControlBand {
             band: state.cached_control_band.unwrap_or(0),
         }),
 
         // Transmit band query - return cached or default to main (0)
-        RadioCommand::GetTransmitBand => Some(RadioCommand::TransmitBandReport {
+        RadioRequest::GetTransmitBand => Some(RadioResponse::TransmitBand {
             band: state.cached_tx_band.unwrap_or(0),
         }),
 
@@ -481,21 +482,24 @@ fn handle_amp_query(state: &MuxActorState, query: &RadioCommand) -> Option<Radio
     }
 }
 
-/// Send a RadioCommand to the amplifier
+/// Send a RadioResponse to the amplifier
 ///
-/// Translates the command to the amplifier's protocol and sends it.
-async fn send_to_amp(state: &MuxActorState, event_tx: &mpsc::Sender<MuxEvent>, cmd: RadioCommand) {
+/// Translates the response to the amplifier's protocol and sends it.
+async fn send_to_amp(
+    state: &MuxActorState,
+    event_tx: &mpsc::Sender<MuxEvent>,
+    response: RadioResponse,
+) {
     let Some(ref tx) = state.amp_tx else {
         return;
     };
 
     let protocol = state.multiplexer.amplifier_config().protocol;
-    let translator = ProtocolTranslator::new(protocol);
 
-    let data = match translator.translate(&cmd) {
+    let data = match translate_response(&response, protocol) {
         Ok(d) => d,
         Err(e) => {
-            debug!("Cannot translate {:?} to {:?}: {}", cmd, protocol, e);
+            debug!("Cannot translate {:?} to {:?}: {}", response, protocol, e);
             return;
         }
     };
@@ -601,9 +605,9 @@ pub async fn run_mux_actor(
                 }
             }
 
-            MuxActorCommand::RadioCommand { handle, command } => {
-                // Direct command injection - useful for testing and virtual radios
-                process_radio_command(&mut state, &event_tx, handle, command).await;
+            MuxActorCommand::RadioResponse { handle, response } => {
+                // Direct response injection - useful for testing and virtual radios
+                process_radio_response(&mut state, &event_tx, handle, response).await;
             }
 
             MuxActorCommand::SetActiveRadio { handle } => {
@@ -628,26 +632,22 @@ pub async fn run_mux_actor(
                                         send_to_amp(
                                             &state,
                                             &event_tx,
-                                            RadioCommand::FrequencyReport { hz },
+                                            RadioResponse::Frequency { hz },
                                         )
                                         .await;
                                     }
                                     // Update and send mode
                                     if let Some(mode) = radio.mode {
                                         state.cached_mode = Some(mode);
-                                        send_to_amp(
-                                            &state,
-                                            &event_tx,
-                                            RadioCommand::ModeReport { mode },
-                                        )
-                                        .await;
+                                        send_to_amp(&state, &event_tx, RadioResponse::Mode { mode })
+                                            .await;
                                     }
                                     // Update and send PTT
                                     state.cached_ptt = radio.ptt;
                                     send_to_amp(
                                         &state,
                                         &event_tx,
-                                        RadioCommand::PttReport { active: radio.ptt },
+                                        RadioResponse::Ptt { active: radio.ptt },
                                     )
                                     .await;
                                 }
@@ -780,23 +780,23 @@ pub async fn run_mux_actor(
                     .map(|m| m.protocol)
                     .unwrap_or(cat_protocol::Protocol::Kenwood);
 
-                // Parse commands from raw data using the codec
-                // Emit traffic event for EACH command with its specific bytes
-                let commands_with_bytes: Vec<_> = if let Some(codec) = state.codecs.get_mut(&handle)
-                {
-                    codec.push_bytes(&data);
-                    std::iter::from_fn(|| codec.next_command_with_bytes()).collect()
-                } else {
-                    debug!(
-                        "No codec found for radio {} (handle {}), skipping parse",
-                        handle.0, handle.0
-                    );
-                    Vec::new()
-                };
+                // Parse responses from raw data using the codec
+                // Emit traffic event for EACH response with its specific bytes
+                let responses_with_bytes: Vec<_> =
+                    if let Some(codec) = state.codecs.get_mut(&handle) {
+                        codec.push_bytes(&data);
+                        std::iter::from_fn(|| codec.next_response_with_bytes()).collect()
+                    } else {
+                        debug!(
+                            "No codec found for radio {} (handle {}), skipping parse",
+                            handle.0, handle.0
+                        );
+                        Vec::new()
+                    };
 
-                // Process each complete command and emit its traffic event
-                for (command, raw_bytes) in commands_with_bytes {
-                    // Emit traffic event with just this command's bytes
+                // Process each complete response and emit its traffic event
+                for (response, raw_bytes) in responses_with_bytes {
+                    // Emit traffic event with just this response's bytes
                     let _ = event_tx
                         .send(MuxEvent::RadioDataIn {
                             handle,
@@ -806,7 +806,7 @@ pub async fn run_mux_actor(
                         })
                         .await;
 
-                    process_radio_command(&mut state, &event_tx, handle, command).await;
+                    process_radio_response(&mut state, &event_tx, handle, response).await;
                 }
             }
 
@@ -837,18 +837,18 @@ pub async fn run_mux_actor(
                     state.amp_codec = Some(create_radio_codec(protocol));
                 }
 
-                // Parse commands from amplifier data
-                // Emit traffic event for EACH command with its specific bytes
-                let commands_with_bytes: Vec<_> = if let Some(codec) = state.amp_codec.as_mut() {
+                // Parse requests from amplifier data
+                // Emit traffic event for EACH request with its specific bytes
+                let requests_with_bytes: Vec<_> = if let Some(codec) = state.amp_codec.as_mut() {
                     codec.push_bytes(&data);
-                    std::iter::from_fn(|| codec.next_command_with_bytes()).collect()
+                    std::iter::from_fn(|| codec.next_request_with_bytes()).collect()
                 } else {
                     Vec::new()
                 };
 
-                // Process each command from the amplifier
-                for (cmd, raw_bytes) in commands_with_bytes {
-                    // Emit traffic event with just this command's bytes
+                // Process each request from the amplifier
+                for (req, raw_bytes) in requests_with_bytes {
+                    // Emit traffic event with just this request's bytes
                     let _ = event_tx
                         .send(MuxEvent::AmpDataIn {
                             data: raw_bytes,
@@ -857,17 +857,18 @@ pub async fn run_mux_actor(
                         })
                         .await;
 
-                    debug!("Amp sent command: {:?}", cmd);
+                    debug!("Amp sent request: {:?}", req);
 
-                    if cmd.is_query() {
+                    // Handle based on request type - queries get responses, sets are actions
+                    if req.is_query() {
                         // Respond to queries from cached state
-                        if let Some(response) = handle_amp_query(&state, &cmd) {
-                            debug!("Responding to amp query {:?} with {:?}", cmd, response);
+                        if let Some(response) = handle_amp_query(&state, &req) {
+                            debug!("Responding to amp query {:?} with {:?}", req, response);
                             send_to_amp(&state, &event_tx, response).await;
                         } else {
-                            debug!("No cached state to respond to amp query {:?}", cmd);
+                            debug!("No cached state to respond to amp query {:?}", req);
                         }
-                    } else if let RadioCommand::EnableAutoInfo { enabled } = cmd {
+                    } else if let RadioRequest::SetAutoInfo { enabled } = req {
                         // Handle auto-info enable/disable
                         state.auto_info_enabled = enabled;
                         debug!("Amp auto-info mode set to {}", enabled);
@@ -875,16 +876,11 @@ pub async fn run_mux_actor(
                         // If auto-info just enabled, send current state
                         if enabled {
                             if let Some(hz) = state.cached_frequency_hz {
-                                send_to_amp(
-                                    &state,
-                                    &event_tx,
-                                    RadioCommand::FrequencyReport { hz },
-                                )
-                                .await;
+                                send_to_amp(&state, &event_tx, RadioResponse::Frequency { hz })
+                                    .await;
                             }
                             if let Some(mode) = state.cached_mode {
-                                send_to_amp(&state, &event_tx, RadioCommand::ModeReport { mode })
-                                    .await;
+                                send_to_amp(&state, &event_tx, RadioResponse::Mode { mode }).await;
                             }
                         }
                     }
@@ -1024,11 +1020,11 @@ mod tests {
         // Drain the connected event
         let _ = event_rx.recv().await;
 
-        // Send a frequency command
+        // Send a frequency response
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1088,9 +1084,9 @@ mod tests {
 
         // Set frequency on the radio (this updates the emulated state for queries)
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1239,9 +1235,9 @@ mod tests {
 
         // Now change frequency - should trigger an unsolicited update
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 7_074_000 },
+                response: RadioResponse::Frequency { hz: 7_074_000 },
             })
             .await
             .unwrap();
@@ -1318,9 +1314,9 @@ mod tests {
 
         // Set frequency - without auto-info, nothing should be sent to amp
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1381,9 +1377,9 @@ mod tests {
 
         // Set frequency to cache some state
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1598,9 +1594,9 @@ mod tests {
 
         // Set frequency to make the radio active
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1609,9 +1605,9 @@ mod tests {
 
         // Radio reports CB1 (Sub band selected)
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::ControlBandReport { band: 1 },
+                response: RadioResponse::ControlBand { band: 1 },
             })
             .await
             .unwrap();
@@ -1619,9 +1615,9 @@ mod tests {
 
         // Radio reports TB1 (Sub band for TX)
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::TransmitBandReport { band: 1 },
+                response: RadioResponse::TransmitBand { band: 1 },
             })
             .await
             .unwrap();
@@ -1707,9 +1703,9 @@ mod tests {
 
         // Set frequency to make the radio active
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1718,9 +1714,9 @@ mod tests {
 
         // Radio reports VFO A selection
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::A,
                 },
             })
@@ -1802,9 +1798,9 @@ mod tests {
 
         // Set frequency to make the radio active
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1813,9 +1809,9 @@ mod tests {
 
         // Radio reports VFO B selection
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::B,
                 },
             })
@@ -1897,9 +1893,9 @@ mod tests {
 
         // Set frequency to make the radio active
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -1908,9 +1904,9 @@ mod tests {
 
         // Radio reports VFO A selection first
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::A,
                 },
             })
@@ -1920,9 +1916,9 @@ mod tests {
 
         // Then radio enables split mode
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::Split,
                 },
             })
@@ -2004,9 +2000,9 @@ mod tests {
 
         // Set frequency to make the radio active
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -2015,9 +2011,9 @@ mod tests {
 
         // Radio reports VFO B selection first
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::B,
                 },
             })
@@ -2027,9 +2023,9 @@ mod tests {
 
         // Then radio enables split mode
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::Split,
                 },
             })
@@ -2111,9 +2107,9 @@ mod tests {
 
         // Set frequency to make the radio active
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetFrequency { hz: 14_250_000 },
+                response: RadioResponse::Frequency { hz: 14_250_000 },
             })
             .await
             .unwrap();
@@ -2122,9 +2118,9 @@ mod tests {
 
         // Radio selects VFO A, then enables split
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::A,
                 },
             })
@@ -2133,9 +2129,9 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::Split,
                 },
             })
@@ -2145,9 +2141,9 @@ mod tests {
 
         // Now radio selects VFO A again (exits split mode)
         cmd_tx
-            .send(MuxActorCommand::RadioCommand {
+            .send(MuxActorCommand::RadioResponse {
                 handle,
-                command: RadioCommand::SetVfo {
+                response: RadioResponse::Vfo {
                     vfo: cat_protocol::Vfo::A,
                 },
             })
